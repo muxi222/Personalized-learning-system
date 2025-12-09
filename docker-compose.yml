@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-assistant-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/chromadb:/app/data/chromadb
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vector_db:
+        condition: service_started
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=postgresql+asyncpg://user:password@db:5432/learning_assistant
+      - REDIS_URL=redis://redis:6379/0
+      - VECTOR_STORE_HOST=vector_db
+      - VECTOR_STORE_PORT=8000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-assistant-celery
+    command: celery -A backend.app.core.celery_app worker --loglevel=info
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/chromadb:/app/data/chromadb
+      - ./logs:/app/logs
+    depends_on:
+      - backend
+      - redis
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=postgresql+asyncpg://user:password@db:5432/learning_assistant
+      - REDIS_URL=redis://redis:6379/0
+      - VECTOR_STORE_HOST=vector_db
+      - VECTOR_STORE_PORT=8000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    networks:
+      - learning-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: learning-assistant-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000
+    networks:
+      - learning-network
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    container_name: learning-assistant-db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      - POSTGRES_DB=learning_assistant
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d learning_assistant"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: learning-assistant-redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  vector_db:
+    image: chromadb/chroma:latest
+    container_name: learning-assistant-chromadb
+    volumes:
+      - ./data/chromadb:/chroma/chroma
+    ports:
+      - "8001:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - learning-network
+    restart: unless-stopped
+
+networks:
+  learning-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+

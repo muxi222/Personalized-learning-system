@@ -1,0 +1,24 @@
+{
+    "model_name": "Qwen/Qwen2-7B-Instruct",
+    "dataset_path": "../data/train.jsonl",
+    "output_dir": "../output/learning_assistant_lora",
+    
+    "lora_r": 64,
+    "lora_alpha": 16,
+    "lora_dropout": 0.1,
+    "lora_target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    
+    "num_epochs": 3,
+    "batch_size": 4,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 2e-4,
+    "max_seq_length": 2048,
+    "warmup_ratio": 0.03,
+    "weight_decay": 0.001,
+    
+    "use_4bit": true,
+    "bnb_4bit_compute_dtype": "bfloat16",
+    "bnb_4bit_quant_type": "nf4",
+    "use_nested_quant": false
+}
+
