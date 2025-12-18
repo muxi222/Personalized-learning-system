@@ -66,7 +66,10 @@ async def register_user(
         )
 
     # Create user
-    user = await crud_user.create_user(db, user_data)
+    try:
+        user = await crud_user.create_user(db, user_data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.commit()
 
     logger.info(f"New user registered: {user.username}")

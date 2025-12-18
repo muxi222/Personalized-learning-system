@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { questionApi, feedbackApi } from '../lib/api'
@@ -11,15 +12,20 @@ import {
   BookOpen,
   Target,
   Lightbulb,
-  CheckCircle
+  CheckCircle,
+  Image as ImageIcon,
+  Maximize2
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { clsx } from 'clsx'
+import ImageViewer from '../components/ImageViewer'
 
 export default function QuestionDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerImage, setViewerImage] = useState({ url: '', title: '' })
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['question', id],
@@ -143,6 +149,44 @@ export default function QuestionDetail() {
                   <p className="text-white whitespace-pre-wrap">{question.content}</p>
                 </div>
               </div>
+
+              {/* 题目图片 */}
+              {question.image_urls && question.image_urls.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-medium text-slate-400 mb-2 flex items-center gap-2">
+                    <ImageIcon className="w-4 h-4" />
+                    题目图片
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    {question.image_urls.map((url, index) => (
+                      <div
+                        key={index}
+                        className="relative group cursor-pointer overflow-hidden rounded-xl bg-slate-800/50 border border-slate-700/50 hover:border-primary-500/50 transition-all"
+                        onClick={() => {
+                          setViewerImage({ 
+                            url: url.startsWith('http') ? url : `/api/v1${url}`, 
+                            title: `题目图片 ${index + 1}` 
+                          })
+                          setViewerOpen(true)
+                        }}
+                      >
+                        <img
+                          src={url.startsWith('http') ? url : `/api/v1${url}`}
+                          alt={`题目图片 ${index + 1}`}
+                          className="w-full h-40 object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                        {/* 悬浮放大提示 */}
+                        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <div className="text-center">
+                            <Maximize2 className="w-8 h-8 text-white mx-auto mb-2" />
+                            <p className="text-white text-sm font-medium">点击放大</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {question.student_answer && (
                 <div>
@@ -294,6 +338,14 @@ export default function QuestionDetail() {
           )}
         </div>
       </div>
+
+      {/* 图片查看器 */}
+      <ImageViewer
+        isOpen={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        imageUrl={viewerImage.url}
+        title={viewerImage.title}
+      />
     </div>
   )
 }

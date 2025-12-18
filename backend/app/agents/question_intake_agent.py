@@ -38,6 +38,10 @@ class QuestionIntakeAgent:
         task_id: str,
         image_urls: Optional[list] = None,
         student_answer: Optional[str] = None,
+        correct_answer: Optional[str] = None,
+        subject: Optional[str] = None,
+        difficulty: Optional[str] = None,
+        title: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         处理错题录入
@@ -48,6 +52,10 @@ class QuestionIntakeAgent:
             task_id: 任务ID
             image_urls: 图片URL列表 (可选)
             student_answer: 学生答案 (可选)
+            correct_answer: 正确答案 (可选)
+            subject: 学科 (可选)
+            difficulty: 难度 (可选)
+            title: 题目标题 (可选)
         
         Returns:
             处理结果，包含question_id等
@@ -62,9 +70,23 @@ class QuestionIntakeAgent:
             "parse_success": False,
         }
         
-        # 如果提供了学生答案，添加到structured_data预设
+        # 预设结构化数据
+        structured_data = {}
         if student_answer:
-            initial_state["structured_data"] = {"student_answer": student_answer}
+            structured_data["student_answer"] = student_answer
+        if correct_answer:
+            structured_data["correct_answer"] = correct_answer
+        if title:
+            structured_data["title"] = title
+            
+        if structured_data:
+            initial_state["structured_data"] = structured_data
+        
+        # 预设学科和难度
+        if subject:
+            initial_state["subject"] = subject
+        if difficulty:
+            initial_state["difficulty"] = difficulty
         
         # 运行图
         final_state = None

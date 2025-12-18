@@ -8,9 +8,12 @@ import {
   ArrowRight,
   ChevronLeft,
   ChevronRight,
-  BookOpen
+  BookOpen,
+  Image as ImageIcon,
+  Maximize2
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import ImageViewer from '../components/ImageViewer'
 
 const SUBJECTS = [
   { value: '', label: '全部学科' },
@@ -37,6 +40,8 @@ export default function QuestionList() {
     difficulty: '',
     search: '',
   })
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerImage, setViewerImage] = useState({ url: '', title: '' })
   const pageSize = 10
 
   const { data, isLoading } = useQuery({
@@ -129,17 +134,52 @@ export default function QuestionList() {
       ) : questions.length > 0 ? (
         <div className="space-y-4">
           {questions.map((question, index) => (
-            <Link
+            <div
               key={question.id}
-              to={`/questions/${question.id}`}
-              className="card p-6 block hover:border-primary-500/50 transition-all animate-slide-up"
+              className="card p-6 animate-slide-up"
               style={{ animationDelay: `${index * 50}ms` }}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-medium text-white mb-2 line-clamp-1">
-                    {question.title || question.content.slice(0, 80)}
-                  </h3>
+              <div className="flex items-start gap-4">
+                {/* 图片缩略图 */}
+                {question.image_urls && question.image_urls.length > 0 && (
+                  <div 
+                    className="flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-slate-800/50 border border-slate-700/50 cursor-pointer hover:border-primary-500/50 transition-all group relative"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      setViewerImage({ 
+                        url: question.image_urls[0].startsWith('http') ? question.image_urls[0] : `/api/v1${question.image_urls[0]}`,
+                        title: question.title || '题目图片'
+                      })
+                      setViewerOpen(true)
+                    }}
+                  >
+                    <img
+                      src={question.image_urls[0].startsWith('http') ? question.image_urls[0] : `/api/v1${question.image_urls[0]}`}
+                      alt="题目图片"
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                    />
+                    {question.image_urls.length > 1 && (
+                      <div className="absolute top-2 right-2 px-2 py-1 bg-black/70 rounded-full text-white text-xs font-medium backdrop-blur-sm">
+                        +{question.image_urls.length - 1}
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <Maximize2 className="w-6 h-6 text-white" />
+                    </div>
+                  </div>
+                )}
+
+                {/* 题目内容 */}
+                <Link
+                  to={`/questions/${question.id}`}
+                  className="flex-1 min-w-0 hover:opacity-80 transition-opacity"
+                >
+                  <div className="flex items-start justify-between gap-4 mb-2">
+                    <h3 className="text-lg font-medium text-white line-clamp-1">
+                      {question.title || question.content.slice(0, 80)}
+                    </h3>
+                    <ArrowRight className="w-5 h-5 text-slate-500 flex-shrink-0" />
+                  </div>
                   <p className="text-slate-400 text-sm line-clamp-2 mb-3">
                     {question.content}
                   </p>
@@ -164,10 +204,9 @@ export default function QuestionList() {
                       {new Date(question.created_at).toLocaleDateString('zh-CN')}
                     </span>
                   </div>
-                </div>
-                <ArrowRight className="w-5 h-5 text-slate-500 flex-shrink-0 mt-1" />
+                </Link>
               </div>
-            </Link>
+            </div>
           ))}
         </div>
       ) : (
@@ -222,6 +261,14 @@ export default function QuestionList() {
           </button>
         </div>
       )}
+
+      {/* 图片查看器 */}
+      <ImageViewer
+        isOpen={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+        imageUrl={viewerImage.url}
+        title={viewerImage.title}
+      />
     </div>
   )
 }

@@ -129,7 +129,7 @@ class EmbeddingWorker:
             embedding = self.embed_text(text, subject)
             
             # 存入向量数据库
-            # TODO: 使用ChromaDB客户端
+            # TODO: 调用线上 FAISS + BM25 混合检索服务写入接口
             logger.info(
                 f"✅ 处理完成: question_id={question_id}, "
                 f"subject={subject}, dimension={len(embedding)}"

@@ -23,6 +23,23 @@ from .crud_user import (
     get_user_by_email,
     authenticate_user,
 )
+from .crud_exam_correction import (
+    create_exam_correction,
+    get_exam_correction,
+    get_exam_corrections,
+    get_correction_statistics,
+    delete_exam_correction,
+    update_exam_correction,
+)
+from .crud_image_file import (
+    get_image_by_hash,
+    get_image_file,
+    get_image_files,
+    create_image_file,
+    increment_reference_count,
+    decrement_reference_count,
+    delete_image_file,
+)
 
 __all__ = [
     # Question
@@ -43,5 +60,20 @@ __all__ = [
     "get_user_by_username",
     "get_user_by_email",
     "authenticate_user",
+    # Exam Correction
+    "create_exam_correction",
+    "get_exam_correction",
+    "get_exam_corrections",
+    "get_correction_statistics",
+    "delete_exam_correction",
+    "update_exam_correction",
+    # Image File
+    "get_image_by_hash",
+    "get_image_file",
+    "get_image_files",
+    "create_image_file",
+    "increment_reference_count",
+    "decrement_reference_count",
+    "delete_image_file",
 ]
 

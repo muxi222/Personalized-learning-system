@@ -1,0 +1,134 @@
+version: '3.8'
+
+# =============================================================================
+# AI 学习小书童 - 服务拆分部署配置
+#
+# 此配置将服务拆分为独立容器，适用于微服务部署
+# 可根据负载独立扩缩容各服务
+# =============================================================================
+
+services:
+  # ============ API 服务 ============
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.api
+    container_name: learning-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../data/sqlite:/app/data/sqlite
+      - ../../data/uploads:/app/data/uploads
+      - ../../logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============ Agent Worker 服务 ============
+  agent:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.agent
+    container_name: learning-agent
+    volumes:
+      - ../../data/sqlite:/app/data/sqlite
+      - ../../data/faiss:/app/data/faiss
+      - ../../data/bm25:/app/data/bm25
+      - ../../data/uploads:/app/data/uploads
+      - ../../logs:/app/logs
+    depends_on:
+      - api
+      - redis
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - VECTOR_STORE_PATH=/app/data/faiss
+      - BM25_INDEX_PATH=/app/data/bm25
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    networks:
+      - learning-network
+    restart: unless-stopped
+    deploy:
+      replicas: 2  # 可根据负载调整
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+
+  # ============ 前端服务 ============
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
+    container_name: learning-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    networks:
+      - learning-network
+    restart: unless-stopped
+
+  # ============ Redis 缓存 & 消息队列 ============
+  redis:
+    image: redis:7-alpine
+    container_name: learning-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ../../data/redis:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============ Nginx 反向代理 ============
+  nginx:
+    image: nginx:alpine
+    container_name: learning-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../../nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - production
+
+networks:
+  learning-network:
+    driver: bridge

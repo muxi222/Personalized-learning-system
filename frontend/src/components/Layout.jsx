@@ -1,18 +1,25 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
-import { 
-  Home, 
-  PlusCircle, 
-  List, 
-  RefreshCw, 
-  LogOut, 
+import {
+  Home,
+  PlusCircle,
+  List,
+  RefreshCw,
+  LogOut,
   BookOpen,
-  User
+  User,
+  Camera,
+  Brain,
+  Sparkles,
+  FileCheck
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const navItems = [
   { to: '/', icon: Home, label: '仪表盘' },
+  { to: '/exam-upload', icon: Camera, label: 'AI批改', highlight: true },
+  { to: '/corrections', icon: FileCheck, label: '批改历史' },
+  { to: '/learning', icon: Brain, label: '学习建议' },
   { to: '/submit', icon: PlusCircle, label: '录入错题' },
   { to: '/questions', icon: List, label: '错题本' },
   { to: '/review', icon: RefreshCw, label: '复习' },
@@ -46,7 +53,7 @@ export default function Layout() {
 
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-1">
-          {navItems.map(({ to, icon: Icon, label }) => (
+          {navItems.map(({ to, icon: Icon, label, highlight }) => (
             <NavLink
               key={to}
               to={to}
@@ -56,12 +63,19 @@ export default function Layout() {
                   'flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200',
                   isActive
                     ? 'bg-gradient-to-r from-primary-500/20 to-accent-500/20 text-white border border-primary-500/30'
+                    : highlight
+                    ? 'text-primary-400 hover:text-white bg-primary-500/10 hover:bg-primary-500/20 border border-primary-500/20'
                     : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
                 )
               }
             >
-              <Icon className="w-5 h-5" />
+              <Icon className={clsx('w-5 h-5', highlight && 'text-primary-400')} />
               <span className="font-medium">{label}</span>
+              {highlight && (
+                <span className="ml-auto px-2 py-0.5 bg-primary-500 text-white text-xs rounded-full">
+                  新
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

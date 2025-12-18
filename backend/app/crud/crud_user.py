@@ -3,7 +3,10 @@ User CRUD Operations
 用户数据库操作
 """
 
+import hashlib
+import logging
 from typing import Optional
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from passlib.context import CryptContext
@@ -11,18 +14,54 @@ from passlib.context import CryptContext
 from ..db.models import User
 from ..schemas.user import UserCreate
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+logger = logging.getLogger(__name__)
+
+# Support both legacy bcrypt hashes and new bcrypt-sha256 hashes.
+# Default to bcrypt_sha256 for new passwords to avoid the 72-byte limit.
+pwd_context = CryptContext(
+    schemes=["bcrypt_sha256", "bcrypt"],
+    deprecated="auto",
+    bcrypt__truncate_error=False,
+)
+
+_BCRYPT_MAX_INPUT_BYTES = 72
+
+
+def _normalize_password(password: str) -> str:
+    """
+    Normalize password so bcrypt never sees inputs longer than 72 bytes.
+
+    Passlib's bcrypt variants raise ValueError when the encoded password exceeds
+    72 bytes. To keep supporting arbitrarily long UTF-8 passwords we hash them
+    with SHA-256 first (similar to passlib.hash.bcrypt_sha256) and return the
+    hex digest. Short passwords are returned verbatim to preserve compatibility.
+    """
+    password_bytes = password.encode("utf-8")
+    if len(password_bytes) <= _BCRYPT_MAX_INPUT_BYTES:
+        return password
+    digest = hashlib.sha256(password_bytes).hexdigest()
+    logger.debug("Normalized password exceeding bcrypt limit (len=%s bytes)", len(password_bytes))
+    return digest
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
-    return pwd_context.verify(plain_password, hashed_password)
+    normalized = _normalize_password(plain_password)
+    if pwd_context.verify(normalized, hashed_password):
+        return True
+    # Fallback for legacy hashes that stored the raw (non-normalized) password.
+    if normalized != plain_password:
+        try:
+            return pwd_context.verify(plain_password, hashed_password)
+        except Exception:
+            return False
+    return False
 
 
 def get_password_hash(password: str) -> str:
     """获取密码哈希"""
-    return pwd_context.hash(password)
+    normalized = _normalize_password(password)
+    return pwd_context.hash(normalized)
 
 
 async def create_user(

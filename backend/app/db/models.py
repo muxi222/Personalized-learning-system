@@ -49,6 +49,41 @@ class TaskStatusEnum(str, enum.Enum):
     FAILED = "failed"
 
 
+class QuestionSourceEnum(str, enum.Enum):
+    """错题来源枚举"""
+    MANUAL = "manual"  # 手动录入
+    AI_CORRECTION = "ai_correction"  # AI批注识别
+
+
+class ImageFileTypeEnum(str, enum.Enum):
+    """图片文件类型枚举"""
+    ORIGINAL = "original"  # 原始图片（用户上传）
+    CORRECTED = "corrected"  # 批改后图片（AI生成）
+
+
+class ImageFile(Base):
+    """图片文件模型 - 用于去重"""
+    __tablename__ = "image_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_hash = Column(String(64), unique=True, index=True, nullable=False)  # SHA256哈希值
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)  # 首次上传的用户
+    file_type = Column(String(20), nullable=False, index=True)  # corrections 或 questions
+    image_type = Column(String(20), default=ImageFileTypeEnum.ORIGINAL.value, index=True)  # original 或 corrected (使用字符串存储枚举值)
+    subject = Column(String(20), nullable=True, index=True)  # 学科
+    original_image_id = Column(Integer, ForeignKey("image_files.id"), nullable=True, index=True)  # 批改后图片对应的原始图片ID（用于关联）
+    file_path = Column(String(500), nullable=False)  # 文件存储路径（使用hash值作为文件名）
+    file_size = Column(Integer, nullable=False)  # 文件大小（字节）
+    mime_type = Column(String(50), nullable=True)  # MIME类型
+    reference_count = Column(Integer, default=1)  # 引用计数（有多少记录引用了这个文件）
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", backref="image_files")
+    original_image = relationship("ImageFile", remote_side=[id], foreign_keys=[original_image_id], backref="derived_images")  # 原始图片关系
+
+
 class User(Base):
     """用户模型"""
     __tablename__ = "users"
@@ -66,6 +101,7 @@ class User(Base):
     # Relationships
     questions = relationship("Question", back_populates="user")
     feedbacks = relationship("Feedback", back_populates="user")
+    exam_corrections = relationship("ExamCorrection", back_populates="user")
 
 
 class Question(Base):
@@ -74,6 +110,7 @@ class Question(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    exam_correction_id = Column(Integer, ForeignKey("exam_corrections.id"), nullable=True, index=True)  # 关联的批注记录
 
     # 基本信息 (设计文档4.1节结构化字段)
     title = Column(String(255), nullable=True)
@@ -95,7 +132,8 @@ class Question(Base):
     suggested_questions = Column(JSON, default=list)  # 举一反三题目
 
     # 元数据
-    source = Column(String(100), nullable=True)  # 题目来源
+    source = Column(SQLEnum(QuestionSourceEnum), default=QuestionSourceEnum.MANUAL, index=True)  # 错题来源
+    source_description = Column(String(100), nullable=True)  # 来源描述
     chapter = Column(String(100), nullable=True)  # 章节
     tags = Column(JSON, default=list)  # 标签
 
@@ -113,6 +151,7 @@ class Question(Base):
     user = relationship("User", back_populates="questions")
     feedbacks = relationship("Feedback", back_populates="question")
     tasks = relationship("AgentTask", back_populates="question")
+    exam_correction = relationship("ExamCorrection", back_populates="questions")
 
 
 class AgentTask(Base):
@@ -163,6 +202,49 @@ class Feedback(Base):
     # Relationships
     user = relationship("User", back_populates="feedbacks")
     question = relationship("Question", back_populates="feedbacks")
+
+
+class ExamCorrection(Base):
+    """AI批注记录模型"""
+    __tablename__ = "exam_corrections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    
+    # 基本信息
+    subject = Column(SQLEnum(SubjectEnum), default=SubjectEnum.OTHER, index=True)
+    grade = Column(String(20), nullable=True, index=True)
+    exam_title = Column(String(255), nullable=True)  # 试卷标题
+    
+    # 图片ID（关联image_files表）
+    original_image_id = Column(Integer, ForeignKey("image_files.id"), nullable=False, index=True)  # 原始试卷图片ID
+    corrected_image_id = Column(Integer, ForeignKey("image_files.id"), nullable=True, index=True)  # 批改后图片ID
+    
+    # Relationships
+    original_image = relationship("ImageFile", foreign_keys=[original_image_id], backref="exam_corrections_as_original")
+    corrected_image = relationship("ImageFile", foreign_keys=[corrected_image_id], backref="exam_corrections_as_corrected")
+    
+    # 统计数据
+    total_score = Column(Float, default=0.0)  # 总得分
+    max_score = Column(Float, default=100.0)  # 满分
+    accuracy_rate = Column(Float, default=0.0)  # 正确率 (0-1)
+    question_count = Column(Integer, default=0)  # 题目总数
+    correct_count = Column(Integer, default=0)  # 答对题数
+    wrong_count = Column(Integer, default=0)  # 答错题数
+    
+    # 分析结果
+    overall_analysis = Column(Text, nullable=True)  # 总体分析
+    weak_points = Column(JSON, default=list)  # 薄弱知识点
+    improvement_suggestions = Column(JSON, default=list)  # 改进建议
+    questions_detail = Column(JSON, default=list)  # 所有题目详情
+    
+    # 时间戳
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="exam_corrections")
+    questions = relationship("Question", back_populates="exam_correction")
 
 
 class KnowledgePoint(Base):

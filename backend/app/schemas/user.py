@@ -17,7 +17,7 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     """用户注册请求"""
-    password: str = Field(..., min_length=6, max_length=100)
+    password: str = Field(..., min_length=6, max_length=500)
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -36,7 +36,7 @@ class UserUpdate(BaseModel):
     """用户更新请求"""
     full_name: Optional[str] = None
     grade: Optional[str] = None
-    password: Optional[str] = Field(None, min_length=6)
+    password: Optional[str] = Field(None, min_length=6, max_length=500)
 
 
 class UserResponse(UserBase):

@@ -44,7 +44,7 @@ graph TD
         end
         subgraph 数据存储 (Data Persistence)
             H[结构化数据库 - SQLite/PostgreSQL]
-            I[向量数据库 - Chroma/FAISS]
+            I[向量数据库 - FAISS Hybrid Index]
             J[知识图谱 - Neo4j (可选)]
         end
     end
@@ -91,7 +91,7 @@ graph TD
     *   **中文**：**BGE (BAAI General Embedding)** 系列（如 `bge-large-zh-v1.5`） - 当前中文效果最好的开源Embedding模型之一。
     *   **英文/代码**：**Nomic Embed Text** 或 **jina-embeddings-v2** 系列。
     *   **多语言**：**m3e-large** - 支持多语言场景。
-*   **向量数据库**：**ChromaDB** 或 **FAISS** - 轻量级，易于集成。ChromaDB提供更完整的服务化能力。
+*   **向量数据库**：**FAISS + BM25 混合检索** - 统一的轻量级方案，支持本地持久化与高性能查询。
 *   **结构化数据库**：**SQLite** (开发/轻量部署) / **PostgreSQL** (生产环境) - 存储用户信息、错题结构化数据、学习计划等。
 *   **容器化**：**Docker & Docker Compose** - 用于封装和部署各个服务。
 

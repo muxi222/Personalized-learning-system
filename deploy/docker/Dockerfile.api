@@ -1,0 +1,57 @@
+# =============================================================================
+# Dockerfile.api - API 服务镜像
+#
+# 仅包含 API 服务，不包含 Agent Worker
+# 适用于服务拆分部署场景
+# =============================================================================
+
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# 安装构建依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 依赖
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir build && \
+    pip wheel --no-cache-dir --wheel-dir /app/wheels -e .
+
+# 生产镜像
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 安装运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /bin/bash appuser
+
+# 安装 Python 包
+COPY --from=builder /app/wheels /wheels
+RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
+
+# 复制代码
+COPY backend/ ./backend/
+
+# 创建数据目录
+RUN mkdir -p /app/data/sqlite /app/data/faiss /app/data/bm25 /app/data/uploads /app/logs && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+# 环境变量
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV APP_ENV=production
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

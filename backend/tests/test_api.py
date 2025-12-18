@@ -65,6 +65,42 @@ class TestUserEndpoints:
         assert "already registered" in response.json()["detail"]
 
     @pytest.mark.asyncio
+    async def test_register_password_too_long(self, client: AsyncClient):
+        """Passwords longer than bcrypt 72-byte limit are supported via bcrypt_sha256"""
+        response = await client.post(
+            "/api/v1/users/register",
+            json={
+                "username": "longpassuser",
+                "email": "longpass@example.com",
+                "password": "a" * 200,
+                "full_name": "Long Password",
+            },
+        )
+        assert response.status_code == 201
+
+    @pytest.mark.asyncio
+    async def test_login_long_password(self, client: AsyncClient):
+        """Ensure login works for users registered with long passwords"""
+        password = "b" * 180
+        await client.post(
+            "/api/v1/users/register",
+            json={
+                "username": "longloginuser",
+                "email": "longlogin@example.com",
+                "password": password,
+            },
+        )
+        response = await client.post(
+            "/api/v1/users/token",
+            json={
+                "username": "longloginuser",
+                "password": password,
+            },
+        )
+        assert response.status_code == 200
+        assert "access_token" in response.json()
+
+    @pytest.mark.asyncio
     async def test_login(self, client: AsyncClient, test_user):
         """Test user login"""
         response = await client.post(

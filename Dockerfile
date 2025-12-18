@@ -34,7 +34,7 @@ COPY backend/ ./backend/
 COPY scripts/ ./scripts/
 
 # Create data directories
-RUN mkdir -p /app/data/sqlite /app/data/chromadb /app/logs && \
+RUN mkdir -p /app/data/sqlite /app/data/faiss /app/data/bm25 /app/data/uploads /app/logs && \
     chown -R appuser:appuser /app
 
 USER appuser

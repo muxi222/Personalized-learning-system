@@ -6,6 +6,10 @@ import QuestionSubmit from './pages/QuestionSubmit'
 import QuestionDetail from './pages/QuestionDetail'
 import QuestionList from './pages/QuestionList'
 import ReviewPage from './pages/ReviewPage'
+import ExamUpload from './pages/ExamUpload'
+import CorrectionHistory from './pages/CorrectionHistory'
+import CorrectionDetail from './pages/CorrectionDetail'
+import LearningAdvisor from './pages/LearningAdvisor'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
@@ -37,6 +41,10 @@ function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="submit" element={<QuestionSubmit />} />
+        <Route path="exam-upload" element={<ExamUpload />} />
+        <Route path="corrections" element={<CorrectionHistory />} />
+        <Route path="corrections/:id" element={<CorrectionDetail />} />
+        <Route path="learning" element={<LearningAdvisor />} />
         <Route path="questions" element={<QuestionList />} />
         <Route path="questions/:id" element={<QuestionDetail />} />
         <Route path="review" element={<ReviewPage />} />

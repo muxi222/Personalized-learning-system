@@ -1,13 +1,13 @@
 """
 Vector Store Service
-向量数据库服务 - 支持ChromaDB
+向量数据库服务 - 基于 FAISS + BM25 混合检索
 """
 
 import logging
 from typing import List, Optional, Dict, Any
 from functools import lru_cache
 
-from ..core.config import settings
+from .hybrid_search_service import get_hybrid_search_service
 
 logger = logging.getLogger(__name__)
 
@@ -15,13 +15,11 @@ logger = logging.getLogger(__name__)
 class VectorStoreService:
     """
     向量数据库服务
-    支持:
-    - ChromaDB (本地持久化或HTTP客户端)
+    兼容旧的向量存储接口，内部统一使用 FAISS 混合检索服务
     """
 
     def __init__(self):
-        self._client = None
-        self._collection = None
+        self._hybrid_service = get_hybrid_search_service()
         self._initialized = False
 
     async def initialize(self) -> bool:
@@ -30,44 +28,24 @@ class VectorStoreService:
             return True
 
         try:
-            import chromadb
-            from chromadb.config import Settings as ChromaSettings
-
-            # Check if using HTTP client (for docker deployment)
-            if settings.VECTOR_STORE_HOST != "localhost" or settings.APP_ENV == "production":
-                self._client = chromadb.HttpClient(
-                    host=settings.VECTOR_STORE_HOST,
-                    port=settings.VECTOR_STORE_PORT,
+            self._initialized = await self._hybrid_service.initialize()
+            if self._initialized:
+                logger.info("Vector store initialized via FAISS hybrid service")
+            return self._initialized
+        except ModuleNotFoundError as exc:
+            if exc.name == "chromadb":
+                logger.error(
+                    "ChromaDB backend has been removed. Please update your environment "
+                    "to use the built-in FAISS + BM25 hybrid service."
                 )
-                logger.info(
-                    f"Connected to ChromaDB HTTP: "
-                    f"{settings.VECTOR_STORE_HOST}:{settings.VECTOR_STORE_PORT}"
-                )
-            else:
-                # Local persistent client
-                import os
-                os.makedirs(settings.VECTOR_STORE_PATH, exist_ok=True)
-
-                self._client = chromadb.PersistentClient(
-                    path=settings.VECTOR_STORE_PATH,
-                    settings=ChromaSettings(
-                        anonymized_telemetry=False,
-                        allow_reset=True,
-                    ),
-                )
-                logger.info(f"Using local ChromaDB: {settings.VECTOR_STORE_PATH}")
-
-            # Get or create collection
-            self._collection = self._client.get_or_create_collection(
-                name=settings.VECTOR_COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"},  # Use cosine similarity
-            )
-            self._initialized = True
-            logger.info(f"Initialized collection: {settings.VECTOR_COLLECTION_NAME}")
-            return True
-
+                self._initialized = False
+                return False
+            logger.error(f"Missing dependency while initializing vector store: {exc}")
+            self._initialized = False
+            return False
         except Exception as e:
             logger.error(f"Failed to initialize vector store: {e}")
+            self._initialized = False
             return False
 
     async def add_embedding(
@@ -86,18 +64,18 @@ class VectorStoreService:
             metadata: Optional metadata (subject, difficulty, etc.)
             document: Optional document text
         """
-        if not self._initialized:
-            await self.initialize()
+        if not await self._ensure_initialized():
+            return False
 
         try:
-            self._collection.upsert(
-                ids=[doc_id],
-                embeddings=[embedding],
-                metadatas=[metadata] if metadata else None,
-                documents=[document] if document else None,
+            metadata = metadata or {}
+            content = document or metadata.get("content", "")
+            return await self._hybrid_service.add_document(
+                doc_id=doc_id,
+                content=content,
+                embedding=embedding,
+                metadata=metadata,
             )
-            logger.debug(f"Added embedding for doc_id: {doc_id}")
-            return True
         except Exception as e:
             logger.error(f"Failed to add embedding: {e}")
             return False
@@ -110,16 +88,23 @@ class VectorStoreService:
         documents: Optional[List[str]] = None,
     ) -> bool:
         """Add multiple embeddings in batch"""
-        if not self._initialized:
-            await self.initialize()
+        if not await self._ensure_initialized():
+            return False
 
         try:
-            self._collection.upsert(
-                ids=doc_ids,
-                embeddings=embeddings,
-                metadatas=metadatas,
-                documents=documents,
-            )
+            metadatas = metadatas or [{}] * len(doc_ids)
+            documents = documents or ["" for _ in doc_ids]
+
+            for doc_id, embedding, metadata, document in zip(
+                doc_ids, embeddings, metadatas, documents
+            ):
+                await self.add_embedding(
+                    doc_id=doc_id,
+                    embedding=embedding,
+                    metadata=metadata,
+                    document=document,
+                )
+
             logger.debug(f"Added {len(doc_ids)} embeddings in batch")
             return True
         except Exception as e:
@@ -145,35 +130,30 @@ class VectorStoreService:
         Returns:
             List of similar documents with scores
         """
-        if not self._initialized:
-            await self.initialize()
+        if not await self._ensure_initialized():
+            return []
 
         include = include or ["metadatas", "distances", "documents"]
 
         try:
-            results = self._collection.query(
-                query_embeddings=[query_embedding],
-                n_results=n_results,
-                where=where,
-                include=include,
+            search_results = await self._hybrid_service.search_vector(
+                query_embedding=query_embedding,
+                top_k=n_results,
+                filter_metadata=where,
             )
 
-            # Format results
             formatted = []
-            if results and results["ids"]:
-                for i, doc_id in enumerate(results["ids"][0]):
-                    item = {"id": doc_id}
-                    if "distances" in results and results["distances"]:
-                        # Convert distance to similarity score (for cosine)
-                        item["score"] = 1 - results["distances"][0][i]
-                    if "metadatas" in results and results["metadatas"]:
-                        item["metadata"] = results["metadatas"][0][i]
-                    if "documents" in results and results["documents"]:
-                        item["document"] = results["documents"][0][i]
-                    formatted.append(item)
+            for result in search_results:
+                item = {"id": result.doc_id}
+                if "distances" in include or "score" in include:
+                    item["score"] = float(result.score)
+                if "metadatas" in include:
+                    item["metadata"] = result.metadata
+                if "documents" in include:
+                    item["document"] = result.document
+                formatted.append(item)
 
             return formatted
-
         except Exception as e:
             logger.error(f"Search error: {e}")
             return []
@@ -205,35 +185,30 @@ class VectorStoreService:
 
     async def delete_embedding(self, doc_id: str) -> bool:
         """Delete an embedding by document ID"""
-        if not self._initialized:
-            await self.initialize()
+        if not await self._ensure_initialized():
+            return False
 
         try:
-            self._collection.delete(ids=[doc_id])
-            logger.debug(f"Deleted embedding for doc_id: {doc_id}")
-            return True
+            return await self._hybrid_service.delete_document(doc_id)
         except Exception as e:
             logger.error(f"Failed to delete embedding: {e}")
             return False
 
     async def get_embedding(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """Get embedding and metadata by document ID"""
-        if not self._initialized:
-            await self.initialize()
+        if not await self._ensure_initialized():
+            return None
 
         try:
-            result = self._collection.get(
-                ids=[doc_id],
-                include=["embeddings", "metadatas", "documents"],
-            )
-            if result and result["ids"]:
-                return {
-                    "id": result["ids"][0],
-                    "embedding": result["embeddings"][0] if result["embeddings"] else None,
-                    "metadata": result["metadatas"][0] if result["metadatas"] else None,
-                    "document": result["documents"][0] if result["documents"] else None,
-                }
-            return None
+            document = await self._hybrid_service.get_document(doc_id)
+            if not document:
+                return None
+            return {
+                "id": document.doc_id,
+                "embedding": document.embedding,
+                "metadata": document.metadata,
+                "document": document.content,
+            }
         except Exception as e:
             logger.error(f"Failed to get embedding: {e}")
             return None
@@ -244,9 +219,14 @@ class VectorStoreService:
         if not self._initialized:
             return 0
         try:
-            return self._collection.count()
+            return self._hybrid_service.count
         except Exception:
             return 0
+
+    async def _ensure_initialized(self) -> bool:
+        if not self._initialized:
+            return await self.initialize()
+        return True
 
 
 # Singleton instance
