@@ -201,15 +201,15 @@ cp env.example .env
 # 编辑 .env 文件，填入 GEMINI_API_KEY 等
 
 # 3. 启动后端
-cd backend && uvicorn main:app --reload --port 8000
+cd backend && uvicorn main:app --reload --port 6000
 
 # 4. 启动前端 (新终端)
 cd frontend && npm install && npm run dev
 ```
 
 访问:
-- 前端: http://localhost:3000
-- API 文档: http://localhost:8000/docs
+- 前端: http://localhost:8000
+- API 文档: http://localhost:6000/docs
 
 ## API 接口
 

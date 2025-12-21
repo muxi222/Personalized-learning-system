@@ -748,7 +748,7 @@ mkdir -p data/uploads/questions/{math,english,physics,chemistry,chinese,biology,
 
 已注册到 FastAPI 自动文档：
 
-访问 `http://localhost:8000/docs`
+访问 `http://localhost:6000/docs`
 
 新增 API 分组：
 - **Corrections - AI批注记录**

@@ -81,13 +81,13 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 
 ### 5. 访问服务
 
-- **API 文档**: http://localhost:8000/docs
-- **前端界面**: http://localhost:3000
+- **API 文档**: http://localhost:6000/docs
+- **前端界面**: http://localhost:8000
 
 ### 6. 功能使用指南
 
 #### AI智能批改
-1. 访问 http://localhost:3000/exam-upload
+1. 访问 http://localhost:8000/exam-upload
 2. 上传试卷图片（支持JPG、PNG、HEIC）
 3. 选择学科和年级
 4. 等待AI分析（5-30秒）
@@ -95,7 +95,7 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 6. 错题自动进入错题本
 
 #### 批改历史
-1. 访问 http://localhost:3000/corrections
+1. 访问 http://localhost:8000/corrections
 2. 查看所有批改记录
 3. 切换时间周期（周/月/季/年）
 4. 按学科筛选
@@ -103,7 +103,7 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 6. 点击图片放大查看
 
 #### 错题录入
-1. 访问 http://localhost:3000/submit
+1. 访问 http://localhost:8000/submit
 2. 选择输入模式：
    - **文字输入**：手动输入题目内容
    - **图片上传**：拍照上传，AI自动识别
@@ -112,7 +112,7 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 5. 生成举一反三题目
 
 #### 错题本
-1. 访问 http://localhost:3000/questions
+1. 访问 http://localhost:8000/questions
 2. 查看所有错题（包含AI批注识别的）
 3. 按学科、难度筛选
 4. 查看错因分析和举一反三

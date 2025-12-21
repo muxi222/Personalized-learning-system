@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # ============ Server ============
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 6000
     WORKERS: int = 1
     RELOAD: bool = True
 
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
 
     # ============ CORS ============
-    CORS_ORIGINS: List[str] | str = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: List[str] | str = ["http://localhost:8000", "http://localhost:5173"]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

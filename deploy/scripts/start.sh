@@ -223,7 +223,7 @@ PY
     export PYTHONPATH="${PROJECT_ROOT}/backend:${PROJECT_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
     conda run -n 312_edu --no-capture-output uvicorn backend.main:app \
         --host ${HOST:-0.0.0.0} \
-        --port ${PORT:-8000} \
+        --port ${PORT:-6000} \
         --reload &
 
     API_PID=$!
@@ -231,8 +231,8 @@ PY
     register_child "${API_PID}"
 
     log_success "API 服务启动成功 (PID: $API_PID)"
-    log_info "访问地址: http://localhost:${PORT:-8000}"
-    log_info "API 文档: http://localhost:${PORT:-8000}/docs"
+    log_info "访问地址: http://localhost:${PORT:-6000}"
+    log_info "API 文档: http://localhost:${PORT:-6000}/docs"
 }
 
 # 启动 Agent Worker (Celery)
@@ -283,7 +283,7 @@ start_frontend() {
     register_child "${FRONTEND_PID}"
 
     log_success "前端服务启动成功 (PID: $FRONTEND_PID)"
-    log_info "访问地址: http://localhost:3000"
+    log_info "访问地址: http://localhost:8000"
 }
 
 # Docker Compose 启动
@@ -308,8 +308,8 @@ start_docker() {
     fi
 
     log_success "Docker 服务启动成功"
-    log_info "API 地址: http://localhost:8000"
-    log_info "前端地址: http://localhost:3000"
+    log_info "API 地址: http://localhost:6000"
+    log_info "前端地址: http://localhost:8000"
 }
 
 # 停止所有服务

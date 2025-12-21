@@ -119,7 +119,7 @@ REM 设置 PYTHONPATH
 set PYTHONPATH=%PROJECT_ROOT%
 
 REM 获取端口
-if not defined PORT set PORT=8000
+if not defined PORT set PORT=6000
 if not defined HOST set HOST=0.0.0.0
 
 echo %INFO% 启动 uvicorn...
@@ -163,7 +163,7 @@ if not exist "node_modules" (
 start "Frontend Server" cmd /c "npm run dev"
 
 echo %SUCCESS% 前端服务启动成功
-echo %INFO% 访问地址: http://localhost:3000
+echo %INFO% 访问地址: http://localhost:8000
 goto :eof
 
 :docker
@@ -181,8 +181,8 @@ call :setup_data_dirs
 docker-compose up -d
 
 echo %SUCCESS% Docker 服务启动成功
-echo %INFO% API 地址: http://localhost:8000
-echo %INFO% 前端地址: http://localhost:3000
+echo %INFO% API 地址: http://localhost:6000
+echo %INFO% 前端地址: http://localhost:8000
 goto :eof
 
 :stop

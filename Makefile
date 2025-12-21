@@ -57,7 +57,7 @@ dev:
 
 dev-api:
 	@echo "启动 API 服务..."
-	cd backend && uvicorn main:app --reload --host 0.0.0.0 --port 8000
+	cd backend && uvicorn main:app --reload --host 0.0.0.0 --port 6000
 
 dev-agent:
 	@echo "启动 Agent Worker..."

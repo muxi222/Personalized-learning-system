@@ -50,7 +50,7 @@ if (authStorage) {
 TOKEN=$(在浏览器Network面板复制)
 
 # 查询当前用户信息
-curl http://localhost:8000/api/v1/users/me \
+curl http://localhost:6000/api/v1/users/me \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -122,7 +122,7 @@ UPDATE questions SET user_id = 1;
 
 **测试无筛选查询**（应该返回所有记录）：
 ```bash
-curl "http://localhost:8000/api/v1/corrections/?page=1&page_size=12" \
+curl "http://localhost:6000/api/v1/corrections/?page=1&page_size=12" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -130,7 +130,7 @@ curl "http://localhost:8000/api/v1/corrections/?page=1&page_size=12" \
 
 **测试有筛选查询**：
 ```bash
-curl "http://localhost:8000/api/v1/corrections/?page=1&page_size=12&subject=math" \
+curl "http://localhost:6000/api/v1/corrections/?page=1&page_size=12&subject=math" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
