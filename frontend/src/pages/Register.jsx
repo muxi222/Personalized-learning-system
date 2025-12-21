@@ -15,11 +15,16 @@ export default function Register() {
   })
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState({})
   const { register } = useAuthStore()
   const navigate = useNavigate()
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value })
+    // 清除该字段的错误
+    if (fieldErrors[e.target.name]) {
+      setFieldErrors({ ...fieldErrors, [e.target.name]: undefined })
+    }
   }
 
   const handleSubmit = async (e) => {
@@ -32,6 +37,9 @@ export default function Register() {
 
     setLoading(true)
 
+    // 清除之前的错误
+    setFieldErrors({})
+    
     const result = await register({
       username: formData.username,
       email: formData.email,
@@ -46,7 +54,30 @@ export default function Register() {
       toast.success('注册成功！')
       navigate('/')
     } else {
-      toast.error(result.error)
+      // 解析错误信息，提取字段错误
+      const errorMessage = result.error || '注册失败'
+      toast.error(errorMessage)
+      
+      // 尝试解析字段错误
+      if (result.errorDetails && Array.isArray(result.errorDetails)) {
+        const errors = {}
+        result.errorDetails.forEach(err => {
+          const field = err.field.replace('body -> ', '')
+          let message = err.message
+          
+          // 友好的错误消息翻译
+          if (message.includes('at least 3 characters')) {
+            message = '至少需要3个字符'
+          } else if (message.includes('at least 6 characters')) {
+            message = '至少需要6个字符'
+          } else if (message.includes('Invalid email') || message.includes('value is not a valid email')) {
+            message = '邮箱格式不正确'
+          }
+          
+          errors[field] = message
+        })
+        setFieldErrors(errors)
+      }
     }
   }
 
@@ -79,10 +110,14 @@ export default function Register() {
                   name="username"
                   value={formData.username}
                   onChange={handleChange}
-                  className="input"
-                  placeholder="用户名"
+                  className={`input ${fieldErrors.username ? 'border-red-500' : ''}`}
+                  placeholder="用户名（至少3个字符）"
                   required
+                  minLength={3}
                 />
+                {fieldErrors.username && (
+                  <p className="mt-1 text-sm text-red-400">{fieldErrors.username}</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -108,10 +143,13 @@ export default function Register() {
                 name="email"
                 value={formData.email}
                 onChange={handleChange}
-                className="input"
+                className={`input ${fieldErrors.email ? 'border-red-500' : ''}`}
                 placeholder="your@email.com"
                 required
               />
+              {fieldErrors.email && (
+                <p className="mt-1 text-sm text-red-400">{fieldErrors.email}</p>
+              )}
             </div>
 
             <div>
@@ -146,11 +184,14 @@ export default function Register() {
                   name="password"
                   value={formData.password}
                   onChange={handleChange}
-                  className="input pr-12"
+                  className={`input pr-12 ${fieldErrors.password ? 'border-red-500' : ''}`}
                   placeholder="至少6位密码"
                   required
                   minLength={6}
                 />
+                {fieldErrors.password && (
+                  <p className="mt-1 text-sm text-red-400">{fieldErrors.password}</p>
+                )}
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}

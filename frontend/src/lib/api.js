@@ -11,6 +11,17 @@ export const api = axios.create({
 
 // Request interceptor to add auth token
 api.interceptors.request.use((config) => {
+  // Debug 日志：记录请求信息
+  if (import.meta.env.DEV) {
+    console.debug('[API Request]', {
+      method: config.method?.toUpperCase(),
+      url: config.url,
+      baseURL: config.baseURL,
+      data: config.data,
+      params: config.params,
+    })
+  }
+  
   const authStorage = localStorage.getItem('auth-storage')
   if (authStorage) {
     const { state } = JSON.parse(authStorage)
@@ -23,8 +34,29 @@ api.interceptors.request.use((config) => {
 
 // Response interceptor for error handling
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Debug 日志：记录成功响应
+    if (import.meta.env.DEV) {
+      console.debug('[API Response]', {
+        status: response.status,
+        url: response.config.url,
+        data: response.data,
+      })
+    }
+    return response
+  },
   (error) => {
+    // Debug 日志：记录错误响应
+    if (import.meta.env.DEV) {
+      console.debug('[API Error]', {
+        status: error.response?.status,
+        url: error.config?.url,
+        method: error.config?.method?.toUpperCase(),
+        data: error.response?.data,
+        message: error.message,
+      })
+    }
+    
     if (error.response?.status === 401) {
       // Clear auth state on 401
       localStorage.removeItem('auth-storage')

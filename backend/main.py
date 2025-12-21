@@ -98,15 +98,55 @@ app.add_middleware(
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors with better messages"""
     errors = []
+    error_details = []
+    
     for error in exc.errors():
         field = " -> ".join(str(loc) for loc in error["loc"])
-        errors.append(f"{field}: {error['msg']}")
-
+        error_msg = error.get("msg", "Validation failed")
+        error_type = error.get("type", "unknown")
+        input_value = error.get("input", "N/A")
+        
+        errors.append(f"{field}: {error_msg}")
+        error_details.append({
+            "field": field,
+            "message": error_msg,
+            "type": error_type,
+            "input": str(input_value)[:100] if input_value != "N/A" else "N/A",  # 限制长度避免日志过长
+        })
+    
+    # 尝试读取请求体（用于调试）
+    request_body = None
+    try:
+        if request.method in ("POST", "PUT", "PATCH"):
+            body = await request.body()
+            if body:
+                import json
+                try:
+                    request_body = json.loads(body.decode('utf-8'))
+                except:
+                    request_body = body.decode('utf-8')[:500]  # 限制长度
+    except Exception as e:
+        logger.debug(f"Could not read request body: {e}")
+    
+    # Debug 级别日志：详细记录验证错误
+    logger.debug(
+        f"Validation error details on {request.method} {request.url.path}: "
+        f"errors={error_details}, "
+        f"request_body={request_body}"
+    )
+    
+    # Warning 级别日志：简要记录
+    logger.warning(
+        f"Validation error on {request.method} {request.url.path}: "
+        f"{len(error_details)} error(s) found"
+    )
+    
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "detail": "Validation error",
             "errors": errors,
+            "error_details": error_details,  # 添加详细错误信息
         },
     )
 
