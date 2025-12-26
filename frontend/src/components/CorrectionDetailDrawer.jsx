@@ -20,24 +20,15 @@ import {
 import { clsx } from 'clsx'
 import ImageViewer from './ImageViewer'
 import ImageCompareViewer from './ImageCompareViewer'
+import { createApiClient } from '../lib/api'
 
-// 获取 token
-const getAuthToken = () => {
-  const authStorage = localStorage.getItem('auth-storage')
-  if (authStorage) {
-    const { state } = JSON.parse(authStorage)
-    return state?.token
-  }
-  return null
-}
-
-// API
+/**
+ * 创建批改记录 API 客户端
+ */
 const correctionsApi = {
-  get: (id) => {
-    const token = getAuthToken()
-    return fetch(`/api/v1/corrections/${id}`, {
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-    }).then(res => res.json())
+  get: (id, subject = 'chinese') => {
+    const client = createApiClient(subject)
+    return client.get(`/corrections/${id}`).then(res => res.data)
   },
 }
 
@@ -55,10 +46,11 @@ const SUBJECT_MAP = {
  * 批改详情抽屉
  * 从右侧滑出，支持上一个/下一个切换
  */
-export default function CorrectionDetailDrawer({ 
-  isOpen, 
-  onClose, 
+export default function CorrectionDetailDrawer({
+  isOpen,
+  onClose,
   correctionId,
+  subject = 'chinese',  // 学科，用于路由到对应模块
   allIds = [],  // 所有批改记录的ID列表
   onNavigate,   // 切换到其他记录的回调
 }) {
@@ -69,7 +61,7 @@ export default function CorrectionDetailDrawer({
   // 获取详情
   const { data: correction, isLoading } = useQuery({
     queryKey: ['correction', correctionId],
-    queryFn: () => correctionsApi.get(correctionId),
+    queryFn: () => correctionsApi.get(correctionId, subject),
     enabled: isOpen && !!correctionId,
   })
 

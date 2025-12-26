@@ -43,110 +43,121 @@
 
 ## 技术架构
 
+### 5模块分布式架构
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Frontend (React + Vite)                      │
+│                    Frontend (React + Vite)                           │
+│                    Smart Subject-Based Routing                       │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌───────────┐ │
 │  │  Dashboard  │  │  Questions  │  │  ExamUpload │  │  Advisor  │ │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └───────────┘ │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │ REST API
-┌────────────────────────────▼────────────────────────────────────────┐
-│                      Backend (FastAPI)                               │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                    LangGraph Agents                             │ │
-│  │  ┌──────────────┐  ┌─────────────┐  ┌───────────────────────┐ │ │
-│  │  │QuestionIntake│  │   OCR Agent │  │  SimilarQuestion      │ │ │
-│  │  │    Agent     │  │(Gemini 2.5) │  │      Agent (RAG)      │ │ │
-│  │  └──────────────┘  └─────────────┘  └───────────────────────┘ │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-│                              │                                       │
-│  ┌───────────────┐  ┌────────┴────────┐  ┌─────────────────────┐   │
-│  │   API Layer   │  │  Service Layer  │  │    Celery Worker    │   │
-│  │  (endpoints)  │  │ (hybrid search) │  │ (async processing)  │   │
-│  └───────────────┘  └─────────────────┘  └─────────────────────┘   │
-└────────────────────────────┬────────────────────────────────────────┘
+└───────────┬─────────┬─────────┬─────────┬─────────┬─────────────────┘
+            │ :6001   │ :6002   │ :6003   │ :6004   │ :6005
+            ▼         ▼         ▼         ▼         ▼
+┌──────────────┬──────────┬──────────┬──────────┬──────────────┐
+│  RPJ Module  │   XMX    │   WZY    │   WZM    │ TONY Module  │
+│  语文英语政治 │  经济学   │  数理    │   化学   │ 历史地理其他  │
+│              │          │          │          │              │
+│ ┌──────────┐ │┌────────┐│┌────────┐│┌────────┐│ ┌──────────┐ │
+│ │ FastAPI  │ ││FastAPI ││ FastAPI ││FastAPI ││ │ FastAPI  │ │
+│ │   API    │ ││  API   ││  API   ││  API   ││ │   API    │ │
+│ └──────────┘ │└────────┘│└────────┘│└────────┘│ └──────────┘ │
+│              │          │          │          │              │
+│ ┌──────────┐ │┌────────┐│┌────────┐│┌────────┐│ ┌──────────┐ │
+│ │  Celery  │ ││ Celery ││ Celery ││ Celery ││ │  Celery  │ │
+│ │  Agent   │ ││ Agent  ││ Agent  ││ Agent  ││ │  Agent   │ │
+│ └──────────┘ │└────────┘│└────────┘│└────────┘│ └──────────┘ │
+│              │          │          │          │              │
+│ queue_rpj    │queue_xmx │queue_wzy │queue_wzm │ queue_tony   │
+└──────────────┴──────────┴──────────┴──────────┴──────────────┘
+       │              │         │         │            │
+       └──────────────┴─────────┴─────────┴────────────┘
                              │
         ┌────────────────────┼────────────────────┬──────────────┐
         ▼                    ▼                    ▼              ▼
 ┌───────────────┐  ┌─────────────────┐  ┌───────────────┐  ┌─────────┐
-│    SQLite     │  │  FAISS + BM25   │  │     Redis     │  │  LLM    │
-│  (结构化数据)  │  │  (混合向量检索)  │  │  (缓存/队列)  │  │(Gemini/ │
-│               │  │                 │  │               │  │ OpenAI) │
+│ SQLite (共享) │  │ FAISS (按模块)   │  │  Redis (共享) │  │   LLM   │
+│  统一数据库    │  │ rpj/xmx/wzy/    │  │  Celery消息   │  │ Gemini  │
+│  逻辑隔离      │  │ wzm/tony/       │  │  队列与缓存   │  │ OpenAI  │
 └───────────────┘  └─────────────────┘  └───────────────┘  └─────────┘
 ```
+
+**核心特性:**
+
+- **5个独立模块**: 每个模块处理特定学科，可独立启动/扩展
+- **智能路由**: 前端根据学科自动选择模块端口
+- **共享数据库**: 统一SQLite，逻辑隔离
+- **独立向量库**: 每模块独立FAISS/BM25索引
+- **模块化队列**: 独立Celery队列，任务隔离
+- **统一认证**: 一次登录访问所有学科
 
 ## 项目结构
 
 ```
 learning_assistant/
 ├── backend/                     # FastAPI 后端
-│   ├── app/
-│   │   ├── agents/             # LangGraph 智能体
-│   │   │   ├── question_intake_agent.py   # 错题录入 Agent
-│   │   │   ├── similar_question_agent.py  # 举一反三 Agent
-│   │   │   ├── ocr_agent.py              # OCR 批改 Agent
-│   │   │   ├── state.py                  # Agent 状态定义
-│   │   │   ├── prompts.py                # Prompt 模板
-│   │   │   └── tasks.py                  # Celery 异步任务
-│   │   ├── api/v1/
-│   │   │   ├── endpoints/
-│   │   │   │   ├── questions.py   # 错题 API
-│   │   │   │   ├── ocr.py         # OCR API
-│   │   │   │   ├── learning.py    # 学习建议 API
-│   │   │   │   └── guidance.py    # 学习指导 API
-│   │   │   └── router.py
-│   │   ├── core/               # 核心配置
-│   │   │   ├── config.py       # 配置管理
-│   │   │   └── celery_app.py   # Celery 配置
-│   │   ├── crud/               # 数据库操作
-│   │   ├── db/                 # SQLAlchemy 模型
-│   │   ├── schemas/            # Pydantic 模型
-│   │   └── services/           # 业务服务层
-│   │       ├── hybrid_search_service.py  # FAISS+BM25 混合检索
-│   │       ├── gemini_ocr_service.py     # Gemini OCR 服务
-│   │       ├── learning_advisor_service.py
-│   │       ├── embedding_service.py
-│   │       └── llm_service.py
-│   ├── main.py                 # 应用入口
-│   └── tests/
+│   ├── core/                    # 共享核心层 (所有模块共用)
+│   │   ├── base_config.py      # 基础配置类
+│   │   ├── agents/
+│   │   │   ├── base_agent.py   # Agent基类
+│   │   │   ├── state.py        # Agent状态定义
+│   │   │   └── prompts.py      # Prompt模板 (10个学科)
+│   │   ├── db/                 # 共享数据库模型
+│   │   ├── services/           # 共享服务层
+│   │   │   ├── hybrid_search_service.py
+│   │   │   ├── gemini_ocr_service.py
+│   │   │   ├── embedding_service.py
+│   │   │   └── llm_service.py
+│   │   ├── crud/               # 共享CRUD操作
+│   │   └── schemas/            # 共享Pydantic模型
+│   │
+│   └── modules/                # 模块化应用层 (5个独立模块)
+│       ├── rpj/    (6001) → 语文、英语、政治
+│       │   ├── config.py              # RPJ模块配置
+│       │   ├── main.py                # FastAPI应用
+│       │   ├── celery_app.py          # Celery配置 (queue_rpj)
+│       │   ├── api/endpoints/         # API端点 (9个)
+│       │   └── agents/                # Agent实例 (3个)
+│       │
+│       ├── xmx/    (6002) → 经济学
+│       ├── wzy/    (6003) → 数学、物理
+│       ├── wzm/    (6004) → 化学
+│       └── tony/   (6005) → 历史、地理、其他
+│
 ├── frontend/                    # React 前端
 │   └── src/
+│       ├── config/
+│       │   └── moduleRouting.js    # 智能路由配置 ⭐
+│       ├── lib/
+│       │   └── api.js              # 动态API客户端 ⭐
 │       ├── pages/
-│       │   ├── ExamUpload.jsx    # AI 批改页面
-│       │   ├── LearningAdvisor.jsx
+│       │   ├── ExamUpload.jsx      # AI批改
+│       │   ├── QuestionList.jsx
 │       │   └── ...
 │       ├── components/
 │       └── stores/
+│
 ├── deploy/                      # 部署配置
 │   ├── docker/
-│   │   ├── Dockerfile.api       # API 服务镜像
-│   │   ├── Dockerfile.agent     # Agent Worker 镜像
+│   │   ├── Dockerfile.api
 │   │   └── docker-compose.split.yml
 │   └── scripts/
-│       ├── start.sh            # Linux/Mac 启动脚本
-│       ├── start.bat           # Windows 启动脚本
-│       └── docker-up.sh
-├── data/                        # 数据目录 (本地持久化)
-│   ├── sqlite/                 # SQLite 数据库
-│   ├── faiss/                  # FAISS 向量索引
-│   ├── bm25/                   # BM25 倒排索引
-│   ├── uploads/                # 用户上传文件（按用户隔离）
-│   │   └── {username_email}/   # 用户专属目录
-│   │       ├── corrections/    # AI批注图片
-│   │       │   ├── math/      # 数学试卷
-│   │       │   ├── english/   # 英语试卷
-│   │       │   └── ...        # 其他学科
-│   │       └── questions/     # 错题图片
-│   │           ├── math/      # 数学错题
-│   │           ├── english/   # 英语错题
-│   │           └── ...        # 其他学科
-│   └── redis/                  # Redis 数据
-├── nginx/                       # Nginx 配置
-├── docker-compose.yml          # 标准 Docker 编排
-├── Makefile                    # 构建命令
-├── pyproject.toml              # Python 依赖
-└── env.example                 # 环境变量模板
+│       └── start.sh            # 多模块启动脚本 ⭐ (586行)
+│
+├── data/                        # 数据目录
+│   ├── sqlite/                 # 共享SQLite数据库
+│   ├── faiss/                  # 按模块分离的FAISS索引
+│   │   ├── rpj/  xmx/  wzy/  wzm/  tony/
+│   ├── bm25/                   # 按模块分离的BM25索引
+│   │   ├── rpj/  xmx/  wzy/  wzm/  tony/
+│   └── uploads/                # 用户上传 (按用户隔离)
+│
+├── MODULE_SPLIT_IMPLEMENTATION.md   # 模块化实施详细指南
+├── MODULE_SPLIT_QUICKSTART.md       # 模块化快速启动指南
+├── MODULE_SPLIT_COMPLETION_REPORT.md # 模块化完成报告
+├── CLAUDE.md                   # Claude Code 工作指南
+└── README.md                   # 本文件
 ```
 
 ## 快速开始
@@ -157,23 +168,44 @@ learning_assistant/
 - Node.js 18+
 - Redis (可选，使用 Docker 自动配置)
 
-### 方式一：使用启动脚本
+### ⭐ 推荐：使用多模块启动脚本
 
 ```bash
-# Linux/Mac
+# Linux/Mac - 启动所有模块 + 前端
 ./deploy/scripts/start.sh all
+
+# 启动单个模块
+./deploy/scripts/start.sh api_tony      # TONY模块 API (历史、地理)
+./deploy/scripts/start.sh agent_tony    # TONY模块 Agent Worker
+
+# 启动所有API (5个模块)
+./deploy/scripts/start.sh api_all
+
+# 查看所有模块状态
+./deploy/scripts/start.sh status
+
+# 停止所有服务
+./deploy/scripts/start.sh stop_all
 
 # Windows
 deploy\scripts\start.bat all
 ```
 
-### 方式二：使用 Makefile
+**模块端口:**
+
+- RPJ (6001): 语文、英语、政治
+- XMX (6002): 经济学
+- WZY (6003): 数学、物理
+- WZM (6004): 化学
+- TONY (6005): 历史、地理、其他
+
+### 方式二：使用 Makefile (传统方式，不推荐)
 
 ```bash
 # 安装依赖
 make install
 
-# 启动开发环境
+# 启动开发环境 (需要手动配置多模块)
 make dev
 
 # 查看所有命令
@@ -190,7 +222,7 @@ make docker-up
 make docker-split
 ```
 
-### 方式四：手动启动
+### 方式四：手动启动 (开发调试用)
 
 ```bash
 # 1. 安装后端依赖
@@ -200,20 +232,33 @@ pip install -e ".[dev]"
 cp env.example .env
 # 编辑 .env 文件，填入 GEMINI_API_KEY 等
 
-# 3. 启动后端
-cd backend && uvicorn main:app --reload --port 6000
+# 3. 启动单个模块 API (例如 TONY 模块)
+cd backend
+export PYTHONPATH="${PWD}/backend:${PYTHONPATH}"
+uvicorn backend.modules.tony.main:app --reload --port 6005
 
-# 4. 启动前端 (新终端)
+# 4. 启动单个模块 Agent Worker (新终端)
+cd backend
+celery -A backend.modules.tony.celery_app worker --loglevel=info --queues=queue_tony
+
+# 5. 启动前端 (新终端)
 cd frontend && npm install && npm run dev
 ```
 
-访问:
-- 前端: http://localhost:8000
-- API 文档: http://localhost:6000/docs
+**访问地址:**
+
+- 前端: <http://localhost:8000>
+- RPJ模块 API文档: <http://localhost:6001/docs> (语文、英语、政治)
+- XMX模块 API文档: <http://localhost:6002/docs> (经济学)
+- WZY模块 API文档: <http://localhost:6003/docs> (数学、物理)
+- WZM模块 API文档: <http://localhost:6004/docs> (化学)
+- TONY模块 API文档: <http://localhost:6005/docs> (历史、地理、其他)
 
 ## API 接口
 
-### 错题管理
+**注意**: 所有API端点在5个模块上都有实现，但每个模块只处理其指定的学科。前端会根据学科自动路由到正确的模块。
+
+### 错题管理 (所有模块)
 
 | 方法 | 路径 | 描述 |
 |------|------|------|

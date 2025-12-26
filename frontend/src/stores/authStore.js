@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { api } from '../lib/api'
+import { authApi } from '../lib/api'
 
 export const useAuthStore = create(
   persist(
@@ -11,27 +11,27 @@ export const useAuthStore = create(
 
       login: async (username, password) => {
         try {
-          const response = await api.post('/users/token', { username, password })
+          const response = await authApi.login({ username, password })
           const { access_token } = response.data
-          
+
           set({ token: access_token, isAuthenticated: true })
-          
+
           // Fetch user info
-          const userResponse = await api.get('/users/me')
+          const userResponse = await authApi.getCurrentUser()
           set({ user: userResponse.data })
-          
+
           return { success: true }
         } catch (error) {
-          return { 
-            success: false, 
-            error: error.response?.data?.detail || 'Login failed' 
+          return {
+            success: false,
+            error: error.response?.data?.detail || 'Login failed'
           }
         }
       },
 
       register: async (userData) => {
         try {
-          await api.post('/users/register', userData)
+          await authApi.register(userData)
           // Auto login after registration
           return await get().login(userData.username, userData.password)
         } catch (error) {

@@ -17,13 +17,22 @@ import {
 import toast from 'react-hot-toast'
 import ImageViewer from '../components/ImageViewer'
 
+// 10个学科 - 对应5个模块
 const SUBJECTS = [
+  // RPJ模块
+  { value: 'chinese', label: '语文' },
+  { value: 'english', label: '英语' },
+  { value: 'politics', label: '政治' },
+  // XMX模块
+  { value: 'economics', label: '经济学' },
+  // WZY模块
   { value: 'math', label: '数学' },
   { value: 'physics', label: '物理' },
+  // WZM模块
   { value: 'chemistry', label: '化学' },
-  { value: 'biology', label: '生物' },
-  { value: 'english', label: '英语' },
-  { value: 'chinese', label: '语文' },
+  // TONY模块
+  { value: 'history', label: '历史' },
+  { value: 'geography', label: '地理' },
   { value: 'other', label: '其他' },
 ]
 

@@ -1,0 +1,537 @@
+version: '3.8'
+
+# =============================================================================
+# AI 学习小书童 - 多模块 Docker Compose 配置
+#
+# 支持 6 个独立模块：default, rpj, xmx, wzy, wzm, tony
+# 每个模块包含 API 服务和 Agent Worker 服务
+#
+# 使用方式:
+#   启动所有服务:
+#     docker-compose -f docker-compose.modules.yml --profile all up -d
+#
+#   启动特定模块:
+#     docker-compose -f docker-compose.modules.yml --profile default up -d
+#     docker-compose -f docker-compose.modules.yml --profile rpj up -d
+#
+#   启动所有 API:
+#     docker-compose -f docker-compose.modules.yml --profile api up -d
+#
+#   启动所有 Agent:
+#     docker-compose -f docker-compose.modules.yml --profile agent up -d
+#
+#   停止所有服务:
+#     docker-compose -f docker-compose.modules.yml down
+# =============================================================================
+
+services:
+  # ============ Redis (共享服务) ============
+  redis:
+    image: redis:7-alpine
+    container_name: learning-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - all
+      - default
+      - rpj
+      - xmx
+      - wzy
+      - wzm
+      - tony
+      - api
+      - agent
+
+  # ============ DEFAULT 模块 (跨学科查询) ============
+  api-default:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-api-default
+    ports:
+      - "6100:6100"
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/default:/app/data/faiss/default
+      - ./data/bm25/default:/app/data/bm25/default
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=default
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    command: ["uvicorn", "backend.modules.default.main:app", "--host", "0.0.0.0", "--port", "6100"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - all
+      - default
+      - api
+
+  agent-default:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-agent-default
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/default:/app/data/faiss/default
+      - ./data/bm25/default:/app/data/bm25/default
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      - api-default
+      - redis
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=default
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: ["celery", "-A", "backend.modules.default.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "queue_default"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - all
+      - default
+      - agent
+
+  # ============ RPJ 模块 (语文、英语、政治) ============
+  api-rpj:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-api-rpj
+    ports:
+      - "6001:6001"
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/rpj:/app/data/faiss/rpj
+      - ./data/bm25/rpj:/app/data/bm25/rpj
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=rpj
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    command: ["uvicorn", "backend.modules.rpj.main:app", "--host", "0.0.0.0", "--port", "6001"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - all
+      - rpj
+      - api
+
+  agent-rpj:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-agent-rpj
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/rpj:/app/data/faiss/rpj
+      - ./data/bm25/rpj:/app/data/bm25/rpj
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      - api-rpj
+      - redis
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=rpj
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: ["celery", "-A", "backend.modules.rpj.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "queue_rpj"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - all
+      - rpj
+      - agent
+
+  # ============ XMX 模块 (经济学) ============
+  api-xmx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-api-xmx
+    ports:
+      - "6002:6002"
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/xmx:/app/data/faiss/xmx
+      - ./data/bm25/xmx:/app/data/bm25/xmx
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=xmx
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    command: ["uvicorn", "backend.modules.xmx.main:app", "--host", "0.0.0.0", "--port", "6002"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - all
+      - xmx
+      - api
+
+  agent-xmx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-agent-xmx
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/xmx:/app/data/faiss/xmx
+      - ./data/bm25/xmx:/app/data/bm25/xmx
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      - api-xmx
+      - redis
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=xmx
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: ["celery", "-A", "backend.modules.xmx.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "queue_xmx"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - all
+      - xmx
+      - agent
+
+  # ============ WZY 模块 (数学、物理) ============
+  api-wzy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-api-wzy
+    ports:
+      - "6003:6003"
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/wzy:/app/data/faiss/wzy
+      - ./data/bm25/wzy:/app/data/bm25/wzy
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=wzy
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    command: ["uvicorn", "backend.modules.wzy.main:app", "--host", "0.0.0.0", "--port", "6003"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - all
+      - wzy
+      - api
+
+  agent-wzy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-agent-wzy
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/wzy:/app/data/faiss/wzy
+      - ./data/bm25/wzy:/app/data/bm25/wzy
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      - api-wzy
+      - redis
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=wzy
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: ["celery", "-A", "backend.modules.wzy.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "queue_wzy"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - all
+      - wzy
+      - agent
+
+  # ============ WZM 模块 (化学) ============
+  api-wzm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-api-wzm
+    ports:
+      - "6004:6004"
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/wzm:/app/data/faiss/wzm
+      - ./data/bm25/wzm:/app/data/bm25/wzm
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=wzm
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    command: ["uvicorn", "backend.modules.wzm.main:app", "--host", "0.0.0.0", "--port", "6004"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - all
+      - wzm
+      - api
+
+  agent-wzm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-agent-wzm
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/wzm:/app/data/faiss/wzm
+      - ./data/bm25/wzm:/app/data/bm25/wzm
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      - api-wzm
+      - redis
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=wzm
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: ["celery", "-A", "backend.modules.wzm.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "queue_wzm"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - all
+      - wzm
+      - agent
+
+  # ============ TONY 模块 (历史、地理、其他) ============
+  api-tony:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-api-tony
+    ports:
+      - "6005:6005"
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/tony:/app/data/faiss/tony
+      - ./data/bm25/tony:/app/data/bm25/tony
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=tony
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    command: ["uvicorn", "backend.modules.tony.main:app", "--host", "0.0.0.0", "--port", "6005"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - all
+      - tony
+      - api
+
+  agent-tony:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: learning-agent-tony
+    volumes:
+      - ./data/sqlite:/app/data/sqlite
+      - ./data/faiss/tony:/app/data/faiss/tony
+      - ./data/bm25/tony:/app/data/bm25/tony
+      - ./data/uploads:/app/data/uploads
+      - ./logs:/app/logs
+    depends_on:
+      - api-tony
+      - redis
+    environment:
+      - APP_ENV=production
+      - MODULE_NAME=tony
+      - DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - LLM_API_ENDPOINT=${LLM_API_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: ["celery", "-A", "backend.modules.tony.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "queue_tony"]
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - all
+      - tony
+      - agent
+
+  # ============ 前端服务 ============
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:6100}
+    container_name: learning-frontend
+    ports:
+      - "8000:80"
+    networks:
+      - learning-network
+    restart: unless-stopped
+    profiles:
+      - all
+      - frontend
+
+networks:
+  learning-network:
+    driver: bridge

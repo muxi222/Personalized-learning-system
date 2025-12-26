@@ -1,14 +1,18 @@
 #!/bin/bash
 # =============================================================================
-# AI Learning Assistant - 启动脚本 (Linux/Mac)
+# AI Learning Assistant - 多模块启动脚本 (Linux/Mac)
 #
 # 用法:
-#   ./start.sh              # 启动所有服务
-#   ./start.sh api          # 仅启动 API 服务
-#   ./start.sh agent        # 仅启动 Agent Worker
-#   ./start.sh frontend     # 仅启动前端
-#   ./start.sh docker       # 使用 Docker Compose 启动
-#   ./start.sh stop         # 停止所有服务
+#   ./start.sh                    # 启动所有服务 (包括 default 模块)
+#   ./start.sh api_default        # 启动 default 模块 API (跨学科查询)
+#   ./start.sh api_rpj            # 启动 RPJ 模块 API
+#   ./start.sh agent_rpj          # 启动 RPJ 模块 Agent Worker
+#   ./start.sh api_all            # 启动所有模块 API (包括 default)
+#   ./start.sh agent_all          # 启动所有模块 Agent Worker
+#   ./start.sh stop_default       # 停止 default 模块
+#   ./start.sh stop_rpj           # 停止 RPJ 模块
+#   ./start.sh stop_all           # 停止所有服务
+#   ./start.sh status             # 显示所有模块状态
 # =============================================================================
 
 set -e
@@ -18,31 +22,81 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# 模块定义 (兼容 Bash 3.2)
+MODULES=("default" "rpj" "xmx" "wzy" "wzm" "tony")
+
+# 根据模块名获取端口号
+get_module_port() {
+    case "$1" in
+        default) echo "6100" ;;
+        rpj)  echo "6001" ;;
+        xmx)  echo "6002" ;;
+        wzy)  echo "6003" ;;
+        wzm)  echo "6004" ;;
+        tony) echo "6005" ;;
+        *)    echo "" ;;
+    esac
+}
+
+# 根据模块名获取学科列表
+get_module_subjects() {
+    case "$1" in
+        default) echo "跨学科（全量数据、图片转发）" ;;
+        rpj)  echo "语文、英语、政治" ;;
+        xmx)  echo "经济学" ;;
+        wzy)  echo "数学、物理" ;;
+        wzm)  echo "化学" ;;
+        tony) echo "历史、地理、其他" ;;
+        *)    echo "" ;;
+    esac
+}
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PID_DIR="${PROJECT_ROOT}/pids"
-API_PID_FILE="${PID_DIR}/.api.pid"
-AGENT_PID_FILE="${PID_DIR}/.agent.pid"
-FRONTEND_PID_FILE="${PID_DIR}/.frontend.pid"
+FRONTEND_PID_FILE="${PID_DIR}/frontend.pid"
 
 # 日志函数
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    printf "${BLUE}[INFO]${NC} %s\n" "$1"
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    printf "${GREEN}[SUCCESS]${NC} %s\n" "$1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    printf "${YELLOW}[WARN]${NC} %s\n" "$1"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    printf "${RED}[ERROR]${NC} %s\n" "$1"
+}
+
+log_module() {
+    local module=$1
+    shift
+    printf "${CYAN}[%s]${NC} %s\n" "$(echo "$module" | tr '[:lower:]' '[:upper:]')" "$*"
+}
+
+# 检查端口是否被占用
+check_port() {
+    local port=$1
+    if lsof -Pi :${port} -sTCP:LISTEN -t >/dev/null 2>&1; then
+        return 0  # 端口被占用
+    else
+        return 1  # 端口可用
+    fi
+}
+
+# 获取占用端口的进程信息
+get_port_process() {
+    local port=$1
+    lsof -Pi :${port} -sTCP:LISTEN | tail -n +2 | awk '{print $2, $1}' | head -1
 }
 
 CHILD_PIDS=()
@@ -63,13 +117,24 @@ ensure_pid_dir() {
     mkdir -p "${PID_DIR}"
 }
 
+get_pid_file() {
+    local service=$1  # api or agent
+    local module=$2
+    echo "${PID_DIR}/${service}_${module}.pid"
+}
+
 safe_kill_pid_file() {
     local pid_file="$1"
     if [ -f "${pid_file}" ]; then
         local pid
         pid=$(cat "${pid_file}")
-        if [ -n "${pid}" ]; then
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
             kill "${pid}" 2>/dev/null || true
+            sleep 1
+            # 如果进程还在运行，强制杀死
+            if kill -0 "${pid}" 2>/dev/null; then
+                kill -9 "${pid}" 2>/dev/null || true
+            fi
         fi
         rm -f "${pid_file}"
     fi
@@ -106,8 +171,6 @@ check_dependencies() {
 
 # 激活 Conda 环境
 setup_conda() {
-    log_info "激活 Conda 环境 312_edu..."
-
     # 初始化 conda for bash（确保 conda activate 可用）
     eval "$(conda shell.bash hook)"
 
@@ -115,7 +178,7 @@ setup_conda() {
     if ! conda env list | grep -q "^312_edu "; then
         log_error "Conda 环境 312_edu 不存在"
         log_info "请运行以下命令创建环境："
-        log_info "  conda create -n 312_edu python=3.10 -y"
+        log_info "  conda create -n 312_edu python=3.11 -y"
         log_info "  conda activate 312_edu"
         log_info "  pip install -r requirements.txt"
         exit 1
@@ -126,13 +189,7 @@ setup_conda() {
 
     # 检查并安装依赖
     if [ -f "${PROJECT_ROOT}/requirements.txt" ]; then
-        log_info "检查项目依赖..."
-        pip install -q -r "${PROJECT_ROOT}/requirements.txt"
-        log_success "依赖检查完成"
-    elif [ -f "${PROJECT_ROOT}/pyproject.toml" ]; then
-        log_info "检查项目依赖..."
-        pip install -q -e "${PROJECT_ROOT}"
-        log_success "依赖检查完成"
+        pip install -q -r "${PROJECT_ROOT}/requirements.txt" 2>/dev/null || true
     fi
 }
 
@@ -140,11 +197,15 @@ setup_conda() {
 setup_data_dirs() {
     log_info "创建数据目录..."
     mkdir -p "${PROJECT_ROOT}/data/sqlite"
-    mkdir -p "${PROJECT_ROOT}/data/faiss"
-    mkdir -p "${PROJECT_ROOT}/data/bm25"
     mkdir -p "${PROJECT_ROOT}/data/uploads"
-    mkdir -p "${PROJECT_ROOT}/data/redis"
     mkdir -p "${PROJECT_ROOT}/logs"
+
+    # 为每个模块创建FAISS和BM25目录
+    for module in "${MODULES[@]}"; do
+        mkdir -p "${PROJECT_ROOT}/data/faiss/${module}"
+        mkdir -p "${PROJECT_ROOT}/data/bm25/${module}"
+    done
+
     ensure_pid_dir
     log_success "数据目录创建完成"
 }
@@ -152,7 +213,6 @@ setup_data_dirs() {
 # 加载环境变量
 load_env() {
     if [ -f "${PROJECT_ROOT}/.env" ]; then
-        # 安全加载环境变量：过滤注释、空行，并移除行内注释
         while IFS= read -r line || [ -n "$line" ]; do
             # 跳过空行和注释行
             if [ -z "$line" ] || echo "$line" | grep -q "^[[:space:]]*#"; then
@@ -168,10 +228,6 @@ load_env() {
         log_success "环境变量加载完成"
     else
         log_warn ".env 文件不存在，使用默认配置"
-        if [ -f "${PROJECT_ROOT}/env.example" ]; then
-            cp "${PROJECT_ROOT}/env.example" "${PROJECT_ROOT}/.env"
-            log_info "已从 env.example 创建 .env 文件，请编辑配置"
-        fi
     fi
 }
 
@@ -180,7 +236,7 @@ start_redis() {
     if command -v redis-server &> /dev/null; then
         if ! pgrep -x "redis-server" > /dev/null; then
             log_info "启动 Redis..."
-            redis-server --daemonize yes --dir "${PROJECT_ROOT}/data/redis"
+            redis-server --daemonize yes
             sleep 1
             log_success "Redis 启动成功"
         else
@@ -189,73 +245,114 @@ start_redis() {
     fi
 }
 
-# 启动 API 服务
-start_api() {
-    log_info "启动 API 服务..."
-
-    setup_conda
-    load_env
-    setup_data_dirs
+# 初始化数据库 (只需要初始化一次，所有模块共享)
+init_database() {
+    log_info "初始化共享数据库..."
 
     cd "${PROJECT_ROOT}"
+    export PYTHONPATH="${PROJECT_ROOT}/backend:${PYTHONPATH:+:$PYTHONPATH}"
 
-    # 初始化数据库
-    log_info "初始化数据库..."
-    if ! conda run -n 312_edu python - <<'PY'; then
-from backend.app.db.session import init_db
+    if conda run -n 312_edu python - <<'PY'; then
 import asyncio
-
+from backend.core.db.session import init_db
 
 async def _main():
     await init_db()
     print('数据库初始化完成')
 
-
 asyncio.run(_main())
 PY
-        log_error "数据库初始化失败，请检查上方日志并确认依赖已安装"
+        log_success "数据库初始化完成"
+    else
+        log_error "数据库初始化失败"
         exit 1
     fi
-
-    log_success "数据库初始化完成"
-
-    # 启动 API
-    export PYTHONPATH="${PROJECT_ROOT}/backend:${PROJECT_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
-    conda run -n 312_edu --no-capture-output uvicorn backend.main:app \
-        --host ${HOST:-0.0.0.0} \
-        --port ${PORT:-6000} \
-        --reload &
-
-    API_PID=$!
-    echo $API_PID > "${API_PID_FILE}"
-    register_child "${API_PID}"
-
-    log_success "API 服务启动成功 (PID: $API_PID)"
-    log_info "访问地址: http://localhost:${PORT:-6000}"
-    log_info "API 文档: http://localhost:${PORT:-6000}/docs"
 }
 
-# 启动 Agent Worker (Celery)
-start_agent() {
-    log_info "启动 Agent Worker..."
+# 启动模块 API 服务
+start_module_api() {
+    local module=$1
+    local port=$(get_module_port "$module")
+    local subjects=$(get_module_subjects "$module")
 
-    setup_conda
-    load_env
-    start_redis
-    ensure_pid_dir
+    log_module "$module" "启动 API 服务 (端口: $port, 学科: $subjects)..."
+
+    local pid_file=$(get_pid_file "api" "$module")
+
+    # 清理旧的 PID 文件（如果进程已死）
+    if [ -f "${pid_file}" ]; then
+        local old_pid=$(cat "${pid_file}")
+        if ! kill -0 "${old_pid}" 2>/dev/null; then
+            log_warn "清理 ${module} API 的旧 PID 文件"
+            rm -f "${pid_file}"
+        fi
+    fi
+
+    # 检查端口是否被占用
+    if check_port "$port"; then
+        PROCESS_INFO=$(get_port_process "$port")
+        OCCUPYING_PID=$(echo "$PROCESS_INFO" | awk '{print $1}')
+        OCCUPYING_NAME=$(echo "$PROCESS_INFO" | awk '{print $2}')
+
+        log_error "${module} API 端口 ${port} 已被占用！"
+        log_error "占用进程: ${OCCUPYING_NAME} (PID: ${OCCUPYING_PID})"
+        log_info "请先停止占用端口的进程: ./start.sh stop_${module}"
+        return 1
+    fi
 
     cd "${PROJECT_ROOT}"
-    export PYTHONPATH="${PROJECT_ROOT}/backend:${PROJECT_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+    export PYTHONPATH="${PROJECT_ROOT}/backend:${PYTHONPATH:+:$PYTHONPATH}"
 
-    conda run -n 312_edu --no-capture-output celery -A backend.app.core.celery_app worker \
+    # 启动 API (使用模块的main.py)
+    conda run -n 312_edu --no-capture-output uvicorn \
+        "backend.modules.${module}.main:app" \
+        --host ${HOST:-0.0.0.0} \
+        --port ${port} \
+        --reload > "${PROJECT_ROOT}/logs/${module}_api.log" 2>&1 &
+
+    local pid=$!
+    echo $pid > "${pid_file}"
+    register_child "${pid}"
+
+    log_module "$module" "API 服务启动成功 (PID: $pid)"
+    log_module "$module" "访问地址: http://localhost:${port}"
+    log_module "$module" "API 文档: http://localhost:${port}/docs"
+}
+
+# 启动模块 Agent Worker
+start_module_agent() {
+    local module=$1
+    local queue="queue_${module}"
+    local subjects=$(get_module_subjects "$module")
+
+    log_module "$module" "启动 Agent Worker (队列: $queue, 学科: $subjects)..."
+
+    local pid_file=$(get_pid_file "agent" "$module")
+
+    # 清理旧的 PID 文件（如果进程已死）
+    if [ -f "${pid_file}" ]; then
+        local old_pid=$(cat "${pid_file}")
+        if ! kill -0 "${old_pid}" 2>/dev/null; then
+            log_warn "清理 ${module} Agent 的旧 PID 文件"
+            rm -f "${pid_file}"
+        fi
+    fi
+
+    cd "${PROJECT_ROOT}"
+    export PYTHONPATH="${PROJECT_ROOT}/backend:${PYTHONPATH:+:$PYTHONPATH}"
+
+    # 启动 Celery Worker (使用模块的celery_app)
+    conda run -n 312_edu --no-capture-output celery \
+        -A "backend.modules.${module}.celery_app" worker \
         --loglevel=info \
-        --concurrency=2 &
+        --queues=${queue} \
+        --concurrency=2 > "${PROJECT_ROOT}/logs/${module}_agent.log" 2>&1 &
 
-    AGENT_PID=$!
-    echo $AGENT_PID > "${AGENT_PID_FILE}"
-    register_child "${AGENT_PID}"
+    local pid=$!
+    echo $pid > "${pid_file}"
+    register_child "${pid}"
 
-    log_success "Agent Worker 启动成功 (PID: $AGENT_PID)"
+    log_module "$module" "Agent Worker 启动成功 (PID: $pid, 队列: $queue)"
 }
 
 # 启动前端
@@ -268,7 +365,6 @@ start_frontend() {
     fi
 
     ensure_pid_dir
-
     cd "${PROJECT_ROOT}/frontend"
 
     if [ ! -d "node_modules" ]; then
@@ -276,79 +372,64 @@ start_frontend() {
         npm install
     fi
 
-    npm run dev &
+    npm run dev > "${PROJECT_ROOT}/logs/frontend.log" 2>&1 &
 
-    FRONTEND_PID=$!
-    echo $FRONTEND_PID > "${FRONTEND_PID_FILE}"
-    register_child "${FRONTEND_PID}"
+    local pid=$!
+    echo $pid > "${FRONTEND_PID_FILE}"
+    register_child "${pid}"
 
-    log_success "前端服务启动成功 (PID: $FRONTEND_PID)"
+    log_success "前端服务启动成功 (PID: $pid)"
     log_info "访问地址: http://localhost:8000"
 }
 
-# Docker Compose 启动
-start_docker() {
-    log_info "使用 Docker Compose 启动..."
+# 启动所有模块的API
+start_all_api() {
+    log_info "启动所有模块 API..."
+    for module in "${MODULES[@]}"; do
+        start_module_api "$module"
+        sleep 2  # 给每个服务一些启动时间
+    done
+    log_success "所有模块 API 启动完成"
+}
 
-    if ! command -v docker-compose &> /dev/null && ! command -v docker &> /dev/null; then
-        log_error "Docker 未安装"
-        exit 1
-    fi
+# 启动所有模块的Agent
+start_all_agent() {
+    log_info "启动所有模块 Agent Worker..."
+    for module in "${MODULES[@]}"; do
+        start_module_agent "$module"
+        sleep 2
+    done
+    log_success "所有模块 Agent Worker 启动完成"
+}
 
-    cd "${PROJECT_ROOT}"
+# 停止指定模块
+stop_module() {
+    local module=$1
+    log_module "$module" "停止服务..."
 
-    # 创建数据目录
-    setup_data_dirs
+    safe_kill_pid_file "$(get_pid_file "api" "$module")"
+    safe_kill_pid_file "$(get_pid_file "agent" "$module")"
 
-    # 启动服务
-    if command -v docker-compose &> /dev/null; then
-        docker-compose up -d
-    else
-        docker compose up -d
-    fi
-
-    log_success "Docker 服务启动成功"
-    log_info "API 地址: http://localhost:6000"
-    log_info "前端地址: http://localhost:8000"
+    log_module "$module" "服务已停止"
 }
 
 # 停止所有服务
 stop_all() {
     log_info "停止所有服务..."
 
-    # 停止 API
-    safe_kill_pid_file "${API_PID_FILE}"
-    safe_kill_pid_file "${PROJECT_ROOT}/.api.pid"  # 兼容旧版本
-
-    # 停止 Agent
-    safe_kill_pid_file "${AGENT_PID_FILE}"
-    safe_kill_pid_file "${PROJECT_ROOT}/.agent.pid"  # 兼容旧版本
+    # 停止所有模块
+    for module in "${MODULES[@]}"; do
+        stop_module "$module"
+    done
 
     # 停止前端
     safe_kill_pid_file "${FRONTEND_PID_FILE}"
-    safe_kill_pid_file "${PROJECT_ROOT}/.frontend.pid"  # 兼容旧版本
 
-    # 停止 Celery workers
+    # 清理残留进程
     pkill -f "celery.*worker" 2>/dev/null || true
-
-    # 停止 uvicorn
-    pkill -f "uvicorn.*backend" 2>/dev/null || true
+    pkill -f "uvicorn.*backend.modules" 2>/dev/null || true
 
     log_success "所有服务已停止"
-}
-
-# 停止 Docker
-stop_docker() {
-    log_info "停止 Docker 服务..."
-    cd "${PROJECT_ROOT}"
-
-    if command -v docker-compose &> /dev/null; then
-        docker-compose down
-    else
-        docker compose down
-    fi
-
-    log_success "Docker 服务已停止"
 }
 
 cleanup() {
@@ -369,116 +450,236 @@ trap 'cleanup SIGTERM' SIGTERM
 trap 'cleanup SIGHUP' SIGHUP
 trap 'cleanup EXIT' EXIT
 
-# 显示状态
+# 显示服务状态
 show_status() {
     echo ""
-    echo "=========================================="
-    echo "       AI Learning Assistant 状态"
-    echo "=========================================="
+    echo "============================================================"
+    echo "       AI Learning Assistant - 多模块状态"
+    echo "============================================================"
+    echo ""
 
-    # API 状态
-    if [ -f "${API_PID_FILE}" ] && kill -0 $(cat "${API_PID_FILE}") 2>/dev/null; then
-        echo -e "API 服务:    ${GREEN}运行中${NC} (PID: $(cat ${API_PID_FILE}))"
-    elif [ -f "${PROJECT_ROOT}/.api.pid" ] && kill -0 $(cat "${PROJECT_ROOT}/.api.pid") 2>/dev/null; then
-        echo -e "API 服务:    ${GREEN}运行中${NC} (PID: $(cat ${PROJECT_ROOT}/.api.pid))"
-    else
-        echo -e "API 服务:    ${RED}未运行${NC}"
-    fi
+    # 显示每个模块的状态
+    for module in "${MODULES[@]}"; do
+        local port=$(get_module_port "$module")
+        local subjects=$(get_module_subjects "$module")
 
-    # Agent 状态
-    if [ -f "${AGENT_PID_FILE}" ] && kill -0 $(cat "${AGENT_PID_FILE}") 2>/dev/null; then
-        echo -e "Agent Worker: ${GREEN}运行中${NC} (PID: $(cat ${AGENT_PID_FILE}))"
-    elif [ -f "${PROJECT_ROOT}/.agent.pid" ] && kill -0 $(cat "${PROJECT_ROOT}/.agent.pid") 2>/dev/null; then
-        echo -e "Agent Worker: ${GREEN}运行中${NC} (PID: $(cat ${PROJECT_ROOT}/.agent.pid))"
-    else
-        echo -e "Agent Worker: ${RED}未运行${NC}"
-    fi
+        printf "${CYAN}模块: %s${NC} (端口: %s, 学科: %s)\n" "$(echo "$module" | tr '[:lower:]' '[:upper:]')" "$port" "$subjects"
+
+        # API 状态
+        local api_pid_file=$(get_pid_file "api" "$module")
+        if [ -f "${api_pid_file}" ] && kill -0 $(cat "${api_pid_file}") 2>/dev/null; then
+            printf "  API:    ${GREEN}●${NC} 运行中 (PID: %s)\n" "$(cat ${api_pid_file})"
+        else
+            printf "  API:    ${RED}○${NC} 未运行\n"
+        fi
+
+        # Agent 状态
+        local agent_pid_file=$(get_pid_file "agent" "$module")
+        if [ -f "${agent_pid_file}" ] && kill -0 $(cat "${agent_pid_file}") 2>/dev/null; then
+            printf "  Agent:  ${GREEN}●${NC} 运行中 (PID: %s)\n" "$(cat ${agent_pid_file})"
+        else
+            printf "  Agent:  ${RED}○${NC} 未运行\n"
+        fi
+
+        echo ""
+    done
 
     # Redis 状态
+    printf "${CYAN}共享服务${NC}\n"
     if command -v redis-cli &> /dev/null && redis-cli ping >/dev/null 2>&1; then
-        echo -e "Redis:       ${GREEN}运行中${NC}"
-    elif pgrep -f "redis-server" > /dev/null 2>&1; then
-        echo -e "Redis:       ${GREEN}运行中${NC}"
+        printf "  Redis:  ${GREEN}●${NC} 运行中\n"
     else
-        echo -e "Redis:       ${RED}未运行${NC}"
+        printf "  Redis:  ${RED}○${NC} 未运行\n"
     fi
 
-    echo "=========================================="
+    # 前端状态
+    if [ -f "${FRONTEND_PID_FILE}" ] && kill -0 $(cat "${FRONTEND_PID_FILE}") 2>/dev/null; then
+        printf "  前端:   ${GREEN}●${NC} 运行中 (PID: %s)\n" "$(cat ${FRONTEND_PID_FILE})"
+    else
+        printf "  前端:   ${RED}○${NC} 未运行\n"
+    fi
+
+    echo ""
+    echo "============================================================"
 }
 
 # 显示帮助
 show_help() {
     echo ""
-    echo "AI Learning Assistant 启动脚本"
+    echo "AI Learning Assistant - 多模块启动脚本"
     echo ""
     echo "用法: $0 [命令]"
     echo ""
-    echo "命令:"
-    echo "  (无参数)    启动所有服务 (API + Agent + 前端)"
-    echo "  api         仅启动 API 服务"
-    echo "  agent       仅启动 Agent Worker"
-    echo "  frontend    仅启动前端服务"
-    echo "  docker      使用 Docker Compose 启动"
-    echo "  stop        停止所有本地服务"
-    echo "  stop-docker 停止 Docker 服务"
-    echo "  status      显示服务状态"
-    echo "  help        显示此帮助"
+    echo "模块命令:"
+    echo "  api_<module>     启动指定模块的 API (例: api_default, api_rpj, api_tony)"
+    echo "  agent_<module>   启动指定模块的 Agent Worker (例: agent_rpj)"
+    echo "  stop_<module>    停止指定模块 (例: stop_default, stop_rpj)"
+    echo ""
+    echo "批量命令:"
+    echo "  api_all          启动所有模块 API (包括 default)"
+    echo "  agent_all        启动所有模块 Agent Worker"
+    echo "  all              启动所有服务 (API + Agent + 前端，包括 default)"
+    echo "  stop_all         停止所有服务"
+    echo ""
+    echo "其他命令:"
+    echo "  frontend         仅启动前端服务"
+    echo "  status           显示所有模块状态"
+    echo "  help             显示此帮助"
+    echo ""
+    echo "可用模块:"
+    for module in "${MODULES[@]}"; do
+        local port=$(get_module_port "$module")
+        local subjects=$(get_module_subjects "$module")
+        echo "  - ${module}: 端口 ${port} (${subjects})"
+    done
+    echo ""
+    echo "注意事项:"
+    echo "  - default 模块 (端口 6100) 用于跨学科查询和图片转发"
+    echo "  - 其他模块负责各自学科的具体业务逻辑"
     echo ""
 }
 
 # 主函数
 main() {
-    case "${1:-all}" in
-        api)
+    local cmd="${1:-all}"
+
+    # 解析命令
+    if [[ "$cmd" == api_* ]]; then
+        # api_<module> 命令
+        local module="${cmd#api_}"
+        if [ "$module" == "all" ]; then
+            # 批量启动所有API - 使用等待模式
             check_dependencies
+            setup_conda
+            load_env
+            setup_data_dirs
             start_redis
-            start_api
-            log_info "按 Ctrl+C 或 Ctrl+D 退出并清理所有服务"
+            init_database
+            start_all_api
+            log_info "按 Ctrl+C 退出并停止所有 API 服务"
             wait_for_children
-            ;;
-        agent)
-            check_dependencies
-            start_agent
-            log_info "按 Ctrl+C 或 Ctrl+D 退出并清理所有服务"
-            wait_for_children
-            ;;
-        frontend)
-            start_frontend
-            log_info "按 Ctrl+C 或 Ctrl+D 退出并清理所有服务"
-            wait_for_children
-            ;;
-        docker)
-            start_docker
-            ;;
-        stop)
-            stop_all
-            ;;
-        stop-docker)
-            stop_docker
-            ;;
-        status)
-            show_status
-            ;;
-        help|--help|-h)
-            show_help
-            ;;
-        all|"")
-            check_dependencies
-            start_redis
-            start_api
-            start_agent
-            start_frontend
-            echo ""
-            show_status
-            log_info "按 Ctrl+C 或 Ctrl+D 退出并清理所有服务"
-            wait_for_children
-            ;;
-        *)
-            log_error "未知命令: $1"
+        elif [[ " ${MODULES[@]} " =~ " ${module} " ]]; then
+            # 单模块启动 - 使用独立脚本，不阻塞
+            log_info "使用独立模式启动 ${module} API..."
+            exec "${SCRIPT_DIR}/start_module.sh" api "$module"
+        else
+            log_error "未知模块: $module"
             show_help
             exit 1
-            ;;
-    esac
+        fi
+
+    elif [[ "$cmd" == agent_* ]]; then
+        # agent_<module> 命令
+        local module="${cmd#agent_}"
+        if [ "$module" == "all" ]; then
+            # 批量启动所有Agent - 使用等待模式
+            check_dependencies
+            setup_conda
+            load_env
+            start_redis
+            start_all_agent
+            log_info "按 Ctrl+C 退出并停止所有 Agent Worker"
+            wait_for_children
+        elif [[ " ${MODULES[@]} " =~ " ${module} " ]]; then
+            # 单模块启动 - 使用独立脚本，不阻塞
+            log_info "使用独立模式启动 ${module} Agent..."
+            exec "${SCRIPT_DIR}/start_module.sh" agent "$module"
+        else
+            log_error "未知模块: $module"
+            show_help
+            exit 1
+        fi
+
+    elif [[ "$cmd" == stop_* ]]; then
+        # stop_<module> 命令
+        local module="${cmd#stop_}"
+        if [ "$module" == "all" ]; then
+            stop_all
+        elif [[ " ${MODULES[@]} " =~ " ${module} " ]]; then
+            stop_module "$module"
+        else
+            log_error "未知模块: $module"
+            exit 1
+        fi
+
+    else
+        # 其他命令
+        case "$cmd" in
+            frontend)
+                # 前端启动 - 独立模式(不影响其他服务)
+                log_info "启动前端服务..."
+
+                if ! command -v node &> /dev/null; then
+                    log_error "Node.js 未安装"
+                    exit 1
+                fi
+
+                ensure_pid_dir
+                cd "${PROJECT_ROOT}/frontend"
+
+                if [ ! -d "node_modules" ]; then
+                    log_info "安装前端依赖..."
+                    npm install
+                fi
+
+                # 启动前端
+                npm run dev > "${PROJECT_ROOT}/logs/frontend.log" 2>&1 &
+                FRONTEND_PID=$!
+                echo $FRONTEND_PID > "${FRONTEND_PID_FILE}"
+
+                log_success "前端服务启动成功 (PID: $FRONTEND_PID)"
+                log_info "访问地址: http://localhost:8000"
+                log_info "按 Ctrl+C 退出并停止前端服务"
+
+                # 独立的cleanup，只停止frontend
+                cleanup_frontend() {
+                    log_info "正在停止前端服务..."
+                    if [ -n "${FRONTEND_PID}" ] && kill -0 "${FRONTEND_PID}" 2>/dev/null; then
+                        kill "${FRONTEND_PID}" 2>/dev/null || true
+                        sleep 1
+                        if kill -0 "${FRONTEND_PID}" 2>/dev/null; then
+                            kill -9 "${FRONTEND_PID}" 2>/dev/null || true
+                        fi
+                    fi
+                    rm -f "${FRONTEND_PID_FILE}"
+                    log_success "前端服务已停止"
+                }
+
+                # 设置独立的trap（覆盖全局trap）
+                trap 'cleanup_frontend; exit 0' INT TERM
+
+                # 等待前端进程
+                wait "${FRONTEND_PID}"
+                ;;
+            status)
+                show_status
+                ;;
+            help|--help|-h)
+                show_help
+                ;;
+            all|"")
+                # 启动所有服务 - 使用等待模式
+                check_dependencies
+                setup_conda
+                load_env
+                setup_data_dirs
+                start_redis
+                init_database
+                start_all_api
+                start_all_agent
+                start_frontend
+                echo ""
+                show_status
+                log_info "按 Ctrl+C 退出并停止所有服务"
+                wait_for_children
+                ;;
+            *)
+                log_error "未知命令: $cmd"
+                show_help
+                exit 1
+                ;;
+        esac
+    fi
 }
 
 main "$@"

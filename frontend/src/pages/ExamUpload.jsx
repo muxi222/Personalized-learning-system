@@ -18,14 +18,29 @@ import {
 import toast from 'react-hot-toast'
 import ImageViewer from '../components/ImageViewer'
 import ImageCompareViewer from '../components/ImageCompareViewer'
+import { ocrApi } from '../lib/api' // 使用模块化API客户端
 
+// 10个学科 - 对应5个模块
 const SUBJECTS = [
-  { value: 'math', label: '数学', icon: '📐', color: 'from-blue-500 to-indigo-500' },
-  { value: 'english', label: '英语', icon: '🔤', color: 'from-green-500 to-emerald-500' },
-  { value: 'physics', label: '物理', icon: '⚡', color: 'from-amber-500 to-orange-500' },
-  { value: 'chemistry', label: '化学', icon: '🧪', color: 'from-purple-500 to-pink-500' },
+  // RPJ模块 (6001)
   { value: 'chinese', label: '语文', icon: '📖', color: 'from-red-500 to-rose-500' },
-  { value: 'biology', label: '生物', icon: '🧬', color: 'from-teal-500 to-cyan-500' },
+  { value: 'english', label: '英语', icon: '🔤', color: 'from-green-500 to-emerald-500' },
+  { value: 'politics', label: '政治', icon: '🏛️', color: 'from-slate-500 to-gray-500' },
+
+  // XMX模块 (6002)
+  { value: 'economics', label: '经济学', icon: '💹', color: 'from-yellow-500 to-amber-500' },
+
+  // WZY模块 (6003)
+  { value: 'math', label: '数学', icon: '📐', color: 'from-blue-500 to-indigo-500' },
+  { value: 'physics', label: '物理', icon: '⚡', color: 'from-orange-500 to-red-500' },
+
+  // WZM模块 (6004)
+  { value: 'chemistry', label: '化学', icon: '🧪', color: 'from-purple-500 to-pink-500' },
+
+  // TONY模块 (6005)
+  { value: 'history', label: '历史', icon: '📜', color: 'from-brown-500 to-amber-700' },
+  { value: 'geography', label: '地理', icon: '🌍', color: 'from-cyan-500 to-blue-500' },
+  { value: 'other', label: '其他', icon: '📚', color: 'from-gray-500 to-slate-500' },
 ]
 
 export default function ExamUpload() {
@@ -77,7 +92,7 @@ export default function ExamUpload() {
     setCorrectedImageUrl(null)
   }, [])
 
-  // 分析试卷
+  // 分析试卷 - 使用模块化API
   const analyzeMutation = useMutation({
     mutationFn: async () => {
       const formData = new FormData()
@@ -85,28 +100,9 @@ export default function ExamUpload() {
       formData.append('subject', subject)
       formData.append('grade', grade)
 
-      // 从 auth-storage 正确获取 token
-      const authStorage = localStorage.getItem('auth-storage')
-      let token = null
-      if (authStorage) {
-        const { state } = JSON.parse(authStorage)
-        token = state?.token
-      }
-
-      const response = await fetch('/api/v1/ocr/analyze', {
-        method: 'POST',
-        body: formData,
-        headers: token ? {
-          'Authorization': `Bearer ${token}`
-        } : {}
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || '分析失败')
-      }
-
-      return response.json()
+      // 使用模块化API客户端，自动路由到正确的模块
+      const response = await ocrApi.uploadExam(formData, subject)
+      return response.data
     },
     onSuccess: (data) => {
       setAnalysisResult(data)

@@ -44,12 +44,12 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # Expose port
-EXPOSE 6000
+EXPOSE 6100
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:6000/health || exit 1
+    CMD curl -f http://localhost:6100/health || exit 1
 
 # Run the application
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "6000"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "6100"]
 

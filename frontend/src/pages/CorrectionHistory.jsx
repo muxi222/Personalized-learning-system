@@ -22,95 +22,55 @@ import { clsx } from 'clsx'
 import toast from 'react-hot-toast'
 import ImageViewer from '../components/ImageViewer'
 import CorrectionDetailDrawer from '../components/CorrectionDetailDrawer'
+import { createApiClient } from '../lib/api'
 
-// 获取 token 的辅助函数
-const getAuthToken = () => {
-  const authStorage = localStorage.getItem('auth-storage')
-  if (authStorage) {
-    try {
-      const { state } = JSON.parse(authStorage)
-      const token = state?.token
-      console.log('getAuthToken:', { hasAuthStorage: true, hasToken: !!token, tokenPrefix: token?.substring(0, 20) })
-      return token
-    } catch (e) {
-      console.error('Failed to parse auth-storage:', e)
-      return null
-    }
-  }
-  console.log('getAuthToken: no auth-storage found')
-  return null
-}
-
-// API 调用函数
+/**
+ * 创建批改记录 API 客户端
+ * 对于全部学科的请求，使用默认模块(default - port 6100)
+ * 对于特定学科的请求，路由到对应模块
+ */
 const correctionsApi = {
   list: (params) => {
-    const token = getAuthToken()
-    const filteredParams = Object.fromEntries(
-      Object.entries(params).filter(([_, v]) => v !== undefined && v !== '')
-    )
-    const queryString = new URLSearchParams(filteredParams).toString()
-    
-    const headers = { 'Content-Type': 'application/json' }
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
-    }
-    
-    console.log('corrections.list API call:', { params: filteredParams, hasToken: !!token })
-    
-    return fetch(`/api/v1/corrections/?${queryString}`, {
-      headers
-    }).then(res => {
-      console.log('corrections.list response:', res.status)
-      return res.json()
-    })
+    // 如果指定了学科，使用该学科对应的模块；否则使用默认模块(default)
+    const subject = params.subject || null  // null使用default模块
+    const client = createApiClient(subject)
+    return client.get('/corrections/', { params }).then(res => res.data)
   },
-  
-  get: (id) => {
-    const token = getAuthToken()
-    const headers = { 'Content-Type': 'application/json' }
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
-    }
-    
-    return fetch(`/api/v1/corrections/${id}`, {
-      headers
-    }).then(res => res.json())
+
+  get: (id, subject = null) => {
+    const client = createApiClient(subject)
+    return client.get(`/corrections/${id}`).then(res => res.data)
   },
-  
-  delete: (id) => {
-    const token = getAuthToken()
-    const headers = { 'Content-Type': 'application/json' }
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
-    }
-    
-    return fetch(`/api/v1/corrections/${id}`, {
-      method: 'DELETE',
-      headers
-    })
+
+  delete: (id, subject = null) => {
+    const client = createApiClient(subject)
+    return client.delete(`/corrections/${id}`)
   },
-  
-  getStatistics: (period) => {
-    const token = getAuthToken()
-    const headers = { 'Content-Type': 'application/json' }
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
-    }
-    
-    return fetch(`/api/v1/corrections/statistics/${period}`, {
-      headers
-    }).then(res => res.json())
+
+  getStatistics: (period, subject = null) => {
+    const client = createApiClient(subject)
+    return client.get(`/corrections/statistics/${period}`).then(res => res.data)
   },
 }
 
+// 10个学科 + 全部选项
 const SUBJECTS = [
   { value: '', label: '全部学科' },
-  { value: 'math', label: '数学', color: 'text-blue-400', bg: 'bg-blue-500/10' },
-  { value: 'english', label: '英语', color: 'text-green-400', bg: 'bg-green-500/10' },
-  { value: 'physics', label: '物理', color: 'text-amber-400', bg: 'bg-amber-500/10' },
-  { value: 'chemistry', label: '化学', color: 'text-purple-400', bg: 'bg-purple-500/10' },
+  // RPJ模块
   { value: 'chinese', label: '语文', color: 'text-red-400', bg: 'bg-red-500/10' },
-  { value: 'biology', label: '生物', color: 'text-teal-400', bg: 'bg-teal-500/10' },
+  { value: 'english', label: '英语', color: 'text-green-400', bg: 'bg-green-500/10' },
+  { value: 'politics', label: '政治', color: 'text-slate-400', bg: 'bg-slate-500/10' },
+  // XMX模块
+  { value: 'economics', label: '经济学', color: 'text-yellow-400', bg: 'bg-yellow-500/10' },
+  // WZY模块
+  { value: 'math', label: '数学', color: 'text-blue-400', bg: 'bg-blue-500/10' },
+  { value: 'physics', label: '物理', color: 'text-orange-400', bg: 'bg-orange-500/10' },
+  // WZM模块
+  { value: 'chemistry', label: '化学', color: 'text-purple-400', bg: 'bg-purple-500/10' },
+  // TONY模块
+  { value: 'history', label: '历史', color: 'text-amber-700', bg: 'bg-amber-700/10' },
+  { value: 'geography', label: '地理', color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
+  { value: 'other', label: '其他', color: 'text-gray-400', bg: 'bg-gray-500/10' },
 ]
 
 const PERIODS = [
@@ -146,8 +106,12 @@ export default function CorrectionHistory() {
 
   // 获取统计数据
   const { data: stats } = useQuery({
-    queryKey: ['correction-stats', selectedPeriod],
-    queryFn: () => correctionsApi.getStatistics(selectedPeriod),
+    queryKey: ['correction-stats', selectedPeriod, selectedSubject],
+    queryFn: () => {
+      // 统计数据：如果选择了学科，向该学科模块请求；否则向default模块请求全部统计
+      const subject = selectedSubject || null  // null使用default模块
+      return correctionsApi.getStatistics(selectedPeriod, subject)
+    },
   })
 
   const corrections = listData?.items || []
@@ -156,7 +120,7 @@ export default function CorrectionHistory() {
 
   // 删除批改记录
   const deleteMutation = useMutation({
-    mutationFn: correctionsApi.delete,
+    mutationFn: ({ id, subject }) => correctionsApi.delete(id, subject),
     onSuccess: () => {
       queryClient.invalidateQueries(['corrections'])
       queryClient.invalidateQueries(['correction-stats'])
@@ -179,9 +143,13 @@ export default function CorrectionHistory() {
     }
 
     for (const id of selectedItems) {
-      await deleteMutation.mutateAsync(id)
+      // 找到对应的 correction 以获取 subject
+      const correction = corrections.find(c => c.id === id)
+      if (correction) {
+        await deleteMutation.mutateAsync({ id, subject: correction.subject })
+      }
     }
-    
+
     setSelectedItems([])
     setIsSelectionMode(false)
     toast.success(`已删除 ${selectedItems.length} 条记录`)
@@ -620,7 +588,7 @@ export default function CorrectionHistory() {
                       onClick={(e) => {
                         e.stopPropagation()
                         if (confirm('确定要删除这条批改记录吗？这将同时删除关联的错题记录。')) {
-                          deleteMutation.mutate(correction.id)
+                          deleteMutation.mutate({ id: correction.id, subject: correction.subject })
                         }
                       }}
                       data-action="delete"
@@ -725,6 +693,7 @@ export default function CorrectionHistory() {
         isOpen={detailDrawerOpen}
         onClose={() => setDetailDrawerOpen(false)}
         correctionId={currentDetailId}
+        subject={corrections.find(c => c.id === currentDetailId)?.subject || 'chinese'}
         allIds={corrections.map(c => c.id)}
         onNavigate={(newId) => setCurrentDetailId(newId)}
       />

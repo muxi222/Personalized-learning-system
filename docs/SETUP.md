@@ -81,7 +81,7 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 
 ### 5. 访问服务
 
-- **API 文档**: http://localhost:6000/docs
+- **API 文档**: http://localhost:6100/docs
 - **前端界面**: http://localhost:8000
 
 ### 6. 功能使用指南
