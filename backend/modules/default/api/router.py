@@ -4,13 +4,14 @@ Default Module - API Router
 """
 
 from fastapi import APIRouter
-from .endpoints import corrections, users
+from .endpoints import corrections, users, questions
 
 api_router = APIRouter()
 
 # 注册端点
 api_router.include_router(corrections.router, prefix="/corrections", tags=["Corrections"])
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
+api_router.include_router(questions.router, prefix="/questions", tags=["Questions"])
 
 # 注意：默认模块不提供OCR端点，因为OCR需要指定学科
 # OCR请求应该路由到具体的学科模块（rpj, xmx, wzy, wzm, tony）

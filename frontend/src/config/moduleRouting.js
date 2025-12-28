@@ -96,15 +96,20 @@ export function getModuleBySubject(subject) {
 
 /**
  * 根据学科获取 API 基础 URL
- * @param {string} subject - 学科名称
- * @returns {string} API 基础 URL (如 '/api/rpj')
+ * @param {string} subject - 学科名称（null 表示使用 default 模块）
+ * @returns {string} API 基础 URL (如 '/api/rpj' 或 '/api/v1' 对于 default 模块)
  *
  * 注意：返回相对路径，通过 Vite proxy 转发到实际的后端模块端口
  * 例如：'/api/rpj' 会被转发到 'http://localhost:6001/api'
+ *      '/api/v1' 会被转发到 'http://localhost:6100/api/v1' (default 模块)
  */
 export function getApiBaseUrl(subject) {
   const module = getModuleBySubject(subject)
-  // 返回相对路径，由 Vite proxy 处理转发
+  // default 模块使用 /api/v1 路径（不带模块前缀）
+  if (module === 'default') {
+    return '/api/v1'
+  }
+  // 其他模块使用 /api/{module} 路径
   return `/api/${module}`
 }
 

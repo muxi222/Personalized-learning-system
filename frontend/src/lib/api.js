@@ -12,9 +12,13 @@ export function createApiClient(subject) {
   // 这样可以支持跨学科查询（例如：获取所有学科的批改记录）
   const targetSubject = subject || null
 
-  // getApiBaseUrl 已经返回 /api/{module}，所以这里只需要加 /v1
-  // 例如：/api/tony/v1 -> Vite proxy 转发到 http://localhost:6005/api/v1
-  const baseURL = `${getApiBaseUrl(targetSubject)}/v1`
+  // getApiBaseUrl 返回：
+  // - default 模块: /api/v1 (已经包含 /v1)
+  // - 其他模块: /api/{module} (需要加 /v1)
+  const baseUrlWithoutV1 = getApiBaseUrl(targetSubject)
+  const baseURL = baseUrlWithoutV1 === '/api/v1' 
+    ? baseUrlWithoutV1  // default 模块已经包含 /v1
+    : `${baseUrlWithoutV1}/v1`  // 其他模块需要加 /v1
 
   const client = axios.create({
     baseURL,
@@ -121,12 +125,16 @@ export const questionApi = {
 
   /**
    * 获取错题列表
-   * @param {Object} params - 查询参数（必须包含 subject 字段）
+   * @param {Object} params - 查询参数（subject 可选，用于筛选）
+   * 使用 default 模块（通用接口），通过 subject 参数筛选学科
    */
   list: (params = {}) => {
-    const subject = params.subject || getDefaultSubject()
-    saveLastSubject(subject)
-    return createApiClient(subject).get('/questions/', { params })
+    // 如果有 subject 参数，保存最后选择的学科
+    if (params.subject) {
+      saveLastSubject(params.subject)
+    }
+    // 使用 default 模块（传入 null），支持所有学科查询
+    return createApiClient(null).get('/questions/', { params })
   },
 
   /**

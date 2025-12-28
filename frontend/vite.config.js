@@ -52,6 +52,14 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/default/, '/api'),
       },
+      // 通用 API 路由 (6100): /api/v1/... 直接路由到 default 模块
+      // 注意：这个规则应该在模块特定路由之后，但 Vite 会按顺序匹配
+      // 所以需要放在最后，确保 /api/{module}/v1/... 优先匹配
+      '/api/v1': {
+        target: 'http://localhost:6100',
+        changeOrigin: true,
+        rewrite: (path) => path, // 保持路径不变，因为 default 模块已经使用 /api/v1 前缀
+      },
       // Health check endpoints for each module
       '/health/rpj': {
         target: 'http://localhost:6001',
