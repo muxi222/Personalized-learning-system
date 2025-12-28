@@ -338,10 +338,11 @@ export const feedbackApi = {
 }
 
 // ============================================
-// User/Auth APIs - 使用任意模块（认证是共享的）
+// User/Auth APIs - 使用 default 模块（通用认证模块）
 // ============================================
-// 认证 API 可以使用任意模块，因为所有模块共享认证系统
-const authClient = createApiClient('chinese') // 使用 rpj 模块
+// 认证 API 使用 default 模块（端口 6100），避免学生模块影响通用认证功能
+// 传入 null 会路由到 default 模块
+const authClient = createApiClient(null) // 使用 default 模块（端口 6100）
 
 export const authApi = {
   /**

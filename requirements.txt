@@ -46,6 +46,7 @@ python-multipart>=0.0.6
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 bcrypt>=4.0.0,<5.0.0  # Pin to 4.x for Passlib compatibility
+# Note: bcrypt 4.1.0+ removed __about__ attribute, compatibility patch applied in backend/core/bcrypt_compat.py
 email-validator>=2.1.0
 
 # ============= 任务队列 =============

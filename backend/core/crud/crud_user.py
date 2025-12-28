@@ -7,6 +7,9 @@ import hashlib
 import logging
 from typing import Optional
 
+# 在导入 passlib 之前应用 bcrypt 兼容性补丁
+from .. import bcrypt_compat  # noqa: F401
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from passlib.context import CryptContext
