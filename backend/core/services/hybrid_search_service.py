@@ -31,7 +31,6 @@ settings = get_base_settings()
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class SearchResult:
     """搜索结果数据类"""
@@ -41,7 +40,6 @@ class SearchResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
     document: str = ""
 
-
 @dataclass
 class DocumentStore:
     """文档存储 - 用于存储原始文档和元数据"""
@@ -49,7 +47,6 @@ class DocumentStore:
     content: str
     metadata: Dict[str, Any]
     embedding: Optional[List[float]] = None
-
 
 class HybridSearchService:
     """
@@ -75,9 +72,18 @@ class HybridSearchService:
         self._tokenized_corpus: List[List[str]] = []
         self._initialized = False
         self._dimension = settings.EMBEDDING_DIMENSION
+        # Allow per-process/per-module override of index directories (VectorStoreService will pass these)
+        self._vector_store_path = settings.VECTOR_STORE_PATH
+        self._bm25_index_path = settings.BM25_INDEX_PATH
 
-    async def initialize(self) -> bool:
-        """初始化混合检索服务"""
+    async def initialize(
+        self,
+        *,
+        vector_store_path: Optional[str] = None,
+        bm25_index_path: Optional[str] = None,
+        force_recreate: bool = False,
+    ) -> bool:
+        """初始化混合检索服务（支持按模块覆盖索引目录）"""
         if self._initialized:
             return True
 
@@ -85,18 +91,30 @@ class HybridSearchService:
             import faiss
             from rank_bm25 import BM25Okapi
 
+            if vector_store_path:
+                self._vector_store_path = str(vector_store_path)
+            if bm25_index_path:
+                self._bm25_index_path = str(bm25_index_path)
+
             # 确保目录存在
-            Path(settings.VECTOR_STORE_PATH).mkdir(parents=True, exist_ok=True)
-            Path(settings.BM25_INDEX_PATH).mkdir(parents=True, exist_ok=True)
+            Path(self._vector_store_path).mkdir(parents=True, exist_ok=True)
+            Path(self._bm25_index_path).mkdir(parents=True, exist_ok=True)
 
             # 尝试加载已有索引
-            if self._load_indices():
+            if (not force_recreate) and self._load_indices():
                 logger.info("Loaded existing FAISS and BM25 indices")
             else:
                 # 创建新索引
+                self._document_store = {}
+                self._id_to_idx = {}
+                self._idx_to_id = {}
+                self._tokenized_corpus = []
                 self._faiss_index = faiss.IndexFlatIP(self._dimension)  # Inner Product (cosine similarity for normalized vectors)
                 self._bm25_index = None  # Will be created when documents are added
-                logger.info(f"Created new FAISS index with dimension {self._dimension}")
+                logger.info(
+                    f"Created new FAISS index with dimension {self._dimension} "
+                    f"(vector_store_path={self._vector_store_path}, bm25_index_path={self._bm25_index_path})"
+                )
 
             self._initialized = True
             return True
@@ -113,10 +131,10 @@ class HybridSearchService:
         try:
             import faiss
 
-            faiss_path = Path(settings.VECTOR_STORE_PATH) / "index.faiss"
-            bm25_path = Path(settings.BM25_INDEX_PATH) / "bm25.pkl"
-            store_path = Path(settings.VECTOR_STORE_PATH) / "store.json"
-            mapping_path = Path(settings.VECTOR_STORE_PATH) / "mapping.json"
+            faiss_path = Path(self._vector_store_path) / "index.faiss"
+            bm25_path = Path(self._bm25_index_path) / "bm25.pkl"
+            store_path = Path(self._vector_store_path) / "store.json"
+            mapping_path = Path(self._vector_store_path) / "mapping.json"
 
             if not all(p.exists() for p in [faiss_path, store_path, mapping_path]):
                 return False
@@ -155,10 +173,10 @@ class HybridSearchService:
         try:
             import faiss
 
-            faiss_path = Path(settings.VECTOR_STORE_PATH) / "index.faiss"
-            bm25_path = Path(settings.BM25_INDEX_PATH) / "bm25.pkl"
-            store_path = Path(settings.VECTOR_STORE_PATH) / "store.json"
-            mapping_path = Path(settings.VECTOR_STORE_PATH) / "mapping.json"
+            faiss_path = Path(self._vector_store_path) / "index.faiss"
+            bm25_path = Path(self._bm25_index_path) / "bm25.pkl"
+            store_path = Path(self._vector_store_path) / "store.json"
+            mapping_path = Path(self._vector_store_path) / "mapping.json"
 
             # 保存 FAISS 索引
             if self._faiss_index is not None:
@@ -581,10 +599,8 @@ class HybridSearchService:
                 results.append(doc)
         return results
 
-
 # Singleton instance
 _hybrid_search_service: Optional[HybridSearchService] = None
-
 
 @lru_cache()
 def get_hybrid_search_service() -> HybridSearchService:

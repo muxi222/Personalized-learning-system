@@ -12,7 +12,6 @@ from backend.modules.xmx.config import settings
 
 logger = logging.getLogger(__name__)
 
-
 class SimilarQuestionAgent(BaseAgent):
     """
     相似题目推荐Agent

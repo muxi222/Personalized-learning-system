@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
 def create_access_token(user_id: int, expires_delta: Optional[timedelta] = None) -> str:
     """Create JWT access token"""
     expire = datetime.utcnow() + (
@@ -39,7 +38,6 @@ def create_access_token(user_id: int, expires_delta: Optional[timedelta] = None)
         "iat": datetime.utcnow(),
     }
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
 
 @router.post("/register", response_model=UserResponse, status_code=201)
 async def register_user(
@@ -58,10 +56,10 @@ async def register_user(
         f"grade={repr(user_data.grade)} (type={type(user_data.grade).__name__ if user_data.grade else 'None'}), "
         f"password_length={len(user_data.password) if user_data.password else 0} (type={type(user_data.password).__name__ if user_data.password else 'None'})"
     )
-    
+
     # Info 级别日志：简要记录
     logger.info(f"Registration attempt: username={user_data.username}, email={user_data.email}")
-    
+
     # Check if username exists
     logger.debug(f"Checking if username '{user_data.username}' exists")
     existing = await crud_user.get_user_by_username(db, user_data.username)
@@ -94,11 +92,10 @@ async def register_user(
         logger.error(f"Registration failed (unexpected error): {exc}", exc_info=True)
         await db.rollback()
         raise HTTPException(status_code=500, detail="Registration failed due to server error") from exc
-    
+
     await db.commit()
     logger.info(f"New user registered successfully: id={user.id}, username={user.username}, email={user.email}")
     return UserResponse.model_validate(user)
-
 
 @router.post("/login", response_model=Token)
 async def login(
@@ -133,7 +130,6 @@ async def login(
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
-
 @router.post("/token", response_model=Token)
 async def login_for_token(
     user_data: UserLogin,
@@ -165,7 +161,6 @@ async def login_for_token(
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
-
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
     db: AsyncSession = Depends(get_db),
@@ -178,7 +173,6 @@ async def get_current_user_info(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return UserResponse.model_validate(user)
-
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
@@ -197,4 +191,3 @@ async def get_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     return UserResponse.model_validate(user)
-

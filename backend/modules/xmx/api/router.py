@@ -5,6 +5,7 @@ XMX Module - API Router
 
 from fastapi import APIRouter
 from .endpoints import questions, ocr, corrections, learning, guidance, image_files, users, tasks, feedback
+from .endpoints.stats import feedback as feedback_stats
 
 api_router = APIRouter()
 
@@ -18,3 +19,4 @@ api_router.include_router(image_files.router, prefix="/image-files", tags=["Imag
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
+api_router.include_router(feedback_stats.router, prefix="/feedback", tags=["Feedback"])

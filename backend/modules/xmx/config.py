@@ -11,7 +11,6 @@ from functools import lru_cache
 from typing import List
 from backend.core.base_config import BaseAppSettings
 
-
 class XMXSettings(BaseAppSettings):
     """XMX模块配置 - 历史、地理、其他"""
 
@@ -26,12 +25,10 @@ class XMXSettings(BaseAppSettings):
     # 日志文件
     LOG_FILE: str = "./logs/xmx.log"
 
-
 @lru_cache()
 def get_settings() -> XMXSettings:
     """Get cached XMX settings instance"""
     return XMXSettings()
-
 
 # 导出settings实例供模块使用
 settings = get_settings()

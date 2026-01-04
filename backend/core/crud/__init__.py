@@ -76,4 +76,3 @@ __all__ = [
     "decrement_reference_count",
     "delete_image_file",
 ]
-

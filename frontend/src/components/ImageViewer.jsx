@@ -204,4 +204,3 @@ export default function ImageViewer({ isOpen, onClose, imageUrl, title = '查看
     </div>
   )
 }
-

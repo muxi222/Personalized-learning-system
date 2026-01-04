@@ -1,7 +1,7 @@
 """
 RPJ Module - Agents Package
 
-Agent implementations for RPJ module (History, Geography, Other subjects)
+Agent implementations for RPJ module (Chinese, English, Morality subjects)
 """
 
 from .question_intake_agent import QuestionIntakeAgent

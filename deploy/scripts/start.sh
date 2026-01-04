@@ -100,11 +100,16 @@ get_port_process() {
 }
 
 CHILD_PIDS=()
+CHILD_PID_FILES=()
 SERVICES_STARTED=false
 
 register_child() {
     CHILD_PIDS+=("$1")
     SERVICES_STARTED=true
+}
+
+register_pid_file() {
+    CHILD_PID_FILES+=("$1")
 }
 
 wait_for_children() {
@@ -137,6 +142,48 @@ safe_kill_pid_file() {
             fi
         fi
         rm -f "${pid_file}"
+    fi
+}
+
+# 仅停止“当前 terminal/当前脚本实例”启动的子进程（不影响其他 terminal）
+kill_child_pid() {
+    local pid="$1"
+    if [ -z "${pid}" ]; then
+        return 0
+    fi
+    if ! kill -0 "${pid}" 2>/dev/null; then
+        return 0
+    fi
+
+    # 先尝试杀进程组（通常后台 job 的 PGID==PID），可一并结束 uvicorn --reload 的子进程
+    kill -TERM -- "-${pid}" 2>/dev/null || true
+    kill -TERM "${pid}" 2>/dev/null || true
+    sleep 1
+
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -KILL -- "-${pid}" 2>/dev/null || true
+        kill -KILL "${pid}" 2>/dev/null || true
+    fi
+}
+
+cleanup_children_only() {
+    local signal="${1:-EXIT}"
+    if [ "${signal}" != "EXIT" ]; then
+        log_warn "检测到中断信号 (${signal})，仅停止当前终端启动的服务..."
+    fi
+
+    # 停止子进程
+    if [ ${#CHILD_PIDS[@]} -gt 0 ]; then
+        for pid in "${CHILD_PIDS[@]}"; do
+            kill_child_pid "${pid}"
+        done
+    fi
+
+    # 清理本次启动产生的 PID 文件（不触碰其他终端产生的 PID 文件）
+    if [ ${#CHILD_PID_FILES[@]} -gt 0 ]; then
+        for f in "${CHILD_PID_FILES[@]}"; do
+            rm -f "${f}" 2>/dev/null || true
+        done
     fi
 }
 
@@ -313,6 +360,7 @@ start_module_api() {
     local pid=$!
     echo $pid > "${pid_file}"
     register_child "${pid}"
+    register_pid_file "${pid_file}"
 
     log_module "$module" "API 服务启动成功 (PID: $pid)"
     log_module "$module" "访问地址: http://localhost:${port}"
@@ -351,6 +399,7 @@ start_module_agent() {
     local pid=$!
     echo $pid > "${pid_file}"
     register_child "${pid}"
+    register_pid_file "${pid_file}"
 
     log_module "$module" "Agent Worker 启动成功 (PID: $pid, 队列: $queue)"
 }
@@ -377,6 +426,7 @@ start_frontend() {
     local pid=$!
     echo $pid > "${FRONTEND_PID_FILE}"
     register_child "${pid}"
+    register_pid_file "${FRONTEND_PID_FILE}"
 
     log_success "前端服务启动成功 (PID: $pid)"
     log_info "访问地址: http://localhost:8000"
@@ -434,15 +484,9 @@ stop_all() {
 
 cleanup() {
     local signal="${1:-EXIT}"
-    if [ "${signal}" != "EXIT" ]; then
-        log_warn "检测到中断信号 (${signal})，正在停止所有服务..."
-    fi
-    if [ "${SERVICES_STARTED}" = true ]; then
-        stop_all
-    fi
-    if [ "${signal}" != "EXIT" ]; then
-        exit 0
-    fi
+    # 重要：Ctrl+C 只停止“当前终端/当前脚本实例”启动的服务，避免影响其他终端中的服务
+    cleanup_children_only "${signal}"
+    if [ "${signal}" != "EXIT" ]; then exit 0; fi
 }
 
 trap 'cleanup SIGINT' SIGINT

@@ -16,7 +16,7 @@ import {
   Clock,
   ArrowLeftRight
 } from 'lucide-react'
-import { clsx } from 'clsx'
+import clsx from 'clsx'
 import ImageViewer from '../components/ImageViewer'
 import ImageCompareViewer from '../components/ImageCompareViewer'
 
@@ -140,7 +140,7 @@ export default function CorrectionDetail() {
                 <div
                   className={clsx(
                     "h-full transition-all",
-                    scorePercent >= 60 
+                    scorePercent >= 60
                       ? "bg-gradient-to-r from-emerald-500 to-green-500"
                       : "bg-gradient-to-r from-red-500 to-orange-500"
                   )}
@@ -482,4 +482,3 @@ export default function CorrectionDetail() {
     </div>
   )
 }
-

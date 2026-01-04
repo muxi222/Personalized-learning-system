@@ -12,7 +12,6 @@ from backend.modules.xmx.config import settings
 
 logger = logging.getLogger(__name__)
 
-
 class QuestionIntakeAgent(BaseAgent):
     """
     错题录入Agent
@@ -24,6 +23,28 @@ class QuestionIntakeAgent(BaseAgent):
     4. 返回处理结果
 
     参考实现: backend/modules/tony/agents/question_intake_agent.py
+
+    TODO(student): 学科判定 + 分类归一化（统一模板 v1；重点要求）
+    【输入】user_selected_subject=kwargs["subject"]（或同等字段），text=OCR提取出的题目文本/结构化题目
+    【输出】保存到数据库前，需要生成：
+      - detected_subject + confidence(0~1)
+      - chapter: 从 CHAPTER_TAXONOMY[detected_subject] 选 1 个（否则“综合”）
+      - knowledge_points: 从 KNOWLEDGE_POINT_TAXONOMY[detected_subject] 选 1~3 个（否则“综合”）
+      - tags: 2~6 个短词（用于检索，避免太碎）
+    【规则】
+      - 若 detected_subject != user_selected_subject 且 confidence >= 0.75：提示“学科不匹配”，拒绝入库并提示用户改学科/换内容
+      - taxonomy 必须收敛：chapter 建议 6~10 个，knowledge_points 建议 10~25 个；同义项合并，避免发散
+    【推荐 taxonomy 示例（XMX: economics）】
+      CHAPTER_TAXONOMY = {
+        "economics": ["供需与弹性", "成本与收益", "市场结构", "宏观经济(国民收入)", "货币与金融", "市场与政策", "国际贸易", "综合"],
+      }
+      KNOWLEDGE_POINT_TAXONOMY = {
+        "economics": ["供给与需求", "价格弹性", "边际分析", "机会成本", "市场失灵", "财政政策", "货币政策", "通货膨胀", "GDP与失业", "汇率与贸易", "综合"],
+      }
+    【实现建议】
+      - OCR 后调用 settings.LLM_API_ENDPOINT 的 /chat/completions（二次判定+归一化）
+      - 优先更强模型（gemini-3-pro-preview / gpt-5.2），可通过环境变量 XMX_HIGH_ACCURACY_MODEL 覆盖
+    【参考实现】backend/modules/tony/agents/question_intake_ocr_agent.py（仅 tony 模块完整实现）
     """
 
     def __init__(self):

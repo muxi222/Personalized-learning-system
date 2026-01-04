@@ -5,7 +5,6 @@ API Tests
 import pytest
 from httpx import AsyncClient
 
-
 class TestHealthEndpoints:
     """Test health and root endpoints"""
 
@@ -26,7 +25,6 @@ class TestHealthEndpoints:
         data = response.json()
         assert "message" in data
         assert "docs" in data
-
 
 class TestUserEndpoints:
     """Test user authentication endpoints"""
@@ -135,7 +133,6 @@ class TestUserEndpoints:
         data = response.json()
         assert data["username"] == "testuser"
 
-
 class TestQuestionEndpoints:
     """Test question-related endpoints"""
 
@@ -179,7 +176,6 @@ class TestQuestionEndpoints:
         )
         assert response.status_code == 200
 
-
 class TestTaskEndpoints:
     """Test task-related endpoints"""
 
@@ -188,7 +184,6 @@ class TestTaskEndpoints:
         """Test getting a non-existent task"""
         response = await client.get("/api/v1/tasks/nonexistent-task-id")
         assert response.status_code == 404
-
 
 class TestFeedbackEndpoints:
     """Test feedback endpoints"""
@@ -202,4 +197,3 @@ class TestFeedbackEndpoints:
         assert "total_feedbacks" in data
         assert "helpful_count" in data
         assert "feedback_rate" in data
-

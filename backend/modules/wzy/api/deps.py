@@ -24,13 +24,12 @@ oauth2_scheme = OAuth2PasswordBearer(
     auto_error=False,  # Don't auto-error, handle manually for better messages
 )
 
-
 async def get_current_user_id(
     token: Optional[str] = Depends(oauth2_scheme),
 ) -> int:
     """
     Get current user ID from JWT token
-    
+
     For development: if no token provided, return default user ID 1
     For production: require valid token
     """
@@ -69,7 +68,6 @@ async def get_current_user_id(
         logger.warning("Invalid user ID in token")
         raise credentials_exception
 
-
 async def get_current_user(
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
@@ -85,7 +83,6 @@ async def get_current_user(
         raise HTTPException(status_code=403, detail="User account is disabled")
 
     return user
-
 
 async def get_optional_user_id(
     token: Optional[str] = Depends(oauth2_scheme),
@@ -108,4 +105,3 @@ async def get_optional_user_id(
         pass
 
     return None
-

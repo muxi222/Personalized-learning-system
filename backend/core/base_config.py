@@ -9,7 +9,6 @@ from typing import Optional, List
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 class BaseAppSettings(BaseSettings):
     """
     基础配置类 - 所有模块继承
@@ -38,6 +37,12 @@ class BaseAppSettings(BaseSettings):
     PORT: int = 6100
     WORKERS: int = 1
     RELOAD: bool = True
+
+    # ============ Public API URL (用于生成外部可访问的URL) ============
+    # 如果设置了此变量，将使用此URL作为图片等资源的外部访问地址
+    # 格式: http://106.63.100.63:30284 或 https://example.com
+    # 如果不设置，将使用 HOST:PORT 组合
+    PUBLIC_API_BASE_URL: Optional[str] = None
 
     # ============ Security (共享) ============
     SECRET_KEY: str = "your-super-secret-key-change-in-production"
@@ -80,6 +85,14 @@ class BaseAppSettings(BaseSettings):
     # 统一的 LLM API 端点配置（用于访问 Gemini 等模型）
     LLM_API_ENDPOINT: str = "http://35.220.164.252:3888/v1"
     LLM_API_KEY: str = "sk-9U5s6Js2iIq4wAFBQDXFRmaUWoexQpgOiTWQRAHCHoTPVA7u"
+
+    # ============ LLM Resilience / Rate Limit (共享) ============
+    # 对 429/5xx/网络抖动做短重试；若上游返回 Retry-After，会优先遵从。
+    LLM_RETRY_MAX_ATTEMPTS: int = 3
+    LLM_RETRY_BASE_DELAY_SECONDS: float = 0.6
+    LLM_RETRY_MAX_DELAY_SECONDS: float = 30.0
+    # 单进程内的最大并发（降低 429 发生概率；多进程仍可能触发上游限流）
+    LLM_MAX_CONCURRENCY: int = 100
 
     # ============ Gemini API Configuration (共享) ============
     GEMINI_API_KEY: Optional[str] = None  # 已弃用，使用 LLM_API_KEY 代替
@@ -172,7 +185,6 @@ class BaseAppSettings(BaseSettings):
         elif provider == "anthropic":
             return self.ANTHROPIC_MODEL
         return self.OPENAI_MODEL
-
 
 @lru_cache()
 def get_base_settings() -> BaseAppSettings:

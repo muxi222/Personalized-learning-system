@@ -1,57 +1,286 @@
 """
-学习指导API (WZY模块 - 学生实现版本)
-
-本文件为框架代码，需要学生完成核心业务逻辑的实现。
-完整实现请参考: backend/modules/tony/api/endpoints/guidance.py
-
-WZY模块支持的学科: math, physics
+Learning Guidance API Endpoints
+学习指导相关API (根据设计文档6.1节)
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional, List
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
 
 from backend.core.db.session import get_db
-from backend.modules.wzy.api.deps import get_current_user_id
-from backend.modules.wzy.config import settings
+from backend.core.crud import crud_question
+from backend.modules.wzy.api.deps import get_current_user_id  # 修改：tony -> wzy
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def validate_subject(subject: str) -> None:
-    """验证学科是否属于WZY模块"""
-    if subject not in settings.SUBJECTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Subject '{subject}' is not supported by WZY module. "
-                   f"Supported subjects: {settings.SUBJECTS}"
+# ============ Schemas ============
+
+class SimilarQuestionRequest(BaseModel):
+    """举一反三请求"""
+    question_id: int = Field(..., description="原题ID")
+    top_k: int = Field(5, ge=1, le=20, description="返回数量")
+
+
+class SimilarQuestionItem(BaseModel):
+    """相似题目项"""
+    id: int
+    content: str
+    subject: str
+    difficulty: str
+    correct_answer: Optional[str] = None
+    knowledge_points: List[str] = []
+    similarity_score: Optional[float] = None
+
+
+class SimilarQuestionResponse(BaseModel):
+    """举一反三响应"""
+    question_id: int
+    guidance_text: str = Field(..., description="引导文本")
+    similar_questions: List[SimilarQuestionItem] = []
+
+
+class LearningPlanRequest(BaseModel):
+    """学习计划请求"""
+    learning_goal: Optional[str] = Field(None, description="学习目标")
+    focus_subjects: List[str] = Field(default_factory=list, description="重点学科")
+    days: int = Field(7, ge=1, le=30, description="计划天数")
+
+
+class LearningPlanResponse(BaseModel):
+    """学习计划响应"""
+    plan_text: str
+    weak_knowledge_points: List[str] = []
+    recommended_review_questions: List[int] = []
+
+
+class StudentProfileResponse(BaseModel):
+    """学生画像响应"""
+    user_id: int
+    grade: Optional[str] = None
+    total_questions: int = 0
+    weak_subjects: List[str] = []
+    weak_knowledge_points: List[str] = []
+    recent_errors_summary: Optional[str] = None
+    mastery_overview: dict = {}
+
+
+# ============ Endpoints ============
+
+@router.post("/similar-questions", response_model=SimilarQuestionResponse)
+async def get_similar_questions(
+    request: SimilarQuestionRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    举一反三 - 获取相似题目
+    
+    基于RAG技术，根据原题向量检索相似题目，
+    并使用LLM生成引导文本。
+    
+    对应设计文档4.2节
+    """
+    from backend.modules.wzy.agents.similar_question_agent import SimilarQuestionAgent  # 修改：tony -> wzy
+    
+    # 验证原题存在
+    question = await crud_question.get_question(db, request.question_id, user_id)
+    if not question:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    
+    # 获取学生画像 (用于个性化)
+    student_profile = await _get_student_profile(db, user_id)
+    
+    # 调用举一反三Agent
+    agent = SimilarQuestionAgent()
+    result = await agent.find_similar(
+        question_id=request.question_id,
+        user_id=user_id,
+        top_k=request.top_k,
+        student_profile=student_profile,
+    )
+    
+    if result.get("errors"):
+        logger.warning(f"Similar question agent errors: {result['errors']}")
+    
+    # 格式化响应
+    similar_questions = []
+    for q in result.get("similar_questions", []):
+        similar_questions.append(SimilarQuestionItem(
+            id=q.get("id"),
+            content=q.get("content", ""),
+            subject=q.get("subject", ""),
+            difficulty=q.get("difficulty", "medium"),
+            correct_answer=q.get("correct_answer"),
+            knowledge_points=q.get("knowledge_points", []),
+        ))
+    
+    return SimilarQuestionResponse(
+        question_id=request.question_id,
+        guidance_text=result.get("guidance_text", ""),
+        similar_questions=similar_questions,
+    )
+
+
+@router.get("/learning-plan", response_model=LearningPlanResponse)
+async def get_learning_plan(
+    learning_goal: Optional[str] = Query(None, description="学习目标"),
+    days: int = Query(7, ge=1, le=30, description="计划天数"),
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    获取个性化学习计划
+    
+    根据学生的错题历史和薄弱知识点，
+    动态生成学习计划。
+    
+    对应设计文档7.3节 - 长期记忆与个性化
+    """
+    from backend.core.services.llm_service import get_llm_service
+    from backend.modules.wzy.agents.prompts import LEARNING_PLAN_PROMPT  # 修改：tony -> wzy
+    
+    # 获取学生画像
+    profile = await _get_student_profile(db, user_id)
+    
+    # 获取待复习题目
+    review_questions = await crud_question.get_questions_for_review(db, user_id, limit=10)
+    
+    # 生成学习计划
+    llm = get_llm_service()
+    
+    prompt = LEARNING_PLAN_PROMPT.format(
+        grade=profile.get("grade", "未知"),
+        weak_subjects=", ".join(profile.get("weak_subjects", [])) or "暂无",
+        weak_knowledge_points=", ".join(profile.get("weak_knowledge_points", [])) or "暂无",
+        recent_errors_summary=profile.get("recent_errors_summary", "暂无"),
+        learning_goal=learning_goal or "提高整体学习成绩",
+    )
+    
+    plan_text = await llm.generate(
+        prompt=prompt,
+        system_prompt="你是学习小书童，一位贴心的学习规划师。",
+        temperature=0.7,
+        max_tokens=2000,
+    )
+    
+    return LearningPlanResponse(
+        plan_text=plan_text or "暂时无法生成学习计划，请稍后再试。",
+        weak_knowledge_points=profile.get("weak_knowledge_points", []),
+        recommended_review_questions=[q.id for q in review_questions],
+    )
+
+
+@router.get("/student-profile", response_model=StudentProfileResponse)
+async def get_student_profile_api(
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    获取学生画像
+    
+    返回学生的学习统计、薄弱点分析等信息。
+    用于个性化推荐和学习规划。
+    
+    对应设计文档7.3节
+    """
+    profile = await _get_student_profile(db, user_id)
+    
+    return StudentProfileResponse(
+        user_id=user_id,
+        grade=profile.get("grade"),
+        total_questions=profile.get("total_questions", 0),
+        weak_subjects=profile.get("weak_subjects", []),
+        weak_knowledge_points=profile.get("weak_knowledge_points", []),
+        recent_errors_summary=profile.get("recent_errors_summary"),
+        mastery_overview=profile.get("mastery_overview", {}),
+    )
+
+
+# ============ Helper Functions ============
+
+async def _get_student_profile(db: AsyncSession, user_id: int) -> dict:
+    """
+    获取学生画像
+    根据设计文档7.3节 - 长期记忆与个性化演进
+    """
+    from sqlalchemy import select, func
+    from backend.core.db.models import Question, User
+    
+    profile = {
+        "user_id": user_id,
+        "grade": None,
+        "total_questions": 0,
+        "weak_subjects": [],
+        "weak_knowledge_points": [],
+        "recent_errors_summary": None,
+        "mastery_overview": {},
+    }
+    
+    try:
+        # 获取用户信息
+        user_result = await db.execute(
+            select(User).where(User.id == user_id)
         )
-
-
-# ============================================================
-# TODO: 学生需要实现以下API endpoints
-# ============================================================
-#
-# 请参考完整实现: backend/modules/tony/api/endpoints/guidance.py
-#
-# 实现步骤:
-# 1. 复制TONY模块对应文件的函数签名和路由装饰器
-# 2. 保留学科验证逻辑 (validate_subject)
-# 3. 实现业务逻辑（数据库查询、Agent调用等）
-# 4. 返回正确的响应数据
-#
-# 提示:
-# - 所有数据库操作使用 backend/core/crud/ 中的函数
-# - 所有Agent操作使用 backend/modules/wzy/agents/ 中的类
-# - 所有Schema使用 backend/core/schemas/ 中的定义
-# ============================================================
-
-
-# TODO: 在这里添加endpoint实现
-# 示例:
-# @router.get("/example")
-# async def example_endpoint():
-#     """示例端点"""
-#     return {"message": "学生TODO: 实现此endpoint"}
+        user = user_result.scalar_one_or_none()
+        if user:
+            profile["grade"] = user.grade
+        
+        # 统计错题数量
+        count_result = await db.execute(
+            select(func.count(Question.id)).where(Question.user_id == user_id)
+        )
+        profile["total_questions"] = count_result.scalar() or 0
+        
+        # 分析薄弱学科 (按错题数量)
+        subject_result = await db.execute(
+            select(Question.subject, func.count(Question.id).label("count"))
+            .where(Question.user_id == user_id)
+            .group_by(Question.subject)
+            .order_by(func.count(Question.id).desc())
+            .limit(3)
+        )
+        weak_subjects = [row[0].value if row[0] else "other" for row in subject_result.fetchall()]
+        profile["weak_subjects"] = weak_subjects
+        
+        # 分析薄弱知识点 (统计所有knowledge_points)
+        questions_result = await db.execute(
+            select(Question.knowledge_points)
+            .where(Question.user_id == user_id)
+            .where(Question.knowledge_points.isnot(None))
+            .order_by(Question.created_at.desc())
+            .limit(50)
+        )
+        
+        kp_count = {}
+        for row in questions_result.fetchall():
+            if row[0]:
+                for kp in row[0]:
+                    kp_count[kp] = kp_count.get(kp, 0) + 1
+        
+        # 取出现最多的知识点作为薄弱点
+        sorted_kps = sorted(kp_count.items(), key=lambda x: x[1], reverse=True)
+        profile["weak_knowledge_points"] = [kp for kp, _ in sorted_kps[:5]]
+        
+        # 计算各学科掌握度
+        mastery_result = await db.execute(
+            select(
+                Question.subject,
+                func.avg(Question.mastery_level).label("avg_mastery")
+            )
+            .where(Question.user_id == user_id)
+            .group_by(Question.subject)
+        )
+        for row in mastery_result.fetchall():
+            subject = row[0].value if row[0] else "other"
+            profile["mastery_overview"][subject] = round(float(row[1] or 0), 2)
+        
+    except Exception as e:
+        logger.error(f"Error building student profile: {e}")
+    
+    return profile

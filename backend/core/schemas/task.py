@@ -7,7 +7,6 @@ from typing import Optional, Any, Dict
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
-
 class TaskStatus(str, Enum):
     """任务状态"""
     PENDING = "pending"
@@ -15,12 +14,10 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
-
 class TaskCreate(BaseModel):
     """创建任务请求 (内部使用)"""
     question_id: Optional[int] = None
     task_type: str = "analyze_question"
-
 
 class TaskResponse(BaseModel):
     """任务创建响应"""
@@ -38,7 +35,6 @@ class TaskResponse(BaseModel):
         }
     )
 
-
 class TaskStatusResponse(BaseModel):
     """任务状态查询响应"""
     task_id: str
@@ -46,7 +42,12 @@ class TaskStatusResponse(BaseModel):
     progress: float = Field(0.0, ge=0, le=100, description="进度百分比")
     current_step: Optional[str] = Field(None, description="当前步骤")
     result_id: Optional[int] = Field(None, description="结果ID (question_id)")
+    image_id: Optional[int] = Field(None, description="图片ID (image_files.id，用于“查看本图题目”)")
     error_message: Optional[str] = Field(None, description="错误信息")
+    # productized streaming payload (optional)
+    result: Optional[Dict[str, Any]] = Field(None, description="任务中间产物/最终产物（分阶段stages + _rev/_last_patch）")
+    result_rev: int = Field(0, description="result revision（用于 SSE 增量更新）")
+    last_patch: Optional[Dict[str, Any]] = Field(None, description="最近一次增量 patch（用于 SSE delta）")
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime
@@ -60,6 +61,7 @@ class TaskStatusResponse(BaseModel):
                 "progress": 100.0,
                 "current_step": "update_final_result",
                 "result_id": 42,
+                "image_id": 2,
                 "error_message": None,
                 "started_at": "2024-01-15T10:30:00Z",
                 "completed_at": "2024-01-15T10:30:15Z",
@@ -67,7 +69,6 @@ class TaskStatusResponse(BaseModel):
             }
         }
     )
-
 
 class TaskResult(BaseModel):
     """任务结果详情"""
@@ -77,4 +78,3 @@ class TaskResult(BaseModel):
     error_analysis: Optional[str] = None
     suggested_questions: Optional[list] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-

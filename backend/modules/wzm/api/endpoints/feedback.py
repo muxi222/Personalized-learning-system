@@ -9,16 +9,18 @@ WZM模块支持的学科: chemistry
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.db.session import get_db
+from backend.core.db.models import Feedback, Question
+from backend.core.schemas.feedback import FeedbackCreate, FeedbackResponse, FeedbackStats
 from backend.modules.wzm.api.deps import get_current_user_id
 from backend.modules.wzm.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
 
 def validate_subject(subject: str) -> None:
     """验证学科是否属于WZM模块"""
@@ -29,6 +31,18 @@ def validate_subject(subject: str) -> None:
                    f"Supported subjects: {settings.SUBJECTS}"
         )
 
+@router.post("/", response_model=FeedbackResponse, status_code=201)
+async def create_feedback(
+    feedback_data: FeedbackCreate,
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    TODO: 学生实现 - 提交反馈（WZM模块）
+    """
+    raise HTTPException(status_code=501, detail="TODO: Implement feedback create in WZM module")
+
+## 统计接口已移动到：backend/modules/wzm/api/endpoints/stats/feedback.py
 
 # ============================================================
 # TODO: 学生需要实现以下API endpoints
@@ -47,7 +61,6 @@ def validate_subject(subject: str) -> None:
 # - 所有Agent操作使用 backend/modules/wzm/agents/ 中的类
 # - 所有Schema使用 backend/core/schemas/ 中的定义
 # ============================================================
-
 
 # TODO: 在这里添加endpoint实现
 # 示例:

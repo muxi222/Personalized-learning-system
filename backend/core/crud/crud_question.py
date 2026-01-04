@@ -7,36 +7,106 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import InvalidRequestError
 
 from ..db.models import Question, SubjectEnum, DifficultyEnum
 from ..schemas.question import QuestionCreate, QuestionUpdate
 
-
 async def create_question(
     db: AsyncSession,
-    question_data: QuestionCreate,
-    user_id: int,
+    question_data: Optional[QuestionCreate] = None,
+    user_id: Optional[int] = None,
+    **kwargs
 ) -> Question:
-    """创建新错题"""
-    db_question = Question(
-        user_id=user_id,
-        title=question_data.title,
-        content=question_data.content,
-        subject=SubjectEnum(question_data.subject.value),
-        difficulty=DifficultyEnum(question_data.difficulty.value),
-        image_urls=question_data.image_urls,
-        student_answer=question_data.student_answer,
-        correct_answer=question_data.correct_answer,
-        explanation=question_data.explanation,
-        source=question_data.source,
-        chapter=question_data.chapter,
-        tags=question_data.tags,
-    )
+    """
+    创建新错题
+    
+    支持两种调用方式：
+    1. 使用 QuestionCreate schema: create_question(db, question_data, user_id)
+    2. 使用关键字参数: create_question(db, user_id=1, content="...", subject=SubjectEnum.MATH, ...)
+    """
+    if question_data:
+        # 使用 schema 方式
+        db_question = Question(
+            user_id=user_id,
+            title=question_data.title,
+            content=question_data.content,
+            subject=SubjectEnum(question_data.subject.value),
+            difficulty=DifficultyEnum(question_data.difficulty.value),
+            image_urls=question_data.image_urls,
+            source_image_id=getattr(question_data, "source_image_id", None),
+            student_answer=question_data.student_answer,
+            correct_answer=question_data.correct_answer,
+            explanation=question_data.explanation,
+            is_correct=getattr(question_data, "is_correct", None),
+            score=getattr(question_data, "score", None),
+            max_score=getattr(question_data, "max_score", None),
+            source=question_data.source,
+            chapter=question_data.chapter,
+            tags=question_data.tags,
+            upload_group_id=getattr(question_data, "upload_group_id", None),
+            upload_index=getattr(question_data, "upload_index", None),
+        )
+    else:
+        # 使用关键字参数方式
+        # 注意：user_id 可能被函数签名中的 user_id 参数捕获，也可能在 kwargs 中
+        # 优先使用函数参数中的 user_id，如果没有则从 kwargs 中获取
+        final_user_id = user_id if user_id is not None else kwargs.get("user_id")
+        
+        subject = kwargs.get("subject")
+        difficulty = kwargs.get("difficulty")
+        
+        # 调试日志
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[create_question] user_id param: {user_id}, kwargs user_id: {kwargs.get('user_id')}, final_user_id: {final_user_id}")
+        
+        if isinstance(subject, str):
+            subject = SubjectEnum(subject)
+        if isinstance(difficulty, str):
+            difficulty = DifficultyEnum(difficulty)
+        
+        if final_user_id is None:
+            logger.error(f"[create_question] user_id is None! user_id param: {user_id}, kwargs: {kwargs}")
+            raise ValueError("user_id is required but was None")
+        
+        db_question = Question(
+            user_id=final_user_id,
+            title=kwargs.get("title"),
+            content=kwargs.get("content", ""),
+            subject=subject or SubjectEnum.OTHER,
+            grade=kwargs.get("grade"),
+            difficulty=difficulty or DifficultyEnum.MEDIUM,
+            image_urls=kwargs.get("image_urls", []),
+            source_image_id=kwargs.get("source_image_id"),
+            student_answer=kwargs.get("student_answer"),
+            correct_answer=kwargs.get("correct_answer"),
+            explanation=kwargs.get("explanation"),
+            is_correct=kwargs.get("is_correct"),
+            score=kwargs.get("score"),
+            max_score=kwargs.get("max_score"),
+            source=kwargs.get("source"),
+            source_description=kwargs.get("source_description"),
+            chapter=kwargs.get("chapter"),
+            tags=kwargs.get("tags", []),
+            knowledge_points=kwargs.get("knowledge_points", []),
+            error_analysis=kwargs.get("error_analysis"),
+            suggested_questions=kwargs.get("suggested_questions", []),
+            original_input=kwargs.get("original_input"),
+            summarized_input=kwargs.get("summarized_input"),
+            upload_group_id=kwargs.get("upload_group_id"),
+            upload_index=kwargs.get("upload_index"),
+        )
+    
     db.add(db_question)
     await db.flush()
-    await db.refresh(db_question)
+    try:
+        await db.refresh(db_question)
+    except InvalidRequestError:
+        # Legacy sqlite schemas may not support refresh reliably; treat as best-effort.
+        import logging
+        logging.getLogger(__name__).warning("[crud_question] refresh(Question) failed; returning unrefreshed instance", exc_info=True)
     return db_question
-
 
 async def get_question(
     db: AsyncSession,
@@ -50,7 +120,6 @@ async def get_question(
     result = await db.execute(query)
     return result.scalar_one_or_none()
 
-
 async def get_questions(
     db: AsyncSession,
     user_id: int,
@@ -59,7 +128,10 @@ async def get_questions(
     subject: Optional[str] = None,
     difficulty: Optional[str] = None,
     tags: Optional[List[str]] = None,
+    chapter: Optional[str] = None,
     search: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
 ) -> tuple[List[Question], int]:
     """获取错题列表 (分页)"""
     # Base query
@@ -70,8 +142,14 @@ async def get_questions(
         query = query.where(Question.subject == SubjectEnum(subject))
     if difficulty:
         query = query.where(Question.difficulty == DifficultyEnum(difficulty))
+    if chapter:
+        query = query.where(Question.chapter == chapter)
     if search:
         query = query.where(Question.content.ilike(f"%{search}%"))
+    if start_date:
+        query = query.where(Question.created_at >= start_date)
+    if end_date:
+        query = query.where(Question.created_at <= end_date)
 
     # Count total
     count_query = select(func.count()).select_from(query.subquery())
@@ -84,7 +162,6 @@ async def get_questions(
     questions = list(result.scalars().all())
 
     return questions, total
-
 
 async def update_question(
     db: AsyncSession,
@@ -111,7 +188,6 @@ async def update_question(
     await db.refresh(question)
     return question
 
-
 async def delete_question(
     db: AsyncSession,
     question_id: int,
@@ -125,7 +201,6 @@ async def delete_question(
     await db.delete(question)
     await db.flush()
     return True
-
 
 async def update_question_analysis(
     db: AsyncSession,
@@ -151,7 +226,6 @@ async def update_question_analysis(
     await db.refresh(question)
     return question
 
-
 async def update_review_status(
     db: AsyncSession,
     question_id: int,
@@ -175,7 +249,6 @@ async def update_review_status(
     await db.refresh(question)
     return question
 
-
 async def get_questions_for_review(
     db: AsyncSession,
     user_id: int,
@@ -195,4 +268,3 @@ async def get_questions_for_review(
     )
     result = await db.execute(query)
     return list(result.scalars().all())
-

@@ -17,9 +17,9 @@ export default function Login() {
     setLoading(true)
 
     const result = await login(username, password)
-    
+
     setLoading(false)
-    
+
     if (result.success) {
       toast.success('登录成功！')
       navigate('/')
@@ -45,7 +45,7 @@ export default function Login() {
         {/* Login form */}
         <div className="card p-8">
           <h2 className="text-xl font-semibold text-white mb-6">欢迎回来</h2>
-          
+
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -111,4 +111,3 @@ export default function Login() {
     </div>
   )
 }
-

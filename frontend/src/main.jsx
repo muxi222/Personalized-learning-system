@@ -9,9 +9,13 @@ import './index.css'
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false,
+      // 用户切换左侧导航进入页面时，希望总是拉取最新数据：
+      // - staleTime=0：始终视为 stale
+      // - refetchOnMount='always'：每次组件挂载都发起请求
+      staleTime: 0,
+      refetchOnMount: 'always',
+      refetchOnWindowFocus: true,
       retry: 1,
-      staleTime: 5 * 60 * 1000, // 5 minutes
     },
   },
 })
@@ -19,9 +23,9 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true }}>
         <App />
-        <Toaster 
+        <Toaster
           position="top-right"
           toastOptions={{
             duration: 3000,
@@ -35,4 +39,3 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </QueryClientProvider>
   </React.StrictMode>,
 )
-

@@ -89,7 +89,7 @@ MATH_ERROR_ANALYSIS_PROMPT = """你是一位资深的数学老师，名叫"学�
 
 学生做错了以下数学题：
 **题目**: {question_body}
-**学生答案**: {student_answer}  
+**学生答案**: {student_answer}
 **正确答案**: {correct_answer}
 **涉及知识点**: {knowledge_points}
 **年级**: {grade}
@@ -398,7 +398,7 @@ LEARNING_PLAN_PROMPT = """你是"学习小书童"，一个贴心的学习规划�
 1. **每日学习任务**
    - 需要复习的知识点
    - 推荐练习的题目类型和数量
-   
+
 2. **知识点复习顺序**
    - 按照知识点之间的依赖关系排序
    - 先巩固基础，再提升难度
@@ -431,11 +431,9 @@ SUBJECT_PROMPTS = {
     "geography": GEOGRAPHY_ERROR_ANALYSIS_PROMPT,
 }
 
-
 def get_error_analysis_prompt(subject: str) -> str:
     """获取学科对应的错因分析Prompt"""
     return SUBJECT_PROMPTS.get(subject.lower(), ERROR_ANALYSIS_PROMPT)
-
 
 def get_subject_name_cn(subject: str) -> str:
     """获取学科中文名"""
@@ -452,4 +450,3 @@ def get_subject_name_cn(subject: str) -> str:
         "geography": "地理",
     }
     return mapping.get(subject.lower(), subject)
-

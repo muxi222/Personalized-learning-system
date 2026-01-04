@@ -7,7 +7,6 @@ from typing import TypedDict, List, Optional, Dict, Any, Annotated
 from operator import add
 from datetime import datetime
 
-
 class StudentProfile(TypedDict, total=False):
     """
     学生画像 - 用于长期记忆和个性化
@@ -16,22 +15,21 @@ class StudentProfile(TypedDict, total=False):
     user_id: int
     username: str
     grade: str  # 年级
-    
+
     # 学习统计
     total_questions: int  # 错题总数
     weak_subjects: List[str]  # 薄弱学科
     weak_knowledge_points: List[str]  # 薄弱知识点
-    
+
     # 学习风格
     preferred_explanation_style: str  # 喜欢的讲解风格
     learning_pace: str  # 学习节奏 (fast/medium/slow)
-    
+
     # 历史摘要
     recent_errors_summary: str  # 最近错题总结
     progress_summary: str  # 学习进度总结
-    
-    last_updated: str  # 最后更新时间
 
+    last_updated: str  # 最后更新时间
 
 class AgentState(TypedDict, total=False):
     """
@@ -44,10 +42,10 @@ class AgentState(TypedDict, total=False):
     image_text: str  # OCR提取的文本
     user_id: int  # 用户ID
     task_id: str  # 任务ID
-    
+
     # ======== 学生画像 ========
     student_profile: StudentProfile  # 学生画像（用于个性化）
-    
+
     # ======== 结构化数据 (按设计文档4.1节) ========
     structured_data: Dict[str, Any]  # 包含以下字段:
     # - subject: 学科 (数学, 物理, 英语等)
@@ -58,7 +56,7 @@ class AgentState(TypedDict, total=False):
     # - correct_answer: 正确答案
     # - student_answer: 学生答案
     # - difficulty: 难度 (初级, 中级, 高级)
-    
+
     question_id: int  # 数据库中的题目ID
     embedding: List[float]  # 题目的向量表示
 
@@ -78,7 +76,6 @@ class AgentState(TypedDict, total=False):
     progress: float  # 进度 (0-100)
     errors: Annotated[List[str], add]  # 错误信息列表 (追加模式)
 
-
 class QuestionIntakeState(AgentState):
     """
     错题录入Agent专用状态
@@ -87,11 +84,10 @@ class QuestionIntakeState(AgentState):
     # OCR处理
     ocr_result: str  # OCR识别结果
     ocr_confidence: float  # OCR置信度
-    
+
     # 解析状态
     parse_attempts: int  # 解析尝试次数
     parse_success: bool  # 解析是否成功
-
 
 class SimilarQuestionState(AgentState):
     """
@@ -101,12 +97,11 @@ class SimilarQuestionState(AgentState):
     retrieved_question_ids: List[int]  # 检索到的相似题目ID
     retrieved_questions: List[Dict[str, Any]]  # 相似题目详情
     similarity_scores: List[float]  # 相似度分数
-    
+
     # 原题信息
     original_question: Dict[str, Any]  # 原始错题信息
     original_error_analysis: str  # 原题错因分析
-    
+
     # 生成结果
     guidance_text: str  # 生成的引导文本
     recommended_questions: List[Dict[str, Any]]  # 推荐的练习题
-

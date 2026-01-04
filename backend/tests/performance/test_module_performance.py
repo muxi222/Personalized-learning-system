@@ -46,7 +46,6 @@ PERFORMANCE_THRESHOLDS = {
     "concurrent_load": 500,      # 并发请求 < 500ms (50并发)
 }
 
-
 class PerformanceResult:
     """性能测试结果"""
 
@@ -97,7 +96,6 @@ class PerformanceResult:
         print(f"   P99:      {stats['p99']:.2f} ms")
         if stats['errors'] > 0:
             print(f"   ❌ 错误:  {stats['errors']}")
-
 
 class PerformanceTester:
     """性能测试器"""
@@ -313,12 +311,10 @@ class PerformanceTester:
         print("测试完成")
         print("=" * 80)
 
-
 async def main():
     """主函数"""
     tester = PerformanceTester()
     await tester.run_all_tests()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

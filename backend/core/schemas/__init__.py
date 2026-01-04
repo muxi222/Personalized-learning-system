@@ -9,6 +9,14 @@ from .question import (
     QuestionResponse,
     QuestionDetail,
     QuestionListResponse,
+    QuestionGroup,
+    QuestionGroupedListResponse,
+    ChapterCount,
+    SubjectChapterStats,
+    QuestionChaptersResponse,
+    KnowledgePointCount,
+    SubjectKnowledgePointStats,
+    QuestionKnowledgePointsResponse,
 )
 from .task import (
     TaskCreate,
@@ -35,6 +43,14 @@ __all__ = [
     "QuestionResponse",
     "QuestionDetail",
     "QuestionListResponse",
+    "QuestionGroup",
+    "QuestionGroupedListResponse",
+    "ChapterCount",
+    "SubjectChapterStats",
+    "QuestionChaptersResponse",
+    "KnowledgePointCount",
+    "SubjectKnowledgePointStats",
+    "QuestionKnowledgePointsResponse",
     # Task
     "TaskCreate",
     "TaskResponse",
@@ -49,4 +65,3 @@ __all__ = [
     "FeedbackCreate",
     "FeedbackResponse",
 ]
-

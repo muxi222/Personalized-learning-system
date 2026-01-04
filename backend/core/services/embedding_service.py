@@ -15,7 +15,6 @@ settings = get_base_settings()
 
 logger = logging.getLogger(__name__)
 
-
 class EmbeddingService:
     """
     文本向量化服务
@@ -87,10 +86,10 @@ class EmbeddingService:
     async def embed_text(self, text: str) -> Optional[List[float]]:
         """
         Generate embedding for a single text
-        
+
         Args:
             text: Input text to embed
-            
+
         Returns:
             List of float values (embedding vector), or None on error
         """
@@ -113,10 +112,10 @@ class EmbeddingService:
     async def embed_texts(self, texts: List[str]) -> List[Optional[List[float]]]:
         """
         Generate embeddings for multiple texts (batch)
-        
+
         Args:
             texts: List of input texts
-            
+
         Returns:
             List of embedding vectors
         """
@@ -197,10 +196,8 @@ class EmbeddingService:
             return settings.LOCAL_EMBEDDING_MODEL or "unknown"
         return "none"
 
-
 # Singleton instance
 _embedding_service: Optional[EmbeddingService] = None
-
 
 @lru_cache()
 def get_embedding_service() -> EmbeddingService:
@@ -209,4 +206,3 @@ def get_embedding_service() -> EmbeddingService:
     if _embedding_service is None:
         _embedding_service = EmbeddingService()
     return _embedding_service
-

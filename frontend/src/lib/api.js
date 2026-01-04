@@ -16,7 +16,7 @@ export function createApiClient(subject) {
   // - default 模块: /api/v1 (已经包含 /v1)
   // - 其他模块: /api/{module} (需要加 /v1)
   const baseUrlWithoutV1 = getApiBaseUrl(targetSubject)
-  const baseURL = baseUrlWithoutV1 === '/api/v1' 
+  const baseURL = baseUrlWithoutV1 === '/api/v1'
     ? baseUrlWithoutV1  // default 模块已经包含 /v1
     : `${baseUrlWithoutV1}/v1`  // 其他模块需要加 /v1
 
@@ -175,6 +175,56 @@ export const questionApi = {
   },
 
   /**
+   * 批量删除错题（统一走 default 模块）
+   * @param {number[]} ids - 错题ID列表
+   */
+  batchDelete: (ids) => {
+    return createApiClient(null).post('/questions/batch-delete', { question_ids: ids })
+  },
+
+  /**
+   * 按分类(题目类型/章节)批量删除错题（统一走 default 模块）
+   * @param {{subject?: string, chapter: string, difficulty?: string, search?: string}} params
+   */
+  batchDeleteByChapter: (params) => {
+    return createApiClient(null).post('/questions/batch-delete', {
+      subject: params?.subject || null,
+      chapter: params?.chapter,
+      knowledge_point: params?.knowledge_point || null,
+      difficulty: params?.difficulty || null,
+      search: params?.search || null,
+    })
+  },
+
+  /**
+   * 按当前筛选条件批量删除错题（统一走 default 模块）
+   * @param {{subject?: string, difficulty?: string, search?: string, chapter?: string, knowledge_point?: string}} params
+   */
+  batchDeleteByFilter: (params) => {
+    return createApiClient(null).post('/questions/batch-delete', {
+      subject: params?.subject || null,
+      difficulty: params?.difficulty || null,
+      search: params?.search || null,
+      chapter: params?.chapter || null,
+      knowledge_point: params?.knowledge_point || null,
+    })
+  },
+
+  /**
+   * 获取题目类型(章节/分类)统计，用于下拉框
+   */
+  getChapters: (params = {}) => {
+    return createApiClient(null).get('/questions/chapters', { params })
+  },
+
+  /**
+   * 获取知识点分类统计（knowledge_points），用于下拉框
+   */
+  getKnowledgePoints: (params = {}) => {
+    return createApiClient(null).get('/questions/knowledge-points', { params })
+  },
+
+  /**
    * 重新分析错题
    * @param {number} id - 错题 ID
    * @param {string} subject - 学科名称
@@ -184,6 +234,19 @@ export const questionApi = {
       subject = getDefaultSubject()
     }
     return createApiClient(subject).post(`/questions/${id}/reanalyze`)
+  },
+
+  /**
+   * Tony-only: 为“举一反三”练习题生成/获取答案（当 sq.answer 为空时前端会调用）
+   * @param {number} questionId
+   * @param {number} index
+   * @param {string} subject
+   */
+  getSuggestedQuestionAnswer: (questionId, index, subject) => {
+    if (!subject) {
+      subject = getDefaultSubject()
+    }
+    return createApiClient(subject).post(`/questions/${questionId}/suggested-questions/${index}/answer`)
   },
 
   /**
@@ -200,8 +263,21 @@ export const questionApi = {
    * @param {Object} params - 查询参数（包含 subject）
    */
   getDueForReview: (params = {}) => {
-    const subject = params.subject || getDefaultSubject()
-    return createApiClient(subject).get('/questions/review/due', { params })
+    // default 模块支持跨学科复习队列；subject 可选用于筛选
+    return createApiClient(null).get('/questions/review/due', { params })
+  },
+}
+
+// ============================================
+// Image Files APIs (Default module, cross-subject)
+// ============================================
+export const imageFilesApi = {
+  /**
+   * 以“上传图片”为维度，获取该图片对应的全部题目与统计
+   */
+  getQuestions: (imageId) => {
+    // Use default module to avoid depending on last-selected subject routing
+    return createApiClient(null).get(`/image-files/${imageId}/questions`)
   },
 }
 
@@ -302,10 +378,10 @@ export const learningApi = {
    * @param {string} subject - 学科名称
    */
   getAdvice: (subject) => {
-    if (!subject) {
-      subject = getDefaultSubject()
-    }
-    return createApiClient(subject).get('/learning/advice')
+    // 统一走 default 模块：不传 subject 表示全学科；传 subject 由 default 再转发
+    return createApiClient(null).get('/learning/advice', {
+      params: subject ? { subject } : undefined,
+    })
   },
 
   /**
@@ -313,10 +389,10 @@ export const learningApi = {
    * @param {string} subject - 学科名称
    */
   getStats: (subject) => {
-    if (!subject) {
-      subject = getDefaultSubject()
-    }
-    return createApiClient(subject).get('/learning/stats')
+    // 统一走 default 模块：不传 subject 表示全学科；传 subject 由 default 再转发
+    return createApiClient(null).get('/learning/stats', {
+      params: subject ? { subject } : undefined,
+    })
   },
 }
 
@@ -337,11 +413,16 @@ export const feedbackApi = {
    * 获取反馈统计
    * @param {string} subject - 学科名称
    */
-  getStats: (subject) => {
-    if (!subject) {
-      subject = getDefaultSubject()
-    }
-    return createApiClient(subject).get('/feedback/stats')
+  getStats: (arg) => {
+    // 兼容 react-query：queryFn 会收到 { queryKey, signal, ... }
+    const subject = typeof arg === 'string'
+      ? arg
+      : (arg?.queryKey?.[1]?.subject || undefined)
+
+    // 统一走 default 模块(6100)，由 default 再按 subject 转发到各学科子模块
+    return createApiClient(null).get('/feedback/stats', {
+      params: subject ? { subject } : undefined,
+    })
   },
 }
 

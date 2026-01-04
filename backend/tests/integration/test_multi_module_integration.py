@@ -51,7 +51,6 @@ MODULES = {
     }
 }
 
-
 class TestModuleHealth:
     """测试所有模块的健康状态"""
 
@@ -93,7 +92,6 @@ class TestModuleHealth:
                 except Exception as e:
                     pytest.fail(f"❌ {config['name']} API文档访问失败: {str(e)}")
 
-
 class TestModuleRouting:
     """测试前端路由到正确的模块"""
 
@@ -132,7 +130,6 @@ class TestModuleRouting:
 
                 except Exception as e:
                     pytest.fail(f"❌ 学科 '{subject}' 路由测试失败: {str(e)}")
-
 
 class TestSubjectValidation:
     """测试各模块的学科验证 (拒绝不支持的学科)"""
@@ -174,7 +171,6 @@ class TestSubjectValidation:
                 except Exception as e:
                     print(f"⚠️  {case['module']}模块学科验证测试异常: {str(e)}")
 
-
 class TestCrossModuleIsolation:
     """测试跨模块数据隔离"""
 
@@ -209,7 +205,6 @@ class TestCrossModuleIsolation:
 
                 except Exception as e:
                     print(f"⚠️  {config['name']} 数据隔离测试异常: {str(e)}")
-
 
 class TestEndToEndWorkflow:
     """端到端工作流测试"""
@@ -263,7 +258,6 @@ class TestEndToEndWorkflow:
             except Exception as e:
                 print(f"⚠️  用户注册和认证测试异常: {str(e)}")
 
-
 def run_tests():
     """运行所有集成测试"""
     print("=" * 80)
@@ -284,7 +278,6 @@ def run_tests():
 
     # 使用pytest运行
     pytest.main([__file__, "-v", "--tb=short", "--color=yes"])
-
 
 if __name__ == "__main__":
     run_tests()

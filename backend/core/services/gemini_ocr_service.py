@@ -27,8 +27,13 @@ from enum import Enum
 from pathlib import Path
 
 import httpx
+import asyncio
+import random
+import time
 
 from ..base_config import get_base_settings
+from .llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
+from .llm_trace import write_llm_trace
 
 settings = get_base_settings()
 
@@ -49,7 +54,6 @@ SUBJECT_NAME_MAP = {
     "其他": "other",
 }
 
-
 class SubjectType(str, Enum):
     """学科类型"""
     MATH = "math"
@@ -64,29 +68,27 @@ class SubjectType(str, Enum):
     GEOGRAPHY = "geography"
     OTHER = "other"
 
-
 def parse_subject_type(subject: str) -> SubjectType:
     """
     解析学科类型，支持中文和英文输入
-    
+
     Args:
         subject: 学科名称（中文或英文）
-    
+
     Returns:
         SubjectType 枚举值
     """
     if not subject:
         return SubjectType.OTHER
-    
+
     # 先尝试中文映射
     subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
-    
+
     # 然后尝试枚举解析
     try:
         return SubjectType(subject_en)
     except ValueError:
         return SubjectType.OTHER
-
 
 @dataclass
 class QuestionItem:
@@ -95,6 +97,20 @@ class QuestionItem:
     question_type: str  # 选择题, 填空题, 解答题
     question_text: str
     student_answer: str
+    # Raw student answer as seen on paper (may include crossed-out text, blanks, etc.)
+    student_answer_raw: Optional[str] = None
+    # Teacher-marked / student self-marked correct answer (if visible on paper)
+    teacher_marked_answer: Optional[str] = None
+    # Teacher marking (visual) correctness signal, derived from ticks/crosses on the paper.
+    # If there is a colored tick (√/✓/✔/对) near this question/option, set True.
+    # If there is a colored cross (×/✗/✘/错) near this question/option, set False.
+    # If not visible/unclear, set None.
+    teacher_marked_is_correct: Optional[bool] = None
+    teacher_marked_mark: Optional[str] = None  # "tick" | "cross" | "none" | None
+    teacher_marked_color: Optional[str] = None  # "red" | "blue" | "black" | "unknown" | None
+    teacher_marked_evidence: Optional[str] = None  # short note like "红色√在B选项旁"
+    # Model-inferred correct answer (computed from the question content)
+    model_inferred_answer: Optional[str] = None
     correct_answer: Optional[str] = None
     score: float = 0.0
     max_score: float = 0.0
@@ -103,7 +119,6 @@ class QuestionItem:
     knowledge_points: List[str] = field(default_factory=list)
     solution_steps: List[str] = field(default_factory=list)
     difficulty: str = "medium"
-
 
 @dataclass
 class ExamAnalysisResult:
@@ -119,7 +134,6 @@ class ExamAnalysisResult:
     improvement_suggestions: List[str]
     raw_response: Optional[str] = None
 
-
 @dataclass
 class CorrectionImageResult:
     """批改图像结果"""
@@ -128,7 +142,6 @@ class CorrectionImageResult:
     correction_notes: List[str] = field(default_factory=list)
     success: bool = False
     error_message: str = ""
-
 
 class GeminiOCRService:
     """
@@ -242,6 +255,8 @@ class GeminiOCRService:
         subject: SubjectType = SubjectType.OTHER,
         grade: str = "",
         user_hint: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        trace_stage: str = "ocr_vision",
     ) -> ExamAnalysisResult:
         """
         分析试卷图片
@@ -286,6 +301,14 @@ class GeminiOCRService:
             grade_info = f"学生年级: {grade}" if grade else ""
             hint_info = f"额外提示: {user_hint}" if user_hint else ""
 
+            # Tony "错题录入" 场景：一张图片可能包含多道题。
+            # 该场景不需要冗长解析/步骤，否则很容易输出过长导致 finish_reason="length"，
+            # 从而 JSON 被截断，解析时只剩下前 1 题。
+            intake_mode = (
+                str(trace_stage or "").strip().lower() in ("ocr_extract", "ocr_agent", "question_intake_ocr")
+                or ("错题识别" in (user_hint or ""))
+            )
+
             prompt = f"""
 {subject_prompt}
 
@@ -314,8 +337,15 @@ class GeminiOCRService:
             "question_number": 题号,
             "question_type": "选择题/填空题/解答题",
             "question_text": "完整题目内容",
-            "student_answer": "学生的答案",
-            "correct_answer": "正确答案",
+            "student_answer_raw": "学生卷面原始答案（尽量按卷面抄写，可包含被划掉内容/改写）",
+            "teacher_marked_answer": "老师批改/学生自行标注的正确答案（如卷面可见；不可见则为空字符串）",
+            "teacher_marked_is_correct": true/false/null,
+            "teacher_marked_mark": "tick/cross/none",
+            "teacher_marked_color": "red/blue/black/unknown",
+            "teacher_marked_evidence": "简短证据描述（<=30字）",
+            "model_inferred_answer": "模型根据题目推断的正确答案（用于参考；如无法推断则为空字符串）",
+            "student_answer": "学生答案（可做适度清洗；如不确定可与 student_answer_raw 相同）",
+            "correct_answer": "正确答案（优先使用 teacher_marked_answer；否则可填 model_inferred_answer）",
             "score": 得分,
             "max_score": 该题满分,
             "is_correct": true/false,
@@ -334,9 +364,64 @@ class GeminiOCRService:
 请确保输出的是有效的JSON格式。
 """
 
+            if intake_mode:
+                # Compact schema: keep output small and stable for multi-question images.
+                prompt = f"""
+{subject_prompt}
+
+{grade_info}
+{hint_info}
+
+这是“错题识别/录入”场景：一张图片可能包含多道题。请按图片从上到下（如有左右分栏，先左后右）的顺序识别所有题目。
+
+输出要求（非常重要）：
+1) 只输出 JSON，不要输出 markdown code block
+2) questions 必须包含图片中所有可识别题目；不要只输出第一题
+3) 禁止输出冗长解题步骤/大段分析（不要输出 solution_steps；overall_analysis 可省略）
+4) question_text 尽量完整，但单题不超过 600 字；其它字段尽量短
+5) 识别“学生作答 vs 老师批阅”的规则（尽量提高准确度）：
+   - 通常黑色/铅笔/原印刷为学生作答或题干；红色/蓝色等彩色笔迹更可能是老师批改或学生自标
+   - teacher_marked_is_correct 只有在明确看到“√/✓/✔/对”或“×/✗/✘/错”且能对应到该题时才填写；不确定就填 null
+   - teacher_marked_color 仅在能明显判断颜色时填写（red/blue/black），否则填 unknown 或省略
+   - teacher_marked_evidence 用 <=30 字说明你看到的证据（例如“红色√在第2题旁”或“蓝色×在A选项旁”）
+6) 选择题纠错示例（务必按卷面批改为准）：
+   - 学生选 B，老师红笔把 B 划掉并标注正确答案 C => student_answer_raw="B", teacher_marked_answer="C", teacher_marked_mark="cross", teacher_marked_is_correct=false
+
+JSON 格式（字段缺失可省略，但 questions 必须有）：
+{{
+  "subject": "{subject.value}",
+  "grade": "{grade}",
+  "questions": [
+    {{
+      "question_number": 1,
+      "question_type": "选择题/填空题/解答题",
+      "question_text": "...",
+      "student_answer_raw": "...",
+      "teacher_marked_answer": "...",
+      "teacher_marked_is_correct": true/false/null,
+      "teacher_marked_mark": "tick/cross/none",
+      "teacher_marked_color": "red/blue/black/unknown",
+      "teacher_marked_evidence": "简短证据（<=30字）",
+      "model_inferred_answer": "...",
+      "student_answer": "...",
+      "correct_answer": "...",
+      "is_correct": true/false/null,
+      "score": 0,
+      "max_score": 0
+    }}
+  ]
+}}
+""".strip()
+
             # 构建 API 请求（OpenAI Vision API 格式）
+            # OCR/图像识别模型：允许按环境变量覆盖（便于区分“快 OCR 多模态模型”与“强文本推理模型”）
+            ocr_model = (
+                os.getenv("OCR_VISION_MODEL")
+                or os.getenv("TONY_OCR_VISION_MODEL")
+                or settings.GEMINI_MODEL
+            )
             request_data = {
-                "model": settings.GEMINI_MODEL,
+                "model": ocr_model,
                 "messages": [
                     {
                         "role": "user",
@@ -354,19 +439,147 @@ class GeminiOCRService:
                         ]
                     }
                 ],
-                "temperature": 0.3,
-                "max_tokens": 8192,
+                # 录入错题场景：把 temperature 调低，显著降低“胡猜/不稳定”导致的字段错配
+                "temperature": float(os.getenv("OCR_INTAKE_TEMPERATURE") or os.getenv("OCR_TEMPERATURE") or "0.1") if intake_mode else float(os.getenv("OCR_TEMPERATURE") or "0.3"),
+                "max_tokens": int(os.getenv("OCR_MAX_TOKENS") or "8192"),
             }
 
-            # 调用 API
-            logger.info(f"Sending request to {self._api_endpoint}/chat/completions")
-            response = await self._http_client.post(
-                "/chat/completions",
-                json=request_data,
-            )
+            # Extra debugging logs (no base64): prompt + image path.
+            log_prompt = str(os.getenv("TONY_LLM_LOG_PROMPT", "true")).lower() in ("1", "true", "yes", "y", "on")
+            log_response = str(os.getenv("TONY_LLM_LOG_RESPONSE", "true")).lower() in ("1", "true", "yes", "y", "on")
+            prompt_limit = int(os.getenv("TONY_LLM_LOG_PROMPT_CHARS") or "12000")
+            resp_limit = int(os.getenv("TONY_LLM_LOG_RESPONSE_CHARS") or "12000")
 
-            response.raise_for_status()
+            if log_prompt:
+                logger.info(
+                    f"[llm_ocr] trace_id={trace_id or '-'} stage={trace_stage} model={ocr_model} "
+                    f"image_path={image_path} image_b64_len={len(image_data) if image_data else 0} "
+                    f"prompt_len={len(prompt)} prompt={prompt[:prompt_limit]}"
+                )
+
+            # Tony-only: persist FULL request payload (includes base64) for debugging.
+            if trace_id:
+                req_trace_path = write_llm_trace(
+                    trace_id=str(trace_id),
+                    stage=str(trace_stage or "ocr_vision"),
+                    kind="request",
+                    payload={
+                        "endpoint": f"{self._api_endpoint}/chat/completions",
+                        "request": request_data,
+                    },
+                    suffix="json",
+                    # Don't print the request by default (may include huge base64).
+                    also_log_full=False,
+                    log_prefix=f"trace_id={trace_id} ",
+                )
+                if req_trace_path:
+                    logger.info(f"[llm_ocr] trace_id={trace_id} request_trace_file={req_trace_path}")
+
+            # 调用 API（对 503/5xx/429 做短重试，提升可用性）
+            logger.info(f"Sending request to {self._api_endpoint}/chat/completions")
+            max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or getattr(settings, "LLM_RETRY_MAX_ATTEMPTS", 3) or 3)
+            base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_BASE_DELAY_SECONDS", 0.6) or 0.6)
+            max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_MAX_DELAY_SECONDS", 30.0) or 30.0)
+            response = None
+            last_exc: Optional[Exception] = None
+            t_req0 = time.perf_counter()
+            for attempt in range(max_attempts):
+                try:
+                    async with get_llm_semaphore():
+                        response = await self._http_client.post(
+                            "/chat/completions",
+                            json=request_data,
+                        )
+                    if trace_id:
+                        # Save FULL response payload for each attempt (even on 429/5xx)
+                        try:
+                            resp_text = response.text
+                        except Exception:
+                            resp_text = None
+                        write_llm_trace(
+                            trace_id=str(trace_id),
+                            stage=str(trace_stage or "ocr_vision"),
+                            kind=f"response_attempt_{attempt+1}_http_{response.status_code}",
+                            payload={
+                                "status_code": response.status_code,
+                                "headers": dict(response.headers),
+                                "text": resp_text,
+                            },
+                            suffix="json",
+                            # response may still be big but usually manageable; keep print gated by env.
+                            also_log_full=None,
+                            log_prefix=f"trace_id={trace_id} ",
+                        )
+                    if response.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
+                        retry_after_s = parse_retry_after_seconds(response.headers.get("retry-after"))
+                        delay = compute_backoff_delay_seconds(
+                            attempt=attempt,
+                            base_delay=base_delay,
+                            max_delay=max_delay,
+                            retry_after_s=retry_after_s,
+                            jitter=0.2,
+                        )
+                        logger.warning(
+                            f"Retryable HTTP {response.status_code} from LLM endpoint; "
+                            f"model={ocr_model}, attempt={attempt+1}/{max_attempts}, "
+                            f"retry_after={retry_after_s if retry_after_s is not None else 'n/a'}s, sleep={delay:.2f}s"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    response.raise_for_status()
+                    break
+                except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as e:
+                    last_exc = e
+                    logger.warning(
+                        f"[llm_ocr] trace_id={trace_id or '-'} stage={trace_stage} model={ocr_model} "
+                        f"image_path={image_path} attempt={attempt+1}/{max_attempts} err={type(e).__name__}: {e}"
+                    )
+                    if trace_id:
+                        write_llm_trace(
+                            trace_id=str(trace_id),
+                            stage=str(trace_stage or "ocr_vision"),
+                            kind=f"exception_attempt_{attempt+1}",
+                            payload={
+                                "type": type(e).__name__,
+                                "message": str(e),
+                            },
+                            suffix="json",
+                            also_log_full=None,
+                            log_prefix=f"trace_id={trace_id} ",
+                        )
+                    if attempt < max_attempts - 1:
+                        delay = compute_backoff_delay_seconds(
+                            attempt=attempt,
+                            base_delay=base_delay,
+                            max_delay=max_delay,
+                            retry_after_s=None,
+                            jitter=0.2,
+                        )
+                        logger.warning(
+                            f"Network error talking to LLM endpoint; attempt={attempt+1}/{max_attempts}, "
+                            f"sleep={delay:.2f}s, err={type(e).__name__}"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    raise
+                except httpx.HTTPStatusError as e:
+                    last_exc = e
+                    raise
+
+            if response is None:
+                raise last_exc or RuntimeError("LLM response missing")
+
+            elapsed_ms = int((time.perf_counter() - t_req0) * 1000)
+            logger.info(
+                f"LLM chat/completions OK model={ocr_model} subject={subject.value} "
+                f"attempts_used<= {max_attempts} image_b64_len={len(image_data) if image_data else 0} duration_ms={elapsed_ms}"
+            )
             response_data = response.json()
+            finish_reason = None
+            try:
+                finish_reason = response_data.get("choices", [{}])[0].get("finish_reason")
+            except Exception:
+                finish_reason = None
 
             # 提取响应文本
             if "choices" not in response_data or not response_data["choices"]:
@@ -375,28 +588,209 @@ class GeminiOCRService:
             response_text = response_data["choices"][0]["message"]["content"]
             logger.debug(f"Gemini response: {response_text[:500]}...")
 
+            if log_response:
+                logger.info(
+                    f"[llm_ocr] trace_id={trace_id or '-'} stage={trace_stage} model={ocr_model} "
+                    f"response_len={len(response_text or '')} response={response_text[:resp_limit]}"
+                )
+
+            if trace_id:
+                # Save FULL parsed payload and extracted text (Tony-only)
+                write_llm_trace(
+                    trace_id=str(trace_id),
+                    stage=str(trace_stage or "ocr_vision"),
+                    kind="parsed_response",
+                    payload={
+                        "response_json": response_data,
+                        "extracted_content": response_text,
+                    },
+                    suffix="json",
+                    also_log_full=None,
+                    log_prefix=f"trace_id={trace_id} ",
+                )
+
             # 提取 JSON
             result_data = self._extract_json(response_text)
             if not result_data:
-                return self._create_error_result("无法解析分析结果", response_text)
+                # If the model output was truncated, retry once with a compact schema to avoid truncation.
+                if str(finish_reason or "").lower() == "length":
+                    logger.warning(
+                        f"[llm_ocr] trace_id={trace_id or '-'} stage={trace_stage} model={ocr_model} "
+                        f"finish_reason=length; retrying with compact schema"
+                    )
+                    retry_prompt = prompt if intake_mode else (
+                        f"{subject_prompt}\n\n{grade_info}\n{hint_info}\n\n"
+                        "请只输出 JSON（不要 code block），并且不要输出 solution_steps/overall_analysis。"
+                        "questions 必须包含图片里所有题目。每题尽量短。"
+                    )
+                    request_data_retry = {
+                        **request_data,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": retry_prompt},
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
+                                    },
+                                ],
+                            }
+                        ],
+                        "temperature": 0.1,
+                    }
+                    async with get_llm_semaphore():
+                        resp2 = await self._http_client.post("/chat/completions", json=request_data_retry)
+                    resp2.raise_for_status()
+                    resp2_data = resp2.json()
+                    try:
+                        response_text = resp2_data["choices"][0]["message"]["content"]
+                    except Exception:
+                        response_text = None
+                    if response_text:
+                        result_data = self._extract_json(response_text)
+
+                if not result_data:
+                    return self._create_error_result("无法解析分析结果", response_text)
 
             # 构建结果
-            questions = []
-            for q in result_data.get('questions', []):
-                questions.append(QuestionItem(
-                    question_number=q.get('question_number', 0),
-                    question_type=q.get('question_type', ''),
-                    question_text=q.get('question_text', ''),
-                    student_answer=q.get('student_answer', ''),
-                    correct_answer=q.get('correct_answer'),
-                    score=q.get('score', 0),
-                    max_score=q.get('max_score', 0),
-                    is_correct=q.get('is_correct', False),
-                    error_analysis=q.get('error_analysis', ''),
-                    knowledge_points=q.get('knowledge_points', []),
-                    solution_steps=q.get('solution_steps', []),
-                    difficulty=q.get('difficulty', 'medium'),
-                ))
+            def _coerce_questions_list(obj: Any) -> List[Dict[str, Any]]:
+                if obj is None:
+                    return []
+                if isinstance(obj, list):
+                    return [x for x in obj if isinstance(x, dict)]
+                if isinstance(obj, dict):
+                    # Dict keyed by index -> values list
+                    out = [v for v in obj.values() if isinstance(v, dict)]
+                    return out
+                if isinstance(obj, str):
+                    s = obj.strip()
+                    if not s:
+                        return []
+                    try:
+                        j = json.loads(s)
+                    except Exception:
+                        return []
+                    return _coerce_questions_list(j)
+                return []
+
+            raw_questions = (
+                result_data.get("questions")
+                or result_data.get("questions_detail")
+                or result_data.get("items")
+                or result_data.get("data")
+            )
+            q_list = _coerce_questions_list(raw_questions)
+
+            # Another common truncation case: JSON partially parses, but only the first question survives.
+            if str(finish_reason or "").lower() == "length" and len(q_list) <= 1:
+                logger.warning(
+                    f"[llm_ocr] trace_id={trace_id or '-'} stage={trace_stage} model={ocr_model} "
+                    f"finish_reason=length and questions<=1; retrying with compact schema"
+                )
+                retry_prompt = prompt if intake_mode else (
+                    f"{subject_prompt}\n\n{grade_info}\n{hint_info}\n\n"
+                    "请只输出 JSON（不要 code block），并且不要输出 solution_steps/overall_analysis。"
+                    "questions 必须包含图片里所有题目。每题尽量短。"
+                )
+                request_data_retry = {
+                    **request_data,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": retry_prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
+                                },
+                            ],
+                        }
+                    ],
+                    "temperature": 0.1,
+                }
+                async with get_llm_semaphore():
+                    resp2 = await self._http_client.post("/chat/completions", json=request_data_retry)
+                resp2.raise_for_status()
+                resp2_data = resp2.json()
+                try:
+                    response_text = resp2_data["choices"][0]["message"]["content"]
+                except Exception:
+                    response_text = None
+                if response_text:
+                    result_data = self._extract_json(response_text) or result_data
+                    raw_questions = (
+                        result_data.get("questions")
+                        or result_data.get("questions_detail")
+                        or result_data.get("items")
+                        or result_data.get("data")
+                    )
+                    q_list = _coerce_questions_list(raw_questions)
+
+            questions: List[QuestionItem] = []
+            for q in q_list:
+                # tolerate alternative key names
+                qn = q.get("question_number", q.get("number", q.get("index", 0)))
+                qt = q.get("question_type", q.get("type", ""))
+                qtext = q.get("question_text", q.get("question_content", q.get("content", q.get("question", ""))))
+                sa_raw = q.get("student_answer_raw", q.get("student_answer", q.get("answer", "")))
+                sa = q.get("student_answer", q.get("answer", sa_raw))
+                teacher = q.get("teacher_marked_answer", q.get("marked_correct_answer", q.get("teacher_answer")))
+                tm_ic = q.get("teacher_marked_is_correct", q.get("teacher_marked_correct"))
+                tm_mark = q.get("teacher_marked_mark", q.get("teacher_mark"))
+                tm_color = q.get("teacher_marked_color", q.get("mark_color"))
+                tm_evi = q.get("teacher_marked_evidence", q.get("mark_evidence"))
+                model_ans = q.get("model_inferred_answer", q.get("model_answer", q.get("inferred_answer")))
+                ca = q.get(
+                    "correct_answer",
+                    q.get("correct", q.get("reference_answer", teacher or model_ans)),
+                )
+                kps = q.get("knowledge_points", q.get("knowledge_point", []))
+                if isinstance(kps, str):
+                    kps = [x.strip() for x in kps.split(",") if x.strip()]
+                if not isinstance(kps, list):
+                    kps = []
+                # Coerce teacher_marked_is_correct
+                if tm_ic is None:
+                    tm_ic_b = None
+                elif isinstance(tm_ic, bool):
+                    tm_ic_b = tm_ic
+                elif isinstance(tm_ic, (int, float)):
+                    tm_ic_b = bool(int(tm_ic))
+                elif isinstance(tm_ic, str):
+                    s = tm_ic.strip().lower()
+                    if s in ("true", "t", "1", "yes", "y", "right", "correct"):
+                        tm_ic_b = True
+                    elif s in ("false", "f", "0", "no", "n", "wrong", "incorrect"):
+                        tm_ic_b = False
+                    else:
+                        tm_ic_b = None
+                else:
+                    tm_ic_b = None
+
+                questions.append(
+                    QuestionItem(
+                        question_number=qn or 0,
+                        question_type=qt or "",
+                        question_text=qtext or "",
+                        student_answer=sa or "",
+                        student_answer_raw=sa_raw or "",
+                        teacher_marked_answer=(teacher if isinstance(teacher, str) and teacher.strip() else None),
+                        teacher_marked_is_correct=tm_ic_b,
+                        teacher_marked_mark=(tm_mark if isinstance(tm_mark, str) and tm_mark.strip() else None),
+                        teacher_marked_color=(tm_color if isinstance(tm_color, str) and tm_color.strip() else None),
+                        teacher_marked_evidence=(tm_evi if isinstance(tm_evi, str) and tm_evi.strip() else None),
+                        model_inferred_answer=(model_ans if isinstance(model_ans, str) and model_ans.strip() else None),
+                        correct_answer=ca,
+                        score=q.get("score", 0),
+                        max_score=q.get("max_score", 0),
+                        is_correct=bool(q.get("is_correct", False)),
+                        error_analysis=q.get("error_analysis", ""),
+                        knowledge_points=kps,
+                        solution_steps=q.get("solution_steps", []),
+                        difficulty=q.get("difficulty", "medium"),
+                    )
+                )
 
             # 始终使用用户传入的学科类型，不使用模型推断的
             # 这样可以确保入库的学科与用户选择的学科一致
@@ -418,10 +812,115 @@ class GeminiOCRService:
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error during exam analysis: {e.response.status_code} - {e.response.text}")
-            return self._create_error_result(f"API 请求失败: {e.response.status_code}")
+            code = e.response.status_code
+            if code in (429, 500, 502, 503, 504):
+                return self._create_error_result(f"模型服务暂时不可用（HTTP {code}），请稍后重试")
+            return self._create_error_result(f"API 请求失败: {code}")
         except Exception as e:
             logger.error(f"Exam analysis error: {e}")
             return self._create_error_result(str(e))
+
+    async def _analyze_image(
+        self,
+        *,
+        image_path: str,
+        prompt: str,
+        model: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> str:
+        """
+        Backward-compatible low-level image+prompt call used by other modules (wzy/wzm/xmx/old tony endpoints).
+
+        Returns:
+            Raw model text (string). Callers may parse JSON from it.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        image_data = self._load_image_as_base64(image_path)
+        if not image_data:
+            raise RuntimeError("无法加载图片")
+
+        image_ext = Path(image_path).suffix.lower()
+        mime_types = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }
+        mime_type = mime_types.get(image_ext, "image/jpeg")
+
+        used_model = model or os.getenv("OCR_VISION_MODEL") or os.getenv("TONY_OCR_VISION_MODEL") or settings.GEMINI_MODEL
+        request_data = {
+            "model": used_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{image_data}"},
+                        },
+                    ],
+                }
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or getattr(settings, "LLM_RETRY_MAX_ATTEMPTS", 3) or 3)
+        base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_BASE_DELAY_SECONDS", 0.6) or 0.6)
+        max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_MAX_DELAY_SECONDS", 30.0) or 30.0)
+
+        resp: Optional[httpx.Response] = None
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_attempts):
+            try:
+                async with get_llm_semaphore():
+                    resp = await self._http_client.post("/chat/completions", json=request_data)
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
+                    retry_after_s = parse_retry_after_seconds(resp.headers.get("retry-after"))
+                    delay = compute_backoff_delay_seconds(
+                        attempt=attempt,
+                        base_delay=base_delay,
+                        max_delay=max_delay,
+                        retry_after_s=retry_after_s,
+                        jitter=0.2,
+                    )
+                    logger.warning(
+                        f"Retryable HTTP {resp.status_code} from LLM endpoint; "
+                        f"model={used_model}, attempt={attempt+1}/{max_attempts}, "
+                        f"retry_after={retry_after_s if retry_after_s is not None else 'n/a'}s, sleep={delay:.2f}s"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as e:
+                last_exc = e
+                if attempt < max_attempts - 1:
+                    delay = compute_backoff_delay_seconds(
+                        attempt=attempt,
+                        base_delay=base_delay,
+                        max_delay=max_delay,
+                        retry_after_s=None,
+                        jitter=0.2,
+                    )
+                    logger.warning(
+                        f"Network error talking to LLM endpoint; attempt={attempt+1}/{max_attempts}, "
+                        f"sleep={delay:.2f}s, err={type(e).__name__}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+            except Exception as e:
+                last_exc = e
+                break
+        raise last_exc or RuntimeError("LLM call failed")
 
     async def generate_explanation_image(
         self,
@@ -481,43 +980,149 @@ class GeminiOCRService:
             logger.error(f"Failed to generate explanation image: {e}")
             return None
 
+    def _wrap_text(self, text: str, font: "ImageFont.FreeTypeFont", max_width: int) -> List[str]:
+        """
+        将文本按最大宽度换行
+
+        Args:
+            text: 要换行的文本
+            font: 字体对象
+            max_width: 最大宽度（像素）
+
+        Returns:
+            换行后的文本列表
+        """
+        from PIL import Image, ImageDraw
+
+        # 创建一个临时图像用于测量文字宽度
+        temp_img = Image.new('RGB', (100, 100))
+        temp_draw = ImageDraw.Draw(temp_img)
+
+        words = []
+        current_line = ""
+
+        # 按字符分割（支持中文）
+        for char in text:
+            # 测试添加当前字符后的宽度
+            test_line = current_line + char
+            bbox = temp_draw.textbbox((0, 0), test_line, font=font)
+            text_width = bbox[2] - bbox[0]
+
+            if text_width <= max_width:
+                current_line = test_line
+            else:
+                # 当前行已满，开始新行
+                if current_line:
+                    words.append(current_line)
+                current_line = char
+
+        # 添加最后一行
+        if current_line:
+            words.append(current_line)
+
+        return words if words else [text]
+
     def _load_chinese_font(self, size: int = 24) -> "ImageFont.FreeTypeFont":
         """
         加载支持中文的字体
-        
+
         尝试多个系统字体路径，确保中文正确显示
+        支持通过 FONT_PATH 环境变量指定字体路径
         """
         from PIL import ImageFont
-        
-        # 按优先级尝试不同操作系统的中文字体
+        import subprocess
+
+        # 1. 优先使用环境变量指定的字体路径
+        font_path_env = os.getenv('FONT_PATH') or os.getenv('CHINESE_FONT_PATH')
+        if font_path_env:
+            try:
+                font = ImageFont.truetype(font_path_env, size)
+                logger.info(f"Loaded font from FONT_PATH: {font_path_env}")
+                return font
+            except Exception as e:
+                logger.warning(f"Failed to load font from FONT_PATH {font_path_env}: {e}")
+
+        # 2. 尝试使用 fontconfig 查找中文字体（Linux系统）
+        try:
+            # 查找支持中文的字体
+            result = subprocess.run(
+                ['fc-list', ':lang=zh', 'family'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0 and result.stdout:
+                # 提取字体名称
+                font_names = set()
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        font_names.add(line.strip().split(',')[0])
+
+                # 尝试通过字体名称查找字体文件
+                for font_name in font_names:
+                    try:
+                        result_path = subprocess.run(
+                            ['fc-match', '-f', '%{file}', font_name],
+                            capture_output=True,
+                            text=True,
+                            timeout=2
+                        )
+                        if result_path.returncode == 0 and result_path.stdout.strip():
+                            font_file = result_path.stdout.strip()
+                            if os.path.exists(font_file):
+                                font = ImageFont.truetype(font_file, size)
+                                logger.info(f"Loaded font via fontconfig: {font_file} (name: {font_name})")
+                                return font
+                    except Exception:
+                        continue
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+            logger.debug(f"fontconfig not available or failed: {e}")
+
+        # 3. 按优先级尝试不同操作系统的中文字体路径
         font_paths = [
             # macOS
             "/System/Library/Fonts/PingFang.ttc",
             "/System/Library/Fonts/STHeiti Medium.ttc",
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
             "/Library/Fonts/Arial Unicode.ttf",
-            # Linux
-            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            # Linux - 常见中文字体路径
             "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/TTF/wqy-microhei.ttc",
+            "/usr/share/fonts/TTF/wqy-zenhei.ttc",
+            # CentOS/RHEL
+            "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
+            "/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
             # Windows
             "C:\\Windows\\Fonts\\simhei.ttf",
             "C:\\Windows\\Fonts\\msyh.ttc",
+            "C:\\Windows\\Fonts\\msyhbd.ttc",
             "C:\\Windows\\Fonts\\simsun.ttc",
+            "C:\\Windows\\Fonts\\simkai.ttf",
         ]
-        
+
         for font_path in font_paths:
             try:
-                font = ImageFont.truetype(font_path, size)
-                logger.debug(f"Loaded font: {font_path}")
-                return font
-            except Exception:
+                if os.path.exists(font_path):
+                    font = ImageFont.truetype(font_path, size)
+                    logger.info(f"Loaded font: {font_path}")
+                    return font
+            except Exception as e:
+                logger.debug(f"Failed to load font {font_path}: {e}")
                 continue
-        
-        # 如果所有字体都失败，记录警告并使用默认字体（会显示方框）
-        logger.warning(
-            "Failed to load any Chinese font. Text may display as boxes. "
-            "Install a Chinese font or specify FONT_PATH in config."
+
+        # 4. 如果所有字体都失败，记录严重警告
+        logger.error(
+            "Failed to load any Chinese font. Chinese text will display as boxes or squares. "
+            "Please install a Chinese font package:\n"
+            "  Ubuntu/Debian: sudo apt-get install fonts-wqy-microhei fonts-wqy-zenhei\n"
+            "  CentOS/RHEL: sudo yum install wqy-microhei-fonts wqy-zenhei-fonts\n"
+            "  Or set FONT_PATH environment variable to point to a Chinese font file."
         )
         return ImageFont.load_default()
 
@@ -566,15 +1171,42 @@ class GeminiOCRService:
 
             # 添加总分
             total_text = f"总分: {analysis_result.total_score}/{analysis_result.max_score}"
+            # 确保文本是 Unicode 字符串
+            if isinstance(total_text, bytes):
+                total_text = total_text.decode('utf-8')
             draw.text((img.width - 200, 30), total_text, fill=color, font=font)
             correction_notes.append(total_text)
 
             # 添加评语
             if analysis_result.overall_analysis:
-                # 在底部添加评语
-                comment = f"评语: {analysis_result.overall_analysis[:50]}..."
-                draw.text((30, img.height - 60), comment, fill=color, font=small_font)
-                correction_notes.append(f"评语: {analysis_result.overall_analysis}")
+                # 确保评语是 Unicode 字符串
+                analysis_text = analysis_result.overall_analysis
+                if isinstance(analysis_text, bytes):
+                    analysis_text = analysis_text.decode('utf-8')
+
+                # 计算可用的文本宽度（留出左右边距）
+                text_max_width = img.width - 60  # 左右各留30像素边距
+
+                # 将评语换行
+                comment_prefix = "评语: "
+                full_comment = comment_prefix + analysis_text
+                wrapped_lines = self._wrap_text(full_comment, small_font, text_max_width)
+
+                # 计算行高
+                bbox = draw.textbbox((0, 0), "测试", font=small_font)
+                line_height = bbox[3] - bbox[1] + 4  # 行高 + 间距
+
+                # 从底部向上绘制，最多显示5行
+                max_lines = min(5, len(wrapped_lines))
+                start_y = img.height - (max_lines * line_height + 30)
+
+                # 绘制每一行
+                for i, line in enumerate(wrapped_lines[:max_lines]):
+                    y_pos = start_y + (i * line_height)
+                    if y_pos >= 0:  # 确保不超出图片顶部
+                        draw.text((30, y_pos), line, fill=color, font=small_font)
+
+                correction_notes.append(f"评语: {analysis_text}")
 
             # 保存为 base64
             import io
@@ -644,10 +1276,8 @@ class GeminiOCRService:
             raw_response=raw_response,
         )
 
-
 # Singleton instance
 _gemini_ocr_service: Optional[GeminiOCRService] = None
-
 
 @lru_cache()
 def get_gemini_ocr_service() -> GeminiOCRService:

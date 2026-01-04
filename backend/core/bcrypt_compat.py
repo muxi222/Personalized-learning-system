@@ -16,14 +16,14 @@ if not hasattr(bcrypt, '__about__'):
     try:
         # 尝试从 __version__ 获取版本信息
         version = getattr(bcrypt, '__version__', 'unknown')
-        
+
         # 创建一个简单的 __about__ 对象
         class _BcryptAbout:
             __version__ = version
-        
+
         # 将 __about__ 添加到 bcrypt 模块
         bcrypt.__about__ = _BcryptAbout()
-        
+
         logger.debug(f"Applied bcrypt compatibility patch: version={version}")
     except Exception as e:
         logger.warning(f"Failed to apply bcrypt compatibility patch: {e}")
@@ -31,4 +31,3 @@ if not hasattr(bcrypt, '__about__'):
         class _BcryptAbout:
             __version__ = 'unknown'
         bcrypt.__about__ = _BcryptAbout()
-

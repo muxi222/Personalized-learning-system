@@ -27,27 +27,27 @@ export const getAuthToken = () => {
  */
 export const loadImageWithAuth = async (imageUrl) => {
   const token = getAuthToken()
-  
+
   // 如果是完整URL，直接使用
   if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
     return imageUrl
   }
-  
+
   // 构建完整URL
   const fullUrl = imageUrl.startsWith('/') ? imageUrl : `/api/v1${imageUrl}`
-  
+
   try {
     const headers = {}
     if (token) {
       headers['Authorization'] = `Bearer ${token}`
     }
-    
+
     const response = await fetch(fullUrl, { headers })
-    
+
     if (!response.ok) {
       throw new Error(`Failed to load image: ${response.status} ${response.statusText}`)
     }
-    
+
     const blob = await response.blob()
     return URL.createObjectURL(blob)
   } catch (error) {
@@ -66,4 +66,3 @@ export const revokeImageBlob = (blobUrl) => {
     URL.revokeObjectURL(blobUrl)
   }
 }
-

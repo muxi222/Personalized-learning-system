@@ -9,6 +9,9 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+    // 防止 Vite 预构建时引入重复 React 实例导致 Invalid hook call / undefined useContext
+    // （在某些部署/预构建缓存场景下更容易出现）
+    dedupe: ['react', 'react-dom', '@tanstack/react-query', 'react-router', 'react-router-dom'],
   },
   server: {
     host: '0.0.0.0',

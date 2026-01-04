@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
 def validate_subject(subject: str) -> None:
     """验证学科是否属于XMX模块"""
     if subject not in settings.SUBJECTS:
@@ -28,7 +27,6 @@ def validate_subject(subject: str) -> None:
             detail=f"Subject '{subject}' is not supported by XMX module. "
                    f"Supported subjects: {settings.SUBJECTS}"
         )
-
 
 # ============================================================
 # TODO: 学生需要实现以下API endpoints
@@ -47,7 +45,6 @@ def validate_subject(subject: str) -> None:
 # - 所有Agent操作使用 backend/modules/xmx/agents/ 中的类
 # - 所有Schema使用 backend/core/schemas/ 中的定义
 # ============================================================
-
 
 # TODO: 在这里添加endpoint实现
 # 示例:

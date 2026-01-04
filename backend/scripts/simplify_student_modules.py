@@ -30,7 +30,6 @@ FILES_TO_SIMPLIFY = {
     "agents/similar_question_agent.py": "相似题目推荐Agent",
 }
 
-
 def create_simplified_file(module: str, relative_path: str, description: str):
     """为学生模块创建简化版文件"""
     source_file = PROJECT_ROOT / "backend" / "modules" / REFERENCE_MODULE / relative_path
@@ -54,7 +53,6 @@ def create_simplified_file(module: str, relative_path: str, description: str):
 
     print(f"✅ 已创建: {target_file.relative_to(PROJECT_ROOT)}")
 
-
 def generate_simplified_content(module: str, relative_path: str, description: str, original_content: str) -> str:
     """生成简化版代码内容"""
 
@@ -65,7 +63,6 @@ def generate_simplified_content(module: str, relative_path: str, description: st
         return generate_simplified_agent(module, relative_path, description)
     else:
         return original_content
-
 
 def generate_simplified_api_endpoint(module: str, relative_path: str, description: str) -> str:
     """生成简化版API endpoint"""
@@ -101,7 +98,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
 def validate_subject(subject: str) -> None:
     """验证学科是否属于{module_upper}模块"""
     if subject not in settings.SUBJECTS:
@@ -110,7 +106,6 @@ def validate_subject(subject: str) -> None:
             detail=f"Subject '{{subject}}' is not supported by {module_upper} module. "
                    f"Supported subjects: {{settings.SUBJECTS}}"
         )
-
 
 # ============================================================
 # TODO: 学生需要实现以下API endpoints
@@ -130,7 +125,6 @@ def validate_subject(subject: str) -> None:
 # - 所有Schema使用 backend/core/schemas/ 中的定义
 # ============================================================
 
-
 # TODO: 在这里添加endpoint实现
 # 示例:
 # @router.get("/example")
@@ -140,7 +134,6 @@ def validate_subject(subject: str) -> None:
 '''
 
     return template
-
 
 def generate_simplified_agent(module: str, relative_path: str, description: str) -> str:
     """生成简化版Agent"""
@@ -161,7 +154,6 @@ from backend.core.agents.base_agent import BaseAgent
 from backend.modules.{module}.config import settings
 
 logger = logging.getLogger(__name__)
-
 
 class {agent_name}(BaseAgent):
     """
@@ -212,7 +204,6 @@ class {agent_name}(BaseAgent):
 
     return template
 
-
 def main():
     print("=" * 80)
     print("简化学生模块代码")
@@ -239,7 +230,6 @@ def main():
     print("2. 学生实现 backend/modules/rpj/, xmx/, wzy/, wzm/ 中的TODO部分")
     print("3. 参考 TONY 模块的代码结构和实现方式")
     print()
-
 
 if __name__ == "__main__":
     main()

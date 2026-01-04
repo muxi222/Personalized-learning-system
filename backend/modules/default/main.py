@@ -22,7 +22,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -49,7 +48,6 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application...")
     await close_db()
     logger.info("Application shutdown complete")
-
 
 # Create FastAPI application
 app = FastAPI(
@@ -90,7 +88,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Exception handlers
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -126,7 +123,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
-
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
@@ -146,10 +142,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "Internal server error"},
     )
 
-
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
-
 
 # Health check endpoint
 @app.get("/health", tags=["Health"])
@@ -166,7 +160,6 @@ async def health_check():
         "version": settings.APP_VERSION,
         "port": settings.PORT,
     }
-
 
 @app.get("/", tags=["Root"])
 async def root():

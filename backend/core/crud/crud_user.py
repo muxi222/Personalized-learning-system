@@ -29,7 +29,6 @@ pwd_context = CryptContext(
 
 _BCRYPT_MAX_INPUT_BYTES = 72
 
-
 def _normalize_password(password: str) -> str:
     """
     Normalize password so bcrypt never sees inputs longer than 72 bytes.
@@ -46,7 +45,6 @@ def _normalize_password(password: str) -> str:
     logger.debug("Normalized password exceeding bcrypt limit (len=%s bytes)", len(password_bytes))
     return digest
 
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
     normalized = _normalize_password(plain_password)
@@ -60,12 +58,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
             return False
     return False
 
-
 def get_password_hash(password: str) -> str:
     """获取密码哈希"""
     normalized = _normalize_password(password)
     return pwd_context.hash(normalized)
-
 
 async def create_user(
     db: AsyncSession,
@@ -85,7 +81,6 @@ async def create_user(
     await db.refresh(db_user)
     return db_user
 
-
 async def get_user(
     db: AsyncSession,
     user_id: int,
@@ -94,7 +89,6 @@ async def get_user(
     query = select(User).where(User.id == user_id)
     result = await db.execute(query)
     return result.scalar_one_or_none()
-
 
 async def get_user_by_username(
     db: AsyncSession,
@@ -105,7 +99,6 @@ async def get_user_by_username(
     result = await db.execute(query)
     return result.scalar_one_or_none()
 
-
 async def get_user_by_email(
     db: AsyncSession,
     email: str,
@@ -114,7 +107,6 @@ async def get_user_by_email(
     query = select(User).where(User.email == email)
     result = await db.execute(query)
     return result.scalar_one_or_none()
-
 
 async def authenticate_user(
     db: AsyncSession,
@@ -128,7 +120,6 @@ async def authenticate_user(
     if not verify_password(password, user.hashed_password):
         return None
     return user
-
 
 async def update_user(
     db: AsyncSession,
@@ -150,4 +141,3 @@ async def update_user(
     await db.flush()
     await db.refresh(user)
     return user
-

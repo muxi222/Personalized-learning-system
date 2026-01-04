@@ -1,5 +1,7 @@
 -- Initialize database schema
--- This script is used by docker-compose to initialize PostgreSQL
+-- NOTE (2026-01): This project primarily uses SQLite in docker-compose.
+-- This SQL is kept as a convenient "single-shot" schema initializer and is written
+-- to be SQLite-friendly (INTEGER PRIMARY KEY rowid alias) to avoid NULL PK issues.
 -- 索引创建紧跟在表定义之后，方便集中查看和管理
 
 -- Create database if not exists (handled by docker)
@@ -9,7 +11,7 @@
 -- Users Table
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     hashed_password VARCHAR(255) NOT NULL,
@@ -26,7 +28,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- This table is needed by exam_corrections, so it must be created first
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS image_files (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     file_hash VARCHAR(64) UNIQUE NOT NULL,
     user_id INTEGER NOT NULL REFERENCES users(id),
     file_type VARCHAR(20) NOT NULL,
@@ -53,9 +55,10 @@ CREATE INDEX IF NOT EXISTS idx_image_files_original_image_id ON image_files(orig
 -- This table is needed by questions, so it must be created after image_files
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS exam_corrections (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
-    subject VARCHAR(20) DEFAULT 'other',
+    -- NOTE: app stores Enum NAMEs (e.g. HISTORY) rather than Enum values (e.g. history)
+    subject VARCHAR(20) DEFAULT 'OTHER',
     grade VARCHAR(20),
     exam_title VARCHAR(255),
     original_image_id INTEGER NOT NULL REFERENCES image_files(id),
@@ -67,15 +70,16 @@ CREATE TABLE IF NOT EXISTS exam_corrections (
     correct_count INTEGER DEFAULT 0,
     wrong_count INTEGER DEFAULT 0,
     overall_analysis TEXT,
-    weak_points JSONB DEFAULT '[]',
-    improvement_suggestions JSONB DEFAULT '[]',
-    questions_detail JSONB DEFAULT '[]',
+    weak_points JSON DEFAULT '[]',
+    improvement_suggestions JSON DEFAULT '[]',
+    questions_detail JSON DEFAULT '[]',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 -- Exam Corrections indexes
 CREATE INDEX IF NOT EXISTS idx_exam_corrections_user_id ON exam_corrections(user_id);
 CREATE INDEX IF NOT EXISTS idx_exam_corrections_subject ON exam_corrections(subject);
+CREATE INDEX IF NOT EXISTS idx_exam_corrections_grade ON exam_corrections(grade);
 CREATE INDEX IF NOT EXISTS idx_exam_corrections_created_at ON exam_corrections(created_at);
 CREATE INDEX IF NOT EXISTS idx_exam_corrections_original_image_id ON exam_corrections(original_image_id);
 CREATE INDEX IF NOT EXISTS idx_exam_corrections_corrected_image_id ON exam_corrections(corrected_image_id);
@@ -84,24 +88,35 @@ CREATE INDEX IF NOT EXISTS idx_exam_corrections_corrected_image_id ON exam_corre
 -- Questions Table (错题表)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS questions (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
     exam_correction_id INTEGER REFERENCES exam_corrections(id),
     title VARCHAR(255),
     content TEXT NOT NULL,
-    image_urls JSONB DEFAULT '[]',
-    subject VARCHAR(20) DEFAULT 'other',
-    difficulty VARCHAR(20) DEFAULT 'medium',
+    image_urls JSON DEFAULT '[]',
+    source_image_id INTEGER REFERENCES image_files(id),
+    -- NOTE: app stores Enum NAMEs (e.g. HISTORY) rather than Enum values (e.g. history)
+    subject VARCHAR(20) DEFAULT 'OTHER',
+    grade VARCHAR(20),
+    difficulty VARCHAR(20) DEFAULT 'MEDIUM',
+    options JSON DEFAULT '[]',
     student_answer TEXT,
     correct_answer TEXT,
     explanation TEXT,
-    knowledge_points JSONB DEFAULT '[]',
+    is_correct BOOLEAN,
+    score FLOAT,
+    max_score FLOAT,
+    knowledge_points JSON DEFAULT '[]',
     error_analysis TEXT,
-    suggested_questions JSONB DEFAULT '[]',
-    source VARCHAR(100),
+    suggested_questions JSON DEFAULT '[]',
+    source VARCHAR(100) DEFAULT 'MANUAL',
     source_description VARCHAR(100),
     chapter VARCHAR(100),
-    tags JSONB DEFAULT '[]',
+    tags JSON DEFAULT '[]',
+    original_input TEXT,
+    summarized_input TEXT,
+    upload_group_id VARCHAR(64),
+    upload_index INTEGER,
     review_count INTEGER DEFAULT 0,
     mastery_level FLOAT DEFAULT 0.0,
     next_review_at TIMESTAMP,
@@ -112,20 +127,25 @@ CREATE TABLE IF NOT EXISTS questions (
 -- Questions indexes
 CREATE INDEX IF NOT EXISTS idx_questions_user_id ON questions(user_id);
 CREATE INDEX IF NOT EXISTS idx_questions_subject ON questions(subject);
+CREATE INDEX IF NOT EXISTS idx_questions_grade ON questions(grade);
 CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions(created_at);
 CREATE INDEX IF NOT EXISTS idx_questions_exam_correction_id ON questions(exam_correction_id);
+CREATE INDEX IF NOT EXISTS idx_questions_upload_group_id ON questions(upload_group_id);
+CREATE INDEX IF NOT EXISTS idx_questions_source_image_id ON questions(source_image_id);
+CREATE INDEX IF NOT EXISTS idx_questions_source ON questions(source);
 
 -- ============================================================================
 -- Agent Tasks Table (任务表)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS agent_tasks (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     task_id VARCHAR(36) UNIQUE NOT NULL,
     question_id INTEGER REFERENCES questions(id),
-    status VARCHAR(20) DEFAULT 'pending',
+    -- NOTE: app stores Enum NAMEs (e.g. PENDING/COMPLETED) rather than Enum values (e.g. pending/completed)
+    status VARCHAR(20) DEFAULT 'PENDING',
     progress FLOAT DEFAULT 0.0,
     current_step VARCHAR(100),
-    result JSONB,
+    result JSON,
     error_message TEXT,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
@@ -134,12 +154,13 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
 -- Agent Tasks indexes
 CREATE INDEX IF NOT EXISTS idx_agent_tasks_task_id ON agent_tasks(task_id);
 CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_created_at ON agent_tasks(created_at);
 
 -- ============================================================================
 -- Feedbacks Table (反馈表)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS feedbacks (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
     question_id INTEGER NOT NULL REFERENCES questions(id),
     feedback_type VARCHAR(50) NOT NULL,
@@ -157,7 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_feedbacks_question_id ON feedbacks(question_id);
 -- Knowledge Points Table (知识点表)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS knowledge_points (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     name VARCHAR(100) UNIQUE NOT NULL,
     subject VARCHAR(20) NOT NULL,
     description TEXT,

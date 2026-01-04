@@ -27,7 +27,6 @@ from backend.modules.xmx.config import settings
 
 XMX_SUBJECTS = ["economics"]
 
-
 async def fetch_xmx_questions():
     """
     TODO: 从数据库获取XMX模块的economics学科题目
@@ -36,18 +35,15 @@ async def fetch_xmx_questions():
     logger.info(f"正在从数据库获取XMX模块题目 (学科: {XMX_SUBJECTS})...")
     raise NotImplementedError("TODO: 学生需要实现fetch_xmx_questions函数")
 
-
 async def rebuild_faiss_index(questions: List[Question]):
     """TODO: 重建XMX模块的FAISS向量索引"""
     logger.info("开始重建XMX模块FAISS索引...")
     raise NotImplementedError("TODO: 学生需要实现rebuild_faiss_index函数")
 
-
 async def rebuild_bm25_index(questions: List[Question]):
     """TODO: 重建XMX模块的BM25关键词索引"""
     logger.info("开始重建XMX模块BM25索引...")
     raise NotImplementedError("TODO: 学生需要实现rebuild_bm25_index函数")
-
 
 async def main():
     logger.info("=" * 60)
@@ -72,7 +68,6 @@ async def main():
     except Exception as e:
         logger.error(f"❌ 错误: {e}", exc_info=True)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

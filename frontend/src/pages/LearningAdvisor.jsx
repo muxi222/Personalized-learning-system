@@ -16,6 +16,7 @@ import {
   Zap,
   BarChart3
 } from 'lucide-react'
+import { SUBJECT_NAMES_CN } from '../config/moduleRouting'
 
 // 获取 token 的辅助函数
 const getAuthToken = () => {
@@ -29,33 +30,37 @@ const getAuthToken = () => {
 
 // API 调用函数
 const learningApi = {
-  getProfile: () => {
+  getProfile: (subject) => {
     const token = getAuthToken()
-    return fetch('/api/v1/learning/profile', {
+    const url = subject ? `/api/v1/learning/profile?subject=${encodeURIComponent(subject)}` : '/api/v1/learning/profile'
+    return fetch(url, {
       headers: token ? { 'Authorization': `Bearer ${token}` } : {}
     }).then(res => res.json())
   },
 
-  getRecommendations: (goal, limit = 5) => {
+  getRecommendations: (goal, limit = 5, subject) => {
     const token = getAuthToken()
+    const subjectPart = subject ? `&subject=${encodeURIComponent(subject)}` : ''
     return fetch(
-      `/api/v1/learning/recommendations?goal=${goal}&limit=${limit}`,
+      `/api/v1/learning/recommendations?goal=${goal}&limit=${limit}${subjectPart}`,
       { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
     ).then(res => res.json())
   },
 
-  getStudyPlan: (goal, days = 7) => {
+  getStudyPlan: (goal, days = 7, subject) => {
     const token = getAuthToken()
+    const subjectPart = subject ? `&subject=${encodeURIComponent(subject)}` : ''
     return fetch(
-      `/api/v1/learning/study-plan?goal=${goal}&days=${days}`,
+      `/api/v1/learning/study-plan?goal=${goal}&days=${days}${subjectPart}`,
       { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
     ).then(res => res.json())
   },
 
-  getSummary: (days = 7) => {
+  getSummary: (days = 7, subject) => {
     const token = getAuthToken()
+    const subjectPart = subject ? `&subject=${encodeURIComponent(subject)}` : ''
     return fetch(
-      `/api/v1/learning/summary?days=${days}`,
+      `/api/v1/learning/summary?days=${days}${subjectPart}`,
       { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
     ).then(res => res.json())
   },
@@ -71,29 +76,30 @@ const GOAL_OPTIONS = [
 export default function LearningAdvisor() {
   const [selectedGoal, setSelectedGoal] = useState('improve_weak_points')
   const [planDays, setPlanDays] = useState(7)
+  const [subject, setSubject] = useState('')
 
   // 获取学习画像
   const { data: profile, isLoading: profileLoading } = useQuery({
-    queryKey: ['learning-profile'],
-    queryFn: learningApi.getProfile,
+    queryKey: ['learning-profile', { subject }],
+    queryFn: () => learningApi.getProfile(subject || undefined),
   })
 
   // 获取学习建议
   const { data: recommendations } = useQuery({
-    queryKey: ['recommendations', selectedGoal],
-    queryFn: () => learningApi.getRecommendations(selectedGoal),
+    queryKey: ['recommendations', selectedGoal, { subject }],
+    queryFn: () => learningApi.getRecommendations(selectedGoal, 5, subject || undefined),
   })
 
   // 获取学习计划
   const { data: studyPlan } = useQuery({
-    queryKey: ['study-plan', selectedGoal, planDays],
-    queryFn: () => learningApi.getStudyPlan(selectedGoal, planDays),
+    queryKey: ['study-plan', selectedGoal, planDays, { subject }],
+    queryFn: () => learningApi.getStudyPlan(selectedGoal, planDays, subject || undefined),
   })
 
   // 获取学习总结
   const { data: summary } = useQuery({
-    queryKey: ['learning-summary'],
-    queryFn: () => learningApi.getSummary(7),
+    queryKey: ['learning-summary', { subject }],
+    queryFn: () => learningApi.getSummary(7, subject || undefined),
   })
 
   if (profileLoading) {
@@ -123,6 +129,20 @@ export default function LearningAdvisor() {
               基于你的学习数据，为你量身定制学习建议
             </p>
           </div>
+        </div>
+
+        <div className="mt-4 flex items-center gap-3 flex-wrap">
+          <span className="text-slate-400 text-sm">学科：</span>
+          <select
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            className="input w-auto"
+          >
+            <option value="">全部学科</option>
+            {Object.entries(SUBJECT_NAMES_CN).map(([key, name]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
         </div>
       </div>
 

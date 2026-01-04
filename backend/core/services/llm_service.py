@@ -14,7 +14,6 @@ settings = get_base_settings()
 
 logger = logging.getLogger(__name__)
 
-
 class LLMService:
     """
     LLM服务
@@ -68,14 +67,14 @@ class LLMService:
     ) -> Optional[str]:
         """
         Generate text completion
-        
+
         Args:
             prompt: User prompt
             system_prompt: System prompt (optional)
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             provider: Override default provider
-            
+
         Returns:
             Generated text or None on error
         """
@@ -217,7 +216,7 @@ class LLMService:
     ) -> Optional[Dict[str, Any]]:
         """
         Generate JSON response (with parsing)
-        
+
         Uses lower temperature for more deterministic JSON output
         """
         # Add JSON instruction to system prompt
@@ -253,10 +252,8 @@ class LLMService:
             logger.error(f"JSON parsing error: {e}\nResponse: {result[:500]}")
             return None
 
-
 # Singleton instance
 _llm_service: Optional[LLMService] = None
-
 
 @lru_cache()
 def get_llm_service(provider: Optional[str] = None) -> LLMService:
@@ -265,4 +262,3 @@ def get_llm_service(provider: Optional[str] = None) -> LLMService:
     if _llm_service is None:
         _llm_service = LLMService(provider=provider)
     return _llm_service
-

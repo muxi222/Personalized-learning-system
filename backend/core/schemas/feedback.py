@@ -7,14 +7,12 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
-
 class FeedbackType(str, Enum):
     """反馈类型"""
     HELPFUL = "helpful"
     NOT_HELPFUL = "not_helpful"
     INCORRECT = "incorrect"
     PARTIALLY_CORRECT = "partially_correct"
-
 
 class FeedbackCreate(BaseModel):
     """创建反馈请求"""
@@ -38,7 +36,6 @@ class FeedbackCreate(BaseModel):
         }
     )
 
-
 class FeedbackResponse(BaseModel):
     """反馈响应Schema"""
     id: int
@@ -51,7 +48,6 @@ class FeedbackResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-
 class FeedbackStats(BaseModel):
     """反馈统计"""
     total_feedbacks: int
@@ -59,4 +55,3 @@ class FeedbackStats(BaseModel):
     not_helpful_count: int
     average_rating: Optional[float]
     feedback_rate: float = Field(..., description="反馈率 (有反馈的题目/总题目)")
-

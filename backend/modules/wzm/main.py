@@ -1,6 +1,6 @@
 """
 WZM Module - FastAPI Application Entry Point
-历史、地理、其他模块
+化学模块
 """
 
 import logging
@@ -21,7 +21,6 @@ logging.basicConfig(
     format=settings.LOG_FORMAT,
 )
 logger = logging.getLogger(__name__)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,7 +43,10 @@ async def lifespan(app: FastAPI):
     try:
         from backend.core.services.vector_store_service import get_vector_store_service
         vector_store = get_vector_store_service()
-        await vector_store.initialize(index_path=settings.module_vector_path)
+        await vector_store.initialize(
+            index_path=settings.module_vector_path,
+            bm25_path=settings.module_bm25_path,
+        )
         logger.info(f"Vector store initialized at {settings.module_vector_path}")
     except Exception as e:
         logger.warning(f"Failed to initialize vector store: {e}")
@@ -56,19 +58,16 @@ async def lifespan(app: FastAPI):
     await close_db()
     logger.info("Application shutdown complete")
 
-
 # Create FastAPI application
 app = FastAPI(
     title=settings.APP_NAME,
     description=f"""
-    ## WZM模块 - 历史、地理、其他学科
+    ## WZM模块 - 化学学科
 
     智能错题分析与举一反三推荐系统
 
     ### 支持学科:
-    - 📜 历史 (History)
-    - 🗺️ 地理 (Geography)
-    - 📚 其他 (Other)
+    - 化学
 
     ### 主要功能:
     - 📝 错题录入与管理
@@ -95,7 +94,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # Exception handlers
 @app.exception_handler(RequestValidationError)
@@ -132,7 +130,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
-
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
@@ -152,10 +149,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "Internal server error"},
     )
 
-
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
-
 
 # Health check endpoint
 @app.get("/health", tags=["Health"])
@@ -171,7 +166,6 @@ async def health_check():
         "version": settings.APP_VERSION,
         "port": settings.PORT,
     }
-
 
 @app.get("/", tags=["Root"])
 async def root():

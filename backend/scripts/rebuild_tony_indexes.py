@@ -27,10 +27,8 @@ from backend.core.services.embedding_service import get_embedding_service
 from backend.core.services.vector_store_service import get_vector_store_service
 from backend.modules.tony.config import settings
 
-
 # TONY模块支持的学科
 TONY_SUBJECTS = ["history", "geography", "other"]
-
 
 async def fetch_tony_questions():
     """
@@ -55,7 +53,6 @@ async def fetch_tony_questions():
 
         logger.info(f"成功获取 {len(questions)} 道TONY模块题目")
         return list(questions)
-
 
 async def rebuild_faiss_index(questions: List[Question]):
     """
@@ -119,7 +116,6 @@ async def rebuild_faiss_index(questions: List[Question]):
 
     logger.info(f"✅ FAISS索引重建完成！成功添加 {success_count}/{len(questions)} 道题目")
 
-
 async def rebuild_bm25_index(questions: List[Question]):
     """
     重建TONY模块的BM25关键词索引
@@ -165,7 +161,6 @@ async def rebuild_bm25_index(questions: List[Question]):
 
     logger.info(f"✅ BM25索引重建完成！共索引 {len(documents)} 道题目")
 
-
 async def main():
     """主函数"""
     logger.info("=" * 60)
@@ -195,7 +190,6 @@ async def main():
     except Exception as e:
         logger.error(f"❌ 索引重建过程中发生错误: {e}", exc_info=True)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

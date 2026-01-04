@@ -28,7 +28,6 @@ settings = get_base_settings()
 
 logger = logging.getLogger(__name__)
 
-
 class LearningGoalType(str, Enum):
     """学习目标类型"""
     IMPROVE_WEAK_POINTS = "improve_weak_points"
@@ -37,14 +36,12 @@ class LearningGoalType(str, Enum):
     REVIEW_MISTAKES = "review_mistakes"
     EXPAND_KNOWLEDGE = "expand_knowledge"
 
-
 class PriorityLevel(str, Enum):
     """优先级"""
     URGENT = "urgent"
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
-
 
 @dataclass
 class LearningRecommendation:
@@ -58,7 +55,6 @@ class LearningRecommendation:
     resources: List[Dict[str, str]] = field(default_factory=list)  # type, url, title
     related_question_ids: List[int] = field(default_factory=list)
 
-
 @dataclass
 class WeakPointAnalysis:
     """薄弱点分析"""
@@ -68,7 +64,6 @@ class WeakPointAnalysis:
     error_rate: float
     recent_trend: str  # improving, declining, stable
     suggested_actions: List[str]
-
 
 @dataclass
 class StudyPlan:
@@ -80,7 +75,6 @@ class StudyPlan:
     daily_tasks: List[Dict[str, Any]]
     total_estimated_hours: float
     progress_percentage: float = 0.0
-
 
 @dataclass
 class LearningProfile:
@@ -96,7 +90,6 @@ class LearningProfile:
     optimal_study_time: str
     streak_days: int
     last_active: datetime
-
 
 class LearningAdvisorService:
     """
@@ -466,10 +459,8 @@ class LearningAdvisorService:
 
         return summary_data
 
-
 # Singleton instance
 _learning_advisor_service = None
-
 
 def get_learning_advisor_service() -> LearningAdvisorService:
     """Get singleton learning advisor service instance"""

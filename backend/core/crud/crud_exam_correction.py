@@ -14,7 +14,6 @@ from ..db.models import ExamCorrection, Question, SubjectEnum, QuestionSourceEnu
 
 logger = logging.getLogger(__name__)
 
-
 async def create_exam_correction(
     db: AsyncSession,
     user_id: int,
@@ -58,7 +57,6 @@ async def create_exam_correction(
     await db.refresh(correction)
     return correction
 
-
 async def get_exam_correction(
     db: AsyncSession,
     correction_id: int,
@@ -78,7 +76,6 @@ async def get_exam_correction(
     result = await db.execute(query)
     return result.scalar_one_or_none()
 
-
 async def get_exam_corrections(
     db: AsyncSession,
     user_id: int,
@@ -90,7 +87,7 @@ async def get_exam_corrections(
 ) -> Tuple[List[ExamCorrection], int]:
     """获取批注记录列表（分页）"""
     logger.info(f"get_exam_corrections: user_id={user_id}, subject={subject}, skip={skip}, limit={limit}")
-    
+
     # 基础查询（包含关联的图片）
     query = (
         select(ExamCorrection)
@@ -100,14 +97,14 @@ async def get_exam_corrections(
         )
         .where(ExamCorrection.user_id == user_id)
     )
-    
+
     # 学科筛选
     # 注意：数据库存储的是枚举的name（如MATH），而前端传入的是value（如math）
     if subject:
         # 统一转换为小写处理
         subject_lower = subject.lower()
         logger.info(f"Filtering by subject: {subject} (lowercase: {subject_lower})")
-        
+
         # 查找匹配的枚举成员
         matched = False
         for enum_member in SubjectEnum:
@@ -117,32 +114,37 @@ async def get_exam_corrections(
                 query = query.where(ExamCorrection.subject == enum_member)
                 matched = True
                 break
-        
+
         if not matched:
             logger.warning(f"Invalid subject filter (no match): {subject}")
-    
+
     # 时间范围筛选
     if start_date:
         query = query.where(ExamCorrection.created_at >= start_date)
     if end_date:
         query = query.where(ExamCorrection.created_at <= end_date)
-    
+
     # 总数查询
     count_query = select(func.count()).select_from(query.subquery())
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
-    
+
     # 分页查询
     query = query.order_by(ExamCorrection.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(query)
     corrections = result.scalars().all()
-    
-    logger.info(f"Query result: found {len(corrections)} corrections (total={total})")
-    if len(corrections) > 0:
-        logger.debug(f"First correction: id={corrections[0].id}, subject={corrections[0].subject.name}")
-    
-    return list(corrections), total
 
+    logger.info(f"Query result: found {len(corrections)} corrections (total={total})")
+    # On legacy SQLite schemas where exam_corrections.id was NULL (non-rowid PK),
+    # SQLAlchemy may yield None rows. Filter them out defensively.
+    corrections = [c for c in corrections if c is not None]
+    if corrections:
+        try:
+            logger.debug(f"First correction: id={corrections[0].id}, subject={corrections[0].subject.name}")
+        except Exception:
+            logger.debug("First correction debug skipped (unexpected shape)")
+
+    return list(corrections), total
 
 async def get_correction_statistics(
     db: AsyncSession,
@@ -191,7 +193,7 @@ async def get_correction_statistics(
         func.avg(ExamCorrection.accuracy_rate).label("avg_accuracy"),
         func.avg(ExamCorrection.total_score).label("avg_score"),
     ).where(and_(*base_conditions))
-    
+
     result = await db.execute(query)
     stats = result.first()
 
@@ -202,7 +204,7 @@ async def get_correction_statistics(
         func.avg(ExamCorrection.accuracy_rate).label("avg_accuracy"),
         func.sum(ExamCorrection.wrong_count).label("wrong_count"),
     ).where(and_(*base_conditions)).group_by(ExamCorrection.subject)
-    
+
     subject_result = await db.execute(subject_query)
     subject_stats = {
         row.subject.value: {
@@ -212,7 +214,7 @@ async def get_correction_statistics(
         }
         for row in subject_result
     }
-    
+
     # 按时间分组统计（用于趋势图）
     if period == "week":
         # 按天统计
@@ -232,7 +234,7 @@ async def get_correction_statistics(
         ).where(and_(*base_conditions)).group_by(
             extract('week', ExamCorrection.created_at)
         ).order_by(extract('week', ExamCorrection.created_at))
-    
+
     time_result = await db.execute(time_query)
     time_series = [
         {
@@ -242,7 +244,7 @@ async def get_correction_statistics(
         }
         for row in time_result
     ]
-    
+
     return {
         "period": period,
         "start_date": start_date.isoformat(),
@@ -257,7 +259,6 @@ async def get_correction_statistics(
         "time_series": time_series,
     }
 
-
 async def delete_exam_correction(
     db: AsyncSession,
     correction_id: int,
@@ -266,32 +267,32 @@ async def delete_exam_correction(
 ) -> bool:
     """
     删除批注记录
-    
+
     Args:
         db: 数据库会话
         correction_id: 批注记录ID
         user_id: 用户ID
         delete_related_questions: 是否同时删除关联的错题记录
-    
+
     Returns:
         是否删除成功
     """
     import os
     import logging
-    
+
     logger = logging.getLogger(__name__)
-    
+
     correction = await get_exam_correction(db, correction_id, user_id)
     if not correction:
         return False
-    
+
     # 删除关联的错题记录
     if delete_related_questions:
         from ..db.models import Question
         questions_query = select(Question).where(Question.exam_correction_id == correction_id)
         questions_result = await db.execute(questions_query)
         related_questions = questions_result.scalars().all()
-        
+
         for question in related_questions:
             # 删除错题图片文件
             if question.image_urls:
@@ -305,11 +306,11 @@ async def delete_exam_correction(
                                 logger.info(f"Deleted question image: {file_path}")
                     except Exception as e:
                         logger.warning(f"Failed to delete question image: {e}")
-            
+
             await db.delete(question)
-        
+
         logger.info(f"Deleted {len(related_questions)} related questions")
-    
+
     # 删除批注记录（不删除图片文件，图片文件由错题图片管理功能统一管理）
     # 减少图片文件的引用计数
     if correction.original_image:
@@ -318,13 +319,12 @@ async def delete_exam_correction(
     if correction.corrected_image:
         from ..crud import crud_image_file
         await crud_image_file.decrement_reference_count(db, correction.corrected_image.file_hash)
-    
+
     # 删除批注记录
     await db.delete(correction)
     logger.info(f"Deleted exam correction {correction_id} (images preserved)")
-    
-    return True
 
+    return True
 
 async def update_exam_correction(
     db: AsyncSession,
@@ -336,12 +336,11 @@ async def update_exam_correction(
     correction = await get_exam_correction(db, correction_id, user_id)
     if not correction:
         return None
-    
+
     for field, value in kwargs.items():
         if value is not None and hasattr(correction, field):
             setattr(correction, field, value)
-    
+
     await db.flush()
     await db.refresh(correction)
     return correction
-

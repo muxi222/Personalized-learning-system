@@ -1,4 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/authStore'
 import {
   Home,
@@ -13,21 +14,52 @@ import {
   Sparkles,
   FileCheck
 } from 'lucide-react'
-import { clsx } from 'clsx'
+import clsx from 'clsx'
 
 const navItems = [
   { to: '/', icon: Home, label: '仪表盘' },
-  { to: '/exam-upload', icon: Camera, label: 'AI批改', highlight: true },
+  { to: '/exam-upload', icon: Camera, label: 'AI批改' },
   { to: '/corrections', icon: FileCheck, label: '批改历史' },
-  { to: '/learning', icon: Brain, label: '学习建议' },
   { to: '/submit', icon: PlusCircle, label: '录入错题' },
   { to: '/questions', icon: List, label: '错题本' },
+  { to: '/learning', icon: Brain, label: '学习建议' },
   { to: '/review', icon: RefreshCw, label: '复习' },
 ]
 
 export default function Layout() {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
+  const handleNavClick = (to) => {
+    // 点击导航时，主动让相关页面的核心数据失效，确保进入页面会拉取最新数据
+    if (to === '/questions') {
+      queryClient.invalidateQueries({ queryKey: ['questions'] })
+      queryClient.invalidateQueries({ queryKey: ['question-chapters'] })
+      return
+    }
+    if (to === '/review') {
+      queryClient.invalidateQueries({ queryKey: ['review-due'] })
+      queryClient.invalidateQueries({ queryKey: ['question-chapters'] })
+      return
+    }
+    if (to === '/corrections') {
+      queryClient.invalidateQueries({ queryKey: ['corrections'] })
+      return
+    }
+    if (to === '/learning') {
+      queryClient.invalidateQueries({ queryKey: ['learning-profile'] })
+      queryClient.invalidateQueries({ queryKey: ['recommendations'] })
+      queryClient.invalidateQueries({ queryKey: ['study-plan'] })
+      queryClient.invalidateQueries({ queryKey: ['learning-summary'] })
+      return
+    }
+    if (to === '/') {
+      queryClient.invalidateQueries({ queryKey: ['questions'] })
+      queryClient.invalidateQueries({ queryKey: ['review-due'] })
+      queryClient.invalidateQueries({ queryKey: ['feedback-stats'] })
+    }
+  }
 
   const handleLogout = () => {
     logout()
@@ -58,6 +90,7 @@ export default function Layout() {
               key={to}
               to={to}
               end={to === '/'}
+              onClick={() => handleNavClick(to)}
               className={({ isActive }) =>
                 clsx(
                   'flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200',
@@ -114,4 +147,3 @@ export default function Layout() {
     </div>
   )
 }
-

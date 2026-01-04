@@ -10,7 +10,6 @@ Agent Tests - 测试 LangGraph Agent 模块
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-
 class TestAgentState:
     """Test agent state definition"""
 
@@ -45,7 +44,6 @@ class TestAgentState:
         assert state["parse_attempts"] == 0
         assert state["parse_success"] is False
 
-
 class TestAgentPrompts:
     """Test agent prompts"""
 
@@ -72,7 +70,6 @@ class TestAgentPrompts:
         assert get_subject_name_cn("english") == "英语"
         assert get_subject_name_cn("unknown") == "综合"
 
-
 class TestQuestionIntakeAgent:
     """Test QuestionIntakeAgent"""
 
@@ -91,7 +88,6 @@ class TestQuestionIntakeAgent:
         agent = QuestionIntakeAgent()
         assert agent.graph is not None
 
-
 class TestSimilarQuestionAgent:
     """Test SimilarQuestionAgent"""
 
@@ -101,7 +97,6 @@ class TestSimilarQuestionAgent:
 
         graph = create_similar_question_graph()
         assert graph is not None
-
 
 class TestOCRAgent:
     """Test OCRAgent"""
@@ -120,7 +115,6 @@ class TestOCRAgent:
         graph1 = get_ocr_graph()
         graph2 = get_ocr_graph()
         assert graph1 is graph2
-
 
 class TestAgentTasks:
     """Test Celery tasks"""

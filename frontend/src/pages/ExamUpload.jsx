@@ -468,7 +468,14 @@ export default function ExamUpload() {
                             setViewerOpen(true)
                           }}
                         />
-                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 rounded-xl">
+                        <div
+                          className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 rounded-xl cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setViewerImage({ url: previewUrl, title: '原始试卷' })
+                            setViewerOpen(true)
+                          }}
+                        >
                           <div className="p-3 bg-black/60 backdrop-blur-sm rounded-xl">
                             <Maximize2 className="w-6 h-6 text-white" />
                           </div>
@@ -493,7 +500,14 @@ export default function ExamUpload() {
                               setViewerOpen(true)
                             }}
                           />
-                          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 rounded-xl">
+                          <div
+                            className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 rounded-xl cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setViewerImage({ url: correctedImageUrl, title: '批改后试卷' })
+                              setViewerOpen(true)
+                            }}
+                          >
                             <div className="p-3 bg-black/60 backdrop-blur-sm rounded-xl">
                               <Maximize2 className="w-6 h-6 text-white" />
                             </div>

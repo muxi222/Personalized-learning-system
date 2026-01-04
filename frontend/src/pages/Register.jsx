@@ -29,7 +29,7 @@ export default function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    
+
     if (formData.password !== formData.confirmPassword) {
       toast.error('两次输入的密码不一致')
       return
@@ -39,7 +39,7 @@ export default function Register() {
 
     // 清除之前的错误
     setFieldErrors({})
-    
+
     const result = await register({
       username: formData.username,
       email: formData.email,
@@ -47,9 +47,9 @@ export default function Register() {
       full_name: formData.full_name || null,
       grade: formData.grade || null,
     })
-    
+
     setLoading(false)
-    
+
     if (result.success) {
       toast.success('注册成功！')
       navigate('/')
@@ -57,14 +57,14 @@ export default function Register() {
       // 解析错误信息，提取字段错误
       const errorMessage = result.error || '注册失败'
       toast.error(errorMessage)
-      
+
       // 尝试解析字段错误
       if (result.errorDetails && Array.isArray(result.errorDetails)) {
         const errors = {}
         result.errorDetails.forEach(err => {
           const field = err.field.replace('body -> ', '')
           let message = err.message
-          
+
           // 友好的错误消息翻译
           if (message.includes('at least 3 characters')) {
             message = '至少需要3个字符'
@@ -73,7 +73,7 @@ export default function Register() {
           } else if (message.includes('Invalid email') || message.includes('value is not a valid email')) {
             message = '邮箱格式不正确'
           }
-          
+
           errors[field] = message
         })
         setFieldErrors(errors)
@@ -98,7 +98,7 @@ export default function Register() {
         {/* Register form */}
         <div className="card p-8">
           <h2 className="text-xl font-semibold text-white mb-6">创建账号</h2>
-          
+
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -244,4 +244,3 @@ export default function Register() {
     </div>
   )
 }
-

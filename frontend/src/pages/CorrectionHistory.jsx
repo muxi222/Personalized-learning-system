@@ -18,7 +18,7 @@ import {
   ArrowRight,
   Trash2,
 } from 'lucide-react'
-import { clsx } from 'clsx'
+import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import ImageViewer from '../components/ImageViewer'
 import CorrectionDetailDrawer from '../components/CorrectionDetailDrawer'
@@ -45,6 +45,14 @@ const correctionsApi = {
   delete: (id, subject = null) => {
     const client = createApiClient(subject)
     return client.delete(`/corrections/${id}`)
+  },
+
+  batchDelete: (ids) => {
+    // 批量删除统一使用 default 模块（端口 6100）
+    const client = createApiClient(null)
+    return client.post('/corrections/batch-delete', {
+      correction_ids: ids
+    }).then(res => res.data)
   },
 
   getStatistics: (period, subject = null) => {
@@ -86,6 +94,7 @@ export default function CorrectionHistory() {
   const [page, setPage] = useState(1)
   const [selectedSubject, setSelectedSubject] = useState('')
   const [selectedPeriod, setSelectedPeriod] = useState('week')
+  const [dateRange, setDateRange] = useState({ start: '', end: '' }) // YYYY-MM-DD
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerImage, setViewerImage] = useState({ url: '', title: '' })
   const [selectedItems, setSelectedItems] = useState([])
@@ -96,11 +105,13 @@ export default function CorrectionHistory() {
 
   // 获取批注列表
   const { data: listData, isLoading } = useQuery({
-    queryKey: ['corrections', { page, page_size: pageSize, subject: selectedSubject }],
-    queryFn: () => correctionsApi.list({ 
-      page, 
-      page_size: pageSize, 
-      subject: selectedSubject || undefined 
+    queryKey: ['corrections', { page, page_size: pageSize, subject: selectedSubject, start_date: dateRange.start, end_date: dateRange.end }],
+    queryFn: () => correctionsApi.list({
+      page,
+      page_size: pageSize,
+      subject: selectedSubject || undefined,
+      start_date: dateRange.start ? `${dateRange.start}T00:00:00` : undefined,
+      end_date: dateRange.end ? `${dateRange.end}T23:59:59` : undefined,
     }),
   })
 
@@ -122,8 +133,8 @@ export default function CorrectionHistory() {
   const deleteMutation = useMutation({
     mutationFn: ({ id, subject }) => correctionsApi.delete(id, subject),
     onSuccess: () => {
-      queryClient.invalidateQueries(['corrections'])
-      queryClient.invalidateQueries(['correction-stats'])
+      queryClient.invalidateQueries({ queryKey: ['corrections'] })
+      queryClient.invalidateQueries({ queryKey: ['correction-stats'] })
       toast.success('删除成功')
     },
     onError: () => {
@@ -132,6 +143,25 @@ export default function CorrectionHistory() {
   })
 
   // 批量删除
+  const batchDeleteMutation = useMutation({
+    mutationFn: (ids) => correctionsApi.batchDelete(ids),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['corrections'] })
+      queryClient.invalidateQueries({ queryKey: ['correction-stats'] })
+      const { deleted_count, failed_count } = response
+      if (failed_count === 0) {
+        toast.success(`已成功删除 ${deleted_count} 条记录`)
+      } else {
+        toast.success(`已删除 ${deleted_count} 条记录，${failed_count} 条删除失败`)
+      }
+      setSelectedItems([])
+      setIsSelectionMode(false)
+    },
+    onError: () => {
+      toast.error('批量删除失败')
+    },
+  })
+
   const handleBatchDelete = async () => {
     if (selectedItems.length === 0) {
       toast.error('请先选择要删除的记录')
@@ -142,23 +172,13 @@ export default function CorrectionHistory() {
       return
     }
 
-    for (const id of selectedItems) {
-      // 找到对应的 correction 以获取 subject
-      const correction = corrections.find(c => c.id === id)
-      if (correction) {
-        await deleteMutation.mutateAsync({ id, subject: correction.subject })
-      }
-    }
-
-    setSelectedItems([])
-    setIsSelectionMode(false)
-    toast.success(`已删除 ${selectedItems.length} 条记录`)
+    batchDeleteMutation.mutate(selectedItems)
   }
 
   // 切换选择
   const toggleSelection = (id) => {
-    setSelectedItems(prev => 
-      prev.includes(id) 
+    setSelectedItems(prev =>
+      prev.includes(id)
         ? prev.filter(item => item !== id)
         : [...prev, id]
     )
@@ -288,6 +308,30 @@ export default function CorrectionHistory() {
             </select>
           </div>
 
+          {/* 日期范围（列表筛选） */}
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 text-sm">日期</span>
+            <input
+              type="date"
+              value={dateRange.start}
+              onChange={(e) => {
+                setDateRange(prev => ({ ...prev, start: e.target.value }))
+                setPage(1)
+              }}
+              className="input w-auto"
+            />
+            <span className="text-slate-500 text-sm">-</span>
+            <input
+              type="date"
+              value={dateRange.end}
+              onChange={(e) => {
+                setDateRange(prev => ({ ...prev, end: e.target.value }))
+                setPage(1)
+              }}
+              className="input w-auto"
+            />
+          </div>
+
           <div className="flex-1" />
 
           {/* 批量操作按钮 */}
@@ -301,11 +345,11 @@ export default function CorrectionHistory() {
               </button>
               <button
                 onClick={handleBatchDelete}
-                disabled={selectedItems.length === 0}
+                disabled={selectedItems.length === 0 || batchDeleteMutation.isPending}
                 className="bg-red-500/20 hover:bg-red-500/30 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
               >
                 <Trash2 className="w-4 h-4 inline mr-1" />
-                删除 ({selectedItems.length})
+                {batchDeleteMutation.isPending ? '删除中...' : `删除 (${selectedItems.length})`}
               </button>
               <button
                 onClick={() => {
@@ -414,8 +458,8 @@ export default function CorrectionHistory() {
         <div className="mb-4">
           <h2 className="text-white font-semibold text-xl flex items-center gap-2">
             <FileCheck className="w-5 h-5 text-primary-400" />
-            {selectedSubject ? 
-              `${SUBJECTS.find(s => s.value === selectedSubject)?.label}批改记录` : 
+            {selectedSubject ?
+              `${SUBJECTS.find(s => s.value === selectedSubject)?.label}批改记录` :
               '所有批改记录'
             }
             <span className="text-slate-500 text-base font-normal ml-2">
@@ -441,9 +485,9 @@ export default function CorrectionHistory() {
           {corrections.map((correction, index) => {
             const subjectInfo = SUBJECTS.find(s => s.value === correction.subject) || { label: correction.subject, color: 'text-slate-400', bg: 'bg-slate-500/10' }
             const scorePercent = (correction.total_score / correction.max_score) * 100
-            
+
             const isSelected = selectedItems.includes(correction.id)
-            
+
             return (
               <div
                 key={correction.id}
@@ -462,7 +506,7 @@ export default function CorrectionHistory() {
               >
                 {/* 选择框（批量管理模式） */}
                 {isSelectionMode && (
-                  <div 
+                  <div
                     className="absolute top-4 left-4 z-20"
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -525,13 +569,13 @@ export default function CorrectionHistory() {
                       {scorePercent.toFixed(0)}%
                     </span>
                   </div>
-                  
+
                   {/* 进度条 */}
                   <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
                     <div
                       className={clsx(
                         "h-full transition-all duration-500",
-                        scorePercent >= 60 
+                        scorePercent >= 60
                           ? "bg-gradient-to-r from-emerald-500 to-green-500"
                           : "bg-gradient-to-r from-red-500 to-orange-500"
                       )}
@@ -598,7 +642,7 @@ export default function CorrectionHistory() {
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
-                    
+
                     <div className="flex items-center gap-2 text-primary-400 text-sm">
                       <span>点击查看详情</span>
                       <ArrowRight className="w-4 h-4" />
@@ -613,8 +657,8 @@ export default function CorrectionHistory() {
         <div className="card p-12 text-center">
           <FileCheck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-white mb-2">
-            {selectedSubject ? 
-              `暂无${SUBJECTS.find(s => s.value === selectedSubject)?.label}批改记录` : 
+            {selectedSubject ?
+              `暂无${SUBJECTS.find(s => s.value === selectedSubject)?.label}批改记录` :
               '暂无批改记录'
             }
           </h3>
@@ -649,7 +693,7 @@ export default function CorrectionHistory() {
           >
             上一页
           </button>
-          
+
           <div className="flex items-center gap-2">
             {[...Array(Math.min(5, totalPages))].map((_, i) => {
               const pageNum = i + 1
@@ -669,7 +713,7 @@ export default function CorrectionHistory() {
               )
             })}
           </div>
-          
+
           <button
             onClick={() => setPage(p => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}
@@ -696,8 +740,9 @@ export default function CorrectionHistory() {
         subject={corrections.find(c => c.id === currentDetailId)?.subject || 'chinese'}
         allIds={corrections.map(c => c.id)}
         onNavigate={(newId) => setCurrentDetailId(newId)}
+        listCorrection={corrections.find(c => c.id === currentDetailId)}  // 当前记录的列表数据
+        allListCorrections={corrections}  // 传入所有列表数据，确保切换记录时也能使用列表接口返回的图片URL
       />
     </div>
   )
 }
-

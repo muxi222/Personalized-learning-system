@@ -16,14 +16,12 @@ from app.core.config import settings
 # Test database URL (in-memory SQLite)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-
 @pytest.fixture(scope="session")
 def event_loop():
     """Create event loop for async tests"""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
-
 
 @pytest_asyncio.fixture(scope="function")
 async def test_engine():
@@ -45,7 +43,6 @@ async def test_engine():
 
     await engine.dispose()
 
-
 @pytest_asyncio.fixture(scope="function")
 async def test_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
     """Create test database session"""
@@ -57,7 +54,6 @@ async def test_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
     async with async_session() as session:
         yield session
-
 
 @pytest_asyncio.fixture(scope="function")
 async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
@@ -78,7 +74,6 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
 
     app.dependency_overrides.clear()
 
-
 @pytest_asyncio.fixture(scope="function")
 async def test_user(test_session: AsyncSession):
     """Create a test user"""
@@ -97,7 +92,6 @@ async def test_user(test_session: AsyncSession):
     await test_session.commit()
     return user
 
-
 @pytest_asyncio.fixture(scope="function")
 async def auth_headers(test_user) -> dict:
     """Get auth headers for test user"""
@@ -105,4 +99,3 @@ async def auth_headers(test_user) -> dict:
 
     token = create_access_token(test_user.id)
     return {"Authorization": f"Bearer {token}"}
-

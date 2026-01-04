@@ -17,7 +17,7 @@ import {
   ArrowLeftRight,
   Loader2,
 } from 'lucide-react'
-import { clsx } from 'clsx'
+import clsx from 'clsx'
 import ImageViewer from './ImageViewer'
 import ImageCompareViewer from './ImageCompareViewer'
 import { createApiClient } from '../lib/api'
@@ -53,17 +53,26 @@ export default function CorrectionDetailDrawer({
   subject = 'chinese',  // 学科，用于路由到对应模块
   allIds = [],  // 所有批改记录的ID列表
   onNavigate,   // 切换到其他记录的回调
+  listCorrection = null,  // 从列表接口获取的当前批改记录数据（优先使用，包含 original_image_url 和 corrected_image_url）
+  allListCorrections = [],  // 所有列表数据，用于切换记录时获取对应的列表数据
 }) {
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerImage, setViewerImage] = useState({ url: '', title: '' })
   const [compareViewerOpen, setCompareViewerOpen] = useState(false)
 
-  // 获取详情
-  const { data: correction, isLoading } = useQuery({
+  // 从列表数据中查找当前记录（优先使用列表数据中的图片URL）
+  const currentListCorrection = allListCorrections.find(c => c.id === correctionId) || listCorrection
+
+  // 获取详情（如果列表数据中没有完整信息，才调用详情接口）
+  const { data: detailCorrection, isLoading } = useQuery({
     queryKey: ['correction', correctionId],
     queryFn: () => correctionsApi.get(correctionId, subject),
-    enabled: isOpen && !!correctionId,
+    enabled: isOpen && !!correctionId && !currentListCorrection,  // 如果有列表数据，就不调用详情接口
   })
+
+  // 优先使用列表数据，如果没有则使用详情接口数据
+  // 列表数据中的 original_image_url 和 corrected_image_url 是从 /api/v1/corrections/ 接口获取的
+  const correction = currentListCorrection || detailCorrection
 
   // ESC 关闭
   useEffect(() => {
@@ -104,6 +113,9 @@ export default function CorrectionDetailDrawer({
       onNavigate(allIds[currentIndex + 1])
     }
   }
+
+  // 当 correctionId 变化时，如果 listCorrection 不存在，需要重新获取
+  // 但这里我们优先使用传入的 listCorrection，所以不需要额外处理
 
   // 键盘导航
   useEffect(() => {
@@ -147,7 +159,7 @@ export default function CorrectionDetailDrawer({
               >
                 <X className="w-5 h-5 text-slate-400" />
               </button>
-              
+
               <h2 className="text-xl font-semibold text-white flex items-center gap-2">
                 <FileCheck className="w-6 h-6 text-primary-400" />
                 批改详情
@@ -163,11 +175,11 @@ export default function CorrectionDetailDrawer({
                   >
                     <ChevronLeft className="w-5 h-5 text-slate-400" />
                   </button>
-                  
+
                   <span className="text-slate-500 text-sm">
                     {currentIndex + 1} / {allIds.length}
                   </span>
-                  
+
                   <button
                     onClick={handleNext}
                     disabled={!hasNext}
@@ -453,4 +465,3 @@ export default function CorrectionDetailDrawer({
     </>
   )
 }
-

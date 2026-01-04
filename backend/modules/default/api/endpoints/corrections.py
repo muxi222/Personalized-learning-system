@@ -16,6 +16,7 @@ from backend.modules.default.api.deps import get_current_user, get_db
 from backend.core.crud.crud_exam_correction import (
     get_exam_corrections,
     get_correction_statistics,
+    delete_exam_correction,
 )
 from backend.core.db.models import User, SubjectEnum
 
@@ -41,36 +42,31 @@ SUBJECT_TO_MODULE = {
     "other": ("tony", 6005),
 }
 
-
 def image_to_url(correction_id: int, image_type: str, subject: str) -> str:
     """
-    生成图片URL路径（根据学科路由到对应模块）
+    生成图片URL路径（统一由 default 模块处理）
 
     Args:
         correction_id: 批注记录ID
         image_type: 图片类型 ('original' 或 'corrected')
-        subject: 学科名称（用于确定模块和端口）
+        subject: 学科名称（不再使用，统一由 default 模块处理）
 
     Returns:
         完整的URL路径（包含协议、主机和端口）
     """
-    # 获取学科对应的模块和端口
-    module_info = SUBJECT_TO_MODULE.get(subject)
-    if not module_info:
-        # 未知学科，使用默认模块
-        logger.warning(f"Unknown subject '{subject}', using default module (port 6100)")
-        port = 6100
-    else:
-        _, port = module_info
+    from backend.modules.default.config import settings
 
-    # 获取主机配置（支持环境变量）
-    host = os.getenv('API_HOST', 'localhost')
-    if host in ['0.0.0.0', '']:
-        host = 'localhost'
+    # 优先使用 PUBLIC_API_BASE_URL 配置
+    if settings.PUBLIC_API_BASE_URL:
+        base_url = settings.PUBLIC_API_BASE_URL.rstrip('/')
+        return f"{base_url}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
 
-    # 生成完整URL
+    # 如果没有设置 PUBLIC_API_BASE_URL，使用 default 模块的地址（6100端口）
+    host = settings.HOST if settings.HOST not in ['0.0.0.0', ''] else 'localhost'
+    port = settings.PORT  # default 模块使用 6100 端口
+
+    # 生成完整URL，统一由 default 模块处理
     return f"http://{host}:{port}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
-
 
 # ============ Response Models ============
 
@@ -94,14 +90,12 @@ class CorrectionResponse(BaseModel):
     improvement_suggestions: List[str]
     created_at: datetime
 
-
 class CorrectionListResponse(BaseModel):
     """批注记录列表响应"""
     total: int
     page: int
     page_size: int
     items: List[CorrectionResponse]
-
 
 class CorrectionStatisticsResponse(BaseModel):
     """批注统计响应"""
@@ -116,7 +110,6 @@ class CorrectionStatisticsResponse(BaseModel):
     avg_score: float
     subject_stats: dict
     time_series: List[dict]
-
 
 # ============ API Endpoints ============
 
@@ -187,7 +180,6 @@ async def list_corrections(
         ],
     )
 
-
 @router.get("/statistics/{period}", response_model=CorrectionStatisticsResponse)
 async def get_statistics(
     period: str,
@@ -215,3 +207,73 @@ async def get_statistics(
     )
 
     return CorrectionStatisticsResponse(**stats)
+
+class BatchDeleteRequest(BaseModel):
+    """批量删除请求"""
+    correction_ids: List[int]
+
+class BatchDeleteResponse(BaseModel):
+    """批量删除响应"""
+    deleted_count: int
+    failed_count: int
+    failed_ids: List[int]
+
+@router.post("/batch-delete", response_model=BatchDeleteResponse)
+async def batch_delete_corrections(
+    request: BatchDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    批量删除批改记录（跨学科）
+
+    支持批量删除多个批改记录，无论它们属于哪个学科。
+    统一由 default 模块处理，无需路由到各个学科模块。
+    """
+    logger.info(
+        f"[Default Module] batch_delete_corrections: user_id={current_user.id}, "
+        f"ids={request.correction_ids}"
+    )
+
+    deleted_count = 0
+    failed_count = 0
+    failed_ids = []
+
+    for correction_id in request.correction_ids:
+        try:
+            success = await delete_exam_correction(
+                db,
+                correction_id=correction_id,
+                user_id=current_user.id,
+                delete_related_questions=True,
+            )
+            if success:
+                deleted_count += 1
+                logger.info(f"[Default Module] Deleted correction {correction_id}")
+            else:
+                failed_count += 1
+                failed_ids.append(correction_id)
+                logger.warning(f"[Default Module] Failed to delete correction {correction_id}: not found or no permission")
+        except Exception as e:
+            failed_count += 1
+            failed_ids.append(correction_id)
+            logger.error(f"[Default Module] Error deleting correction {correction_id}: {e}")
+
+    # 提交所有删除操作
+    try:
+        await db.commit()
+    except Exception as e:
+        logger.error(f"[Default Module] Error committing batch delete: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="批量删除失败")
+
+    logger.info(
+        f"[Default Module] Batch delete completed: deleted={deleted_count}, "
+        f"failed={failed_count}, failed_ids={failed_ids}"
+    )
+
+    return BatchDeleteResponse(
+        deleted_count=deleted_count,
+        failed_count=failed_count,
+        failed_ids=failed_ids,
+    )

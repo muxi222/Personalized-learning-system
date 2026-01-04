@@ -29,10 +29,8 @@ from backend.core.services.embedding_service import get_embedding_service
 from backend.core.services.vector_store_service import get_vector_store_service
 from backend.modules.rpj.config import settings
 
-
 # RPJ模块支持的学科
 RPJ_SUBJECTS = ["chinese", "english", "politics"]
-
 
 async def fetch_rpj_questions():
     """
@@ -61,7 +59,6 @@ async def fetch_rpj_questions():
     #     return list(questions)
 
     raise NotImplementedError("TODO: 学生需要实现fetch_rpj_questions函数")
-
 
 async def rebuild_faiss_index(questions: List[Question]):
     """
@@ -95,7 +92,6 @@ async def rebuild_faiss_index(questions: List[Question]):
 
     raise NotImplementedError("TODO: 学生需要实现rebuild_faiss_index函数")
 
-
 async def rebuild_bm25_index(questions: List[Question]):
     """
     重建RPJ模块的BM25关键词索引
@@ -124,7 +120,6 @@ async def rebuild_bm25_index(questions: List[Question]):
     # ...
 
     raise NotImplementedError("TODO: 学生需要实现rebuild_bm25_index函数")
-
 
 async def main():
     """主函数"""
@@ -161,7 +156,6 @@ async def main():
     except Exception as e:
         logger.error(f"❌ 索引重建过程中发生错误: {e}", exc_info=True)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

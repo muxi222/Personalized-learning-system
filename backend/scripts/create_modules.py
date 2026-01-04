@@ -38,7 +38,6 @@ MODULES = {
 BASE_DIR = "/Users/antonio/academic_work/learning_assistant/backend/modules"
 TEMPLATE_MODULE = "tony"
 
-
 def replace_module_name(content: str, old_module: str, new_module: str) -> str:
     """替换模块名称"""
     # 替换所有出现的模块名（保持大小写）
@@ -48,7 +47,6 @@ def replace_module_name(content: str, old_module: str, new_module: str) -> str:
     content = content.replace(old_module.upper(), new_module.upper())
     content = content.replace(old_module.capitalize(), new_module.capitalize())
     return content
-
 
 def update_config_file(file_path: str, module_name: str, config: dict):
     """更新配置文件"""
@@ -73,7 +71,6 @@ def update_config_file(file_path: str, module_name: str, config: dict):
 
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
-
 
 def update_main_file(file_path: str, module_name: str, config: dict):
     """更新main.py文件"""
@@ -126,7 +123,6 @@ def update_main_file(file_path: str, module_name: str, config: dict):
 
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
-
 
 def create_module(module_name: str, config: dict):
     """创建单个模块"""
@@ -182,7 +178,6 @@ def create_module(module_name: str, config: dict):
 
     print(f"✅ 模块 {module_name} 创建完成！")
 
-
 def main():
     """主函数"""
     print("="*60)
@@ -208,7 +203,6 @@ def main():
     print("\n模块列表:")
     for module_name, config in MODULES.items():
         print(f"  - {module_name}: http://localhost:{config['port']} ({config['description']})")
-
 
 if __name__ == "__main__":
     main()

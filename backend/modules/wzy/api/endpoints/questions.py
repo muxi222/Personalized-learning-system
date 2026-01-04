@@ -40,7 +40,6 @@ SUBJECT_NAME_MAP = {
     "其他": "other",
 }
 
-
 def validate_subject(subject: str) -> None:
     """验证学科是否属于WZY模块"""
     if subject not in settings.SUBJECTS:
@@ -49,7 +48,6 @@ def validate_subject(subject: str) -> None:
             detail=f"Subject '{subject}' is not supported by WZY module. "
                    f"Supported subjects: {settings.SUBJECTS}"
         )
-
 
 @router.post("/", response_model=TaskResponse, status_code=202)
 async def create_question(
@@ -60,14 +58,14 @@ async def create_question(
 ):
     """
     提交新错题
-    
+
     触发Agent工作流进行异步处理:
     1. 解析输入提取结构化信息
     2. 保存到数据库
     3. 生成向量并存入向量库
     4. AI分析错因
     5. 生成举一反三题目
-    
+
     返回task_id，可通过 /tasks/{task_id} 查询处理状态
     """
     # Generate task ID
@@ -80,7 +78,7 @@ async def create_question(
     # Start background processing
     # In production, this should use Celery
     # Using the new QuestionIntakeAgent (设计文档4.1节)
-    
+
     # For development: use BackgroundTasks
     # For production: use Celery
     async def process_async():
@@ -96,7 +94,7 @@ async def create_question(
                 image_urls=question_data.image_urls,
                 student_answer=question_data.student_answer,
             )
-            
+
             if result.get("success"):
                 logger.info(f"Task {task_id} completed, question_id={result.get('question_id')}")
             else:
@@ -118,7 +116,6 @@ async def create_question(
         message="Task created. Processing started.",
     )
 
-
 @router.post("/ocr", response_model=TaskResponse, status_code=202)
 async def create_question_with_image(
     file: UploadFile = File(...),
@@ -131,10 +128,10 @@ async def create_question_with_image(
 ):
     """
     上传图片识别错题
-    
+
     支持上传错题图片，自动OCR识别题目内容和答案，
     然后进行结构化存储和AI分析。
-    
+
     流程:
     1. 上传图片并保存到用户专属目录
     2. OCR识别题目内容
@@ -142,6 +139,29 @@ async def create_question_with_image(
     4. 创建错题记录
     5. 触发AI分析流程
     """
+    # TODO(student): 学科判定 + 分类归一化（统一模板 v1；与 tony 最新实现对齐的关键能力）
+    # 【输入】user_selected_subject=subject_en，text=OCR提取出的题目文本/结构化题目
+    # 【输出】对每题生成：
+    #   - detected_subject + confidence(0~1)
+    #   - chapter: 从 CHAPTER_TAXONOMY[detected_subject] 选 1 个（否则“综合”）
+    #   - knowledge_points: 从 KNOWLEDGE_POINT_TAXONOMY[detected_subject] 选 1~3 个（否则“综合”）
+    #   - tags: 2~6 个短词（用于检索，避免太碎）
+    # 【规则】
+    #   - 若 detected_subject != user_selected_subject 且 confidence >= 0.75：提示“学科不匹配”并拒绝入库
+    #   - taxonomy 必须收敛：chapter 建议 6~10 个，knowledge_points 建议 10~25 个；同义项合并，避免发散
+    # 【推荐 taxonomy 示例（WZY: math/physics）】
+    #   CHAPTER_TAXONOMY = {
+    #     "math": ["函数", "三角函数", "解析几何", "立体几何", "数列", "概率统计", "导数", "综合"],
+    #     "physics": ["力学", "电磁学", "热学", "光学", "原子物理", "实验", "综合"],
+    #   }
+    #   KNOWLEDGE_POINT_TAXONOMY = {
+    #     "math": ["函数性质", "导数应用", "圆锥曲线", "向量", "不等式", "数列求和", "概率分布", "立体几何方法", "解析几何技巧", "综合"],
+    #     "physics": ["牛顿定律", "功与能", "动量守恒", "电场磁场", "电路", "热力学定律", "波动光学", "实验数据处理", "综合"],
+    #   }
+    # 【实现建议】
+    #   - OCR 后调用 settings.LLM_API_ENDPOINT 的 /chat/completions（二次判定+归一化）
+    #   - 优先更强模型（gemini-3-pro-preview / gpt-5.2），可通过环境变量 WZY_HIGH_ACCURACY_MODEL 覆盖
+    # 【参考实现】backend/modules/tony/agents/question_intake_ocr_agent.py（仅 tony 模块完整实现）
     # 验证文件类型
     allowed_types = ["image/jpeg", "image/png", "image/webp", "image/heic"]
     if file.content_type not in allowed_types:
@@ -157,63 +177,36 @@ async def create_question_with_image(
 
     # 解析学科
     subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
-    
+
+    # 生成task_id用于后续处理（并作为“本次上传”唯一标识，用于禁止去重）
+    task_id = str(uuid.uuid4())
+
     # 读取文件内容并计算哈希值
     content = await file.read()
-    from backend.core.utils.file_utils import calculate_file_hash, get_filename_from_path
+    from backend.core.utils.file_utils import calculate_file_hash
     from backend.core.crud import crud_image_file
-    
-    file_hash = calculate_file_hash(content)
-    
-    # 检查图片是否已存在（同一用户维度去重）
-    existing_image = await crud_image_file.get_image_by_hash(db, file_hash)
-    is_duplicate = False
-    
-    # 检查是否为同一用户的重复图片
-    if existing_image and existing_image.user_id == user.id:
-        is_duplicate = True
-        logger.info(f"Duplicate image detected for user {user.id}: hash={file_hash[:16]}...")
-        # 前端可以通过响应中的信息来显示提醒
-    
-    # 生成task_id用于后续处理
-    task_id = str(uuid.uuid4())
-    
-    if existing_image:
-        # 图片已存在，复用现有文件
-        file_path = existing_image.file_path
-        filename = get_filename_from_path(file_path)
-        logger.info(f"Image already exists, reusing: hash={file_hash[:16]}..., path={file_path}")
-        
-        # 增加引用计数
-        await crud_image_file.increment_reference_count(db, file_hash)
-    else:
-        # 图片不存在，保存新文件（使用hash值作为文件名）
-        file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
-        # 使用hash值的前32位作为文件名，避免文件名过长
-        filename = f"{file_hash[:32]}.{file_ext}"
-        
-        # 保存到用户专属目录: data/uploads/{username_email}/questions/{subject}/
-        file_path = os.path.join(
-            get_user_upload_dir(UPLOAD_DIR, user, "questions", subject_en),
-            filename
-        )
-        
-        # 保存文件
-        with open(file_path, "wb") as f:
-            f.write(content)
-        
-        # 创建图片文件记录
-        await crud_image_file.create_image_file(
-            db=db,
-            file_hash=file_hash,
-            user_id=user.id,
-            file_type="questions",
-            subject=subject_en,
-            file_path=file_path,
-            file_size=len(content),
-            mime_type=file.content_type,
-        )
-        logger.info(f"New image saved: hash={file_hash[:16]}..., path={file_path}")
+
+    # No-dedupe for "question intake" images: same bytes should still create a new image_files.id
+    file_hash_raw = calculate_file_hash(content)
+    file_hash = calculate_file_hash(content + task_id.encode("utf-8"))
+
+    # 每次上传都保存为新文件（避免物理文件共享导致删除互相影响）
+    file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
+    filename = f"{task_id.replace('-', '')[:16]}_{file_hash_raw[:16]}.{file_ext}"
+    file_path = os.path.join(get_user_upload_dir(UPLOAD_DIR, user, "questions", subject_en), filename)
+    with open(file_path, "wb") as f:
+        f.write(content)
+    img = await crud_image_file.create_image_file(
+        db=db,
+        file_hash=file_hash,
+        user_id=user.id,
+        file_type="questions",
+        subject=subject_en,
+        file_path=file_path,
+        file_size=len(content),
+        mime_type=file.content_type,
+    )
+    logger.info(f"New image saved: id={getattr(img, 'id', None)} hash_raw={file_hash_raw[:16]}..., path={file_path}")
 
     try:
 
@@ -240,7 +233,7 @@ async def create_question_with_image(
 
                 # 使用OCR识别单个题目（不是试卷批改，而是错题录入）
                 logger.info(f"Starting OCR for question image: {file_path}")
-                
+
                 # 使用简化的prompt进行单题识别
                 from backend.core.services.gemini_ocr_service import GeminiOCRService
                 ocr_result = await ocr_service._analyze_image(
@@ -268,7 +261,7 @@ async def create_question_with_image(
                 # 解析OCR结果
                 import json
                 import re
-                
+
                 # 尝试从结果中提取JSON
                 json_match = re.search(r'\{[\s\S]*\}', ocr_result)
                 if json_match:
@@ -327,7 +320,6 @@ async def create_question_with_image(
             os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
-
 @router.get("/", response_model=QuestionListResponse)
 async def list_questions(
     page: int = Query(1, ge=1, description="页码"),
@@ -360,7 +352,6 @@ async def list_questions(
         items=[QuestionResponse.model_validate(q) for q in questions],
     )
 
-
 @router.get("/{question_id}", response_model=QuestionDetail)
 async def get_question(
     question_id: int,
@@ -376,7 +367,6 @@ async def get_question(
         raise HTTPException(status_code=404, detail="Question not found")
 
     return QuestionDetail.model_validate(question)
-
 
 @router.patch("/{question_id}", response_model=QuestionResponse)
 async def update_question(
@@ -396,7 +386,6 @@ async def update_question(
 
     return QuestionResponse.model_validate(question)
 
-
 @router.delete("/{question_id}", status_code=204)
 async def delete_question(
     question_id: int,
@@ -406,10 +395,27 @@ async def delete_question(
     """
     删除错题
     """
+    q = await crud_question.get_question(db, question_id, user_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    source_image_id = getattr(q, "source_image_id", None)
+
     success = await crud_question.delete_question(db, question_id, user_id)
     if not success:
         raise HTTPException(status_code=404, detail="Question not found")
 
+    try:
+        from backend.core.crud import crud_image_file
+        paths = await crud_image_file.mark_delete_orphan_question_images(
+            db,
+            user_id=int(user_id),
+            image_ids=[int(source_image_id)] if source_image_id else [],
+        )
+        await db.commit()
+        if paths:
+            crud_image_file.delete_files_best_effort(paths)
+    except Exception as e:
+        logger.warning(f"[wzy] cleanup orphan question image failed: {e}")
 
 @router.post("/{question_id}/reanalyze", response_model=TaskResponse, status_code=202)
 async def reanalyze_question(
@@ -456,11 +462,11 @@ async def reanalyze_question(
                 "knowledge_points": question.knowledge_points or [],
                 "errors": [],
             }
-            
+
             # 执行分析
             result = await analyze_error(state)
             state = {**state, **result}
-            
+
             # 更新结果
             await update_result(state)
 
@@ -481,7 +487,6 @@ async def reanalyze_question(
         status=TaskStatus.PENDING,
         message="Reanalysis started.",
     )
-
 
 @router.post("/similar", response_model=List[QuestionResponse])
 async def find_similar_questions(
@@ -528,17 +533,20 @@ async def find_similar_questions(
 
     return questions
 
-
 @router.get("/review/due", response_model=List[QuestionResponse])
 async def get_due_for_review(
     limit: int = Query(10, ge=1, le=50),
+    subject: Optional[str] = Query(None, description="学科筛选（可选）"),
+    chapter: Optional[str] = Query(None, description="题目类型/章节筛选（可选）"),
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """
-    获取需要复习的错题
-    基于艾宾浩斯遗忘曲线推荐
+    TODO: 学生实现 - 获取需要复习的错题（WZY模块）
+    - 支持 subject=math/physics（同模块多学科）
+    - 支持 chapter 筛选（题目类型/章节）
+    - 参考完整实现：default、tony 模块
     """
-    questions = await crud_question.get_questions_for_review(db, user_id, limit)
-    return [QuestionResponse.model_validate(q) for q in questions]
-
+    if subject and subject not in settings.SUBJECTS:
+        raise HTTPException(status_code=400, detail=f"Subject '{subject}' is not supported by wzy. Supported subjects: {settings.SUBJECTS}")
+    raise HTTPException(status_code=501, detail="TODO: Implement review/due in WZY module")

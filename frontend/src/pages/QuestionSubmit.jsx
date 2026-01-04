@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { questionApi, taskApi } from '../lib/api'
-import { 
-  Send, 
-  Loader2, 
+import { createTaskMonitor, loadTaskState } from '../lib/taskStream'
+import {
+  Send,
+  Loader2,
   CheckCircle2,
   AlertCircle,
   BookOpen,
@@ -44,7 +45,8 @@ const DIFFICULTIES = [
 
 export default function QuestionSubmit() {
   const navigate = useNavigate()
-  const [inputMode, setInputMode] = useState('text') // 'text' or 'image'
+  // 默认展示“图片上传”
+  const [inputMode, setInputMode] = useState('image') // 'text' or 'image'
   const [selectedFile, setSelectedFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
   const [viewerOpen, setViewerOpen] = useState(false)
@@ -58,15 +60,128 @@ export default function QuestionSubmit() {
     tags: '',
   })
   const [taskId, setTaskId] = useState(null)
+  const [taskSubject, setTaskSubject] = useState(null)
   const [taskStatus, setTaskStatus] = useState(null)
   const [polling, setPolling] = useState(false)
+  const [taskProgress, setTaskProgress] = useState(0)
+  const [taskStep, setTaskStep] = useState('')
+  const [taskError, setTaskError] = useState('')
+
+  const monitorRef = useRef(null)
+  const lastToastStatusRef = useRef(null)
+  const persistedTaskKey = 'questionSubmit:lastTask'
+
+  const startTaskMonitor = useCallback((id, subject) => {
+    if (!id || !subject) return
+    setTaskSubject(subject)
+
+    // Persist so refresh/restart can auto-resume
+    localStorage.setItem(persistedTaskKey, JSON.stringify({ taskId: id, subject }))
+
+    // Stop previous monitor
+    if (monitorRef.current) {
+      monitorRef.current.stop()
+      monitorRef.current = null
+    }
+
+    setPolling(true)
+    monitorRef.current = createTaskMonitor({
+      taskId: id,
+      subject,
+      onUpdate: (state) => {
+        if (!state) return
+
+        if (state.status) setTaskStatus(state.status)
+        if (typeof state.progress === 'number') setTaskProgress(state.progress)
+        if (state.current_step) setTaskStep(state.current_step)
+        if (state.error_message) setTaskError(state.error_message)
+
+        // Only toast on transitions
+        if (state.status && state.status !== lastToastStatusRef.current) {
+          lastToastStatusRef.current = state.status
+          if (state.status === 'completed') toast.success('分析完成！')
+          if (state.status === 'failed') toast.error(state.error_message || '处理失败')
+        }
+
+        if (state.status === 'completed') {
+          setPolling(false)
+          const saved = state?.result?.stages?.saved
+          const qids = Array.isArray(saved?.question_ids) ? saved.question_ids : null
+          const createdCount = typeof saved?.created_count === 'number' ? saved.created_count : (qids ? qids.length : null)
+          const sourceImageId = saved?.source_image_id
+          const imageId = state.image_id || sourceImageId
+
+          // 图片录入：只要拿到 source_image_id（image_files.id），就统一跳转到“本图题目”页
+          // 这页与“错题本 -> 查看本图题目”一致，方便用户按上传维度查看全部题目（即使只有 1 道）。
+          if (imageId) {
+            if (qids && qids.length) toast.success(`本次共识别 ${createdCount || qids.length} 道题`)
+            setTimeout(() => navigate(`/questions/image/${imageId}`), 800)
+          } else if (qids && qids.length) {
+            // 兜底：没有 image_id 时，跳到第一道题详情
+            setTimeout(() => navigate(`/questions/${qids[0]}?subject=${encodeURIComponent(subject)}`), 800)
+          } else {
+            setTimeout(() => navigate('/questions'), 800)
+          }
+        }
+
+        if (state.status === 'failed') {
+          setPolling(false)
+          if (state.error_message) setTaskError(state.error_message)
+        }
+      },
+      onTerminal: () => {
+        // 任务结束后清理“自动恢复”指针，避免下次进入页面重复触发提示
+        localStorage.removeItem(persistedTaskKey)
+      },
+    })
+  }, [navigate])
+
+  // Auto-resume last task after refresh/restart
+  useEffect(() => {
+    const raw = localStorage.getItem(persistedTaskKey)
+    if (!raw) return
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed?.taskId && parsed?.subject) {
+        setTaskId(parsed.taskId)
+        setTaskSubject(parsed.subject)
+        const cached = loadTaskState(parsed.taskId)
+        // 避免“进入页面立刻弹历史失败 toast”：把 lastToastStatus 预置为缓存状态
+        if (cached?.status) lastToastStatusRef.current = cached.status
+        if (cached?.status) setTaskStatus(cached.status)
+        if (typeof cached?.progress === 'number') setTaskProgress(cached.progress)
+        if (cached?.current_step) setTaskStep(cached.current_step)
+        if (cached?.error_message) setTaskError(cached.error_message)
+        // 仅在任务未结束时自动恢复监控；已 completed/failed 的历史任务不再自动启动
+        if (cached?.status === 'completed' || cached?.status === 'failed') {
+          localStorage.removeItem(persistedTaskKey)
+        } else {
+          startTaskMonitor(parsed.taskId, parsed.subject)
+        }
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (monitorRef.current) {
+        monitorRef.current.stop()
+        monitorRef.current = null
+      }
+    }
+  }, [])
 
   const submitMutation = useMutation({
     mutationFn: questionApi.create,
     onSuccess: (response) => {
       setTaskId(response.data.task_id)
+      setTaskSubject(formData.subject)
       setTaskStatus('pending')
-      pollTaskStatus(response.data.task_id)
+      startTaskMonitor(response.data.task_id, formData.subject)
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || '提交失败')
@@ -76,6 +191,7 @@ export default function QuestionSubmit() {
   const submitImageMutation = useMutation({
     mutationFn: async () => {
       const formDataToSend = new FormData()
+      formDataToSend.append('input_type', 'image')
       formDataToSend.append('file', selectedFile)
       formDataToSend.append('subject', formData.subject)
       formDataToSend.append('difficulty', formData.difficulty)
@@ -83,84 +199,28 @@ export default function QuestionSubmit() {
         formDataToSend.append('title', formData.title)
       }
 
-      // 从 auth-storage 正确获取 token
-      const authStorage = localStorage.getItem('auth-storage')
-      let token = null
-      if (authStorage) {
-        const { state } = JSON.parse(authStorage)
-        token = state?.token
-      }
-
-      const response = await fetch('/api/v1/questions/ocr', {
-        method: 'POST',
-        body: formDataToSend,
-        headers: token ? {
-          'Authorization': `Bearer ${token}`
-        } : {}
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || 'OCR识别失败')
-      }
-
-      return response.json()
+      // 使用 questionApi，根据 subject 自动路由到对应模块
+      const subject = formData.subject
+      const { createApiClient } = await import('../lib/api')
+      const client = createApiClient(subject)
+      
+      return client.post('/questions/ocr', formDataToSend, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        }
+      }).then(res => res.data)
     },
     onSuccess: (data) => {
       setTaskId(data.task_id)
+      setTaskSubject(formData.subject)
       setTaskStatus('pending')
-      pollTaskStatus(data.task_id)
+      startTaskMonitor(data.task_id, formData.subject)
       toast.success('图片已上传，AI正在识别分析...')
     },
     onError: (error) => {
       toast.error(error.message || 'OCR识别失败')
     },
   })
-
-  const pollTaskStatus = async (id) => {
-    setPolling(true)
-    const maxAttempts = 60 // 2 minutes max
-    let attempts = 0
-
-    const poll = async () => {
-      try {
-        const response = await taskApi.getStatus(id)
-        const status = response.data.status
-
-        setTaskStatus(status)
-
-        if (status === 'completed') {
-          setPolling(false)
-          toast.success('分析完成！')
-          if (response.data.result_id) {
-            setTimeout(() => {
-              navigate(`/questions/${response.data.result_id}`)
-            }, 1500)
-          }
-          return
-        }
-
-        if (status === 'failed') {
-          setPolling(false)
-          toast.error(response.data.error_message || '处理失败')
-          return
-        }
-
-        attempts++
-        if (attempts < maxAttempts) {
-          setTimeout(poll, 2000)
-        } else {
-          setPolling(false)
-          toast.error('处理超时，请稍后查看结果')
-        }
-      } catch (error) {
-        setPolling(false)
-        toast.error('查询状态失败')
-      }
-    }
-
-    poll()
-  }
 
   // 处理文件选择
   const handleFileSelect = useCallback((file) => {
@@ -169,7 +229,17 @@ export default function QuestionSubmit() {
       const url = URL.createObjectURL(file)
       setPreviewUrl(url)
       setTaskId(null)
+      setTaskSubject(null)
       setTaskStatus(null)
+      setPolling(false)
+      setTaskProgress(0)
+      setTaskStep('')
+      setTaskError('')
+      lastToastStatusRef.current = null
+      if (monitorRef.current) {
+        monitorRef.current.stop()
+        monitorRef.current = null
+      }
     } else {
       toast.error('请选择图片文件')
     }
@@ -198,18 +268,59 @@ export default function QuestionSubmit() {
     setPreviewUrl(null)
   }, [])
 
+  const submitTextMutation = useMutation({
+    mutationFn: async () => {
+      // 构建文字数据（JSON格式）
+      const textData = {
+        content: formData.content,
+        student_answer: formData.student_answer,
+        correct_answer: formData.correct_answer,
+        tags: formData.tags ? formData.tags.split(',').map(t => t.trim()) : [],
+        knowledge_points: [],
+        question_type: '',
+      }
+
+      const formDataToSend = new FormData()
+      formDataToSend.append('input_type', 'text')
+      formDataToSend.append('text_data', JSON.stringify(textData))
+      formDataToSend.append('subject', formData.subject)
+      formDataToSend.append('difficulty', formData.difficulty)
+      if (formData.title) {
+        formDataToSend.append('title', formData.title)
+      }
+
+      // 使用 questionApi，根据 subject 自动路由到对应模块
+      const subject = formData.subject
+      const { createApiClient } = await import('../lib/api')
+      const client = createApiClient(subject)
+      
+      return client.post('/questions/ocr', formDataToSend, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        }
+      }).then(res => res.data)
+    },
+    onSuccess: (data) => {
+      setTaskId(data.task_id)
+      setTaskSubject(formData.subject)
+      setTaskStatus('pending')
+      startTaskMonitor(data.task_id, formData.subject)
+      toast.success('文字已提交，AI正在处理分析...')
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || error.message || '提交失败')
+    },
+  })
+
   const handleSubmit = (e) => {
     e.preventDefault()
-    
+
     if (inputMode === 'text') {
       if (!formData.content.trim()) {
         toast.error('请输入题目内容')
         return
       }
-      submitMutation.mutate({
-        ...formData,
-        tags: formData.tags ? formData.tags.split(',').map(t => t.trim()) : [],
-      })
+      submitTextMutation.mutate()
     } else {
       if (!selectedFile) {
         toast.error('请上传题目图片')
@@ -219,7 +330,28 @@ export default function QuestionSubmit() {
     }
   }
 
-  const isProcessing = submitMutation.isPending || submitImageMutation.isPending || polling
+  const isProcessing = submitTextMutation.isPending || submitImageMutation.isPending || polling
+
+  const cancelCurrentTask = useCallback(async () => {
+    if (!taskId) return
+    const subject = taskSubject || formData.subject
+    try {
+      await taskApi.cancel(taskId, subject)
+    } catch (e) {
+      // ignore; we'll stop UI waiting anyway
+    }
+    if (monitorRef.current) {
+      monitorRef.current.stop()
+      monitorRef.current = null
+    }
+    localStorage.removeItem(persistedTaskKey)
+    setPolling(false)
+    setTaskStatus('failed')
+    setTaskProgress(100)
+    setTaskStep('任务已取消')
+    setTaskError('用户已取消任务')
+    toast.success('已取消任务')
+  }, [taskId, taskSubject, formData.subject])
 
   return (
     <div className="max-w-3xl mx-auto animate-fade-in">
@@ -238,20 +370,6 @@ export default function QuestionSubmit() {
         <div className="flex gap-4">
           <button
             type="button"
-            onClick={() => setInputMode('text')}
-            className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
-              inputMode === 'text'
-                ? 'bg-primary-500 text-white'
-                : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50'
-            }`}
-          >
-            <div className="flex items-center justify-center gap-2">
-              <BookOpen className="w-5 h-5" />
-              文字输入
-            </div>
-          </button>
-          <button
-            type="button"
             onClick={() => setInputMode('image')}
             className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
               inputMode === 'image'
@@ -262,6 +380,20 @@ export default function QuestionSubmit() {
             <div className="flex items-center justify-center gap-2">
               <ImagePlus className="w-5 h-5" />
               图片上传
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setInputMode('text')}
+            className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
+              inputMode === 'text'
+                ? 'bg-primary-500 text-white'
+                : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50'
+            }`}
+          >
+            <div className="flex items-center justify-center gap-2">
+              <BookOpen className="w-5 h-5" />
+              文字输入
             </div>
           </button>
         </div>
@@ -466,7 +598,7 @@ export default function QuestionSubmit() {
             taskStatus === 'failed' ? 'bg-red-500/10 border-red-500/30' :
             'bg-primary-500/10 border-primary-500/30'
           }`}>
-            <div className="flex items-center gap-3">
+            <div className="flex items-start gap-3">
               {taskStatus === 'completed' ? (
                 <CheckCircle2 className="w-5 h-5 text-emerald-400" />
               ) : taskStatus === 'failed' ? (
@@ -474,14 +606,36 @@ export default function QuestionSubmit() {
               ) : (
                 <Loader2 className="w-5 h-5 text-primary-400 animate-spin" />
               )}
-              <div>
+              <div className="flex-1 min-w-0">
                 <p className="text-white font-medium">
                   {taskStatus === 'completed' ? '分析完成！即将跳转...' :
                    taskStatus === 'failed' ? '处理失败' :
                    taskStatus === 'processing' ? inputMode === 'image' ? 'AI正在识别和分析...' : 'AI正在分析中...' :
                    '任务已提交，等待处理...'}
                 </p>
+                {(taskStep || typeof taskProgress === 'number') && taskStatus !== 'failed' && (
+                  <p className="text-sm text-slate-300 mt-1">
+                    {taskSubject ? `学科：${(SUBJECTS.find(s => s.value === taskSubject)?.label || taskSubject)}，` : ''}
+                    {taskStep ? `${taskStep}` : '处理中...'}
+                    {typeof taskProgress === 'number' ? `（${Math.round(taskProgress)}%）` : ''}
+                  </p>
+                )}
+                {taskStatus === 'failed' && taskError && (
+                  <p className="text-sm text-red-300 mt-1 break-words">
+                    {taskError}
+                  </p>
+                )}
               </div>
+              {(taskStatus === 'pending' || taskStatus === 'processing') && (
+                <button
+                  type="button"
+                  onClick={cancelCurrentTask}
+                  className="p-1.5 rounded-md hover:bg-slate-800/60 text-slate-300 hover:text-white transition-colors"
+                  title="取消任务"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
         )}

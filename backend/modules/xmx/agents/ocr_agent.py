@@ -12,7 +12,6 @@ from backend.modules.xmx.config import settings
 
 logger = logging.getLogger(__name__)
 
-
 class OCRAgent(BaseAgent):
     """
     OCR识别Agent

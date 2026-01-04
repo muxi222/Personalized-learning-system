@@ -10,7 +10,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 class BaseAgent(ABC):
     """
     Agent基类
@@ -158,7 +157,6 @@ class BaseAgent(ABC):
         else:
             self.logger.error(message)
 
-
 class BaseQuestionAgent(BaseAgent):
     """
     错题相关Agent的基类
@@ -191,7 +189,6 @@ class BaseQuestionAgent(BaseAgent):
             return False
 
         return True
-
 
 class BaseOCRAgent(BaseAgent):
     """

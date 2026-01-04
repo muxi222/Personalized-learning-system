@@ -4,7 +4,9 @@ TONY Module - FastAPI Application Entry Point
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,12 +18,39 @@ from .api.router import api_router
 from backend.core.db.session import init_db, close_db
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format=settings.LOG_FORMAT,
-)
-logger = logging.getLogger(__name__)
+_level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
+_fmt = settings.LOG_FORMAT
 
+# Ensure log directory exists and write to file by default (Tony requirement).
+try:
+    log_path = settings.LOG_FILE or "./logs/tony.log"
+    log_dir = os.path.dirname(log_path) or "."
+    os.makedirs(log_dir, exist_ok=True)
+except Exception:
+    log_path = None
+
+root_logger = logging.getLogger()
+root_logger.setLevel(_level)
+
+# Avoid duplicate handlers on reload
+has_file = any(isinstance(h, RotatingFileHandler) for h in root_logger.handlers)
+has_stream = any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in root_logger.handlers)
+
+formatter = logging.Formatter(_fmt)
+
+if not has_stream:
+    sh = logging.StreamHandler()
+    sh.setLevel(_level)
+    sh.setFormatter(formatter)
+    root_logger.addHandler(sh)
+
+if log_path and not has_file:
+    fh = RotatingFileHandler(log_path, maxBytes=50 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    fh.setLevel(_level)
+    fh.setFormatter(formatter)
+    root_logger.addHandler(fh)
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,7 +73,10 @@ async def lifespan(app: FastAPI):
     try:
         from backend.core.services.vector_store_service import get_vector_store_service
         vector_store = get_vector_store_service()
-        await vector_store.initialize(index_path=settings.module_vector_path)
+        await vector_store.initialize(
+            index_path=settings.module_vector_path,
+            bm25_path=settings.module_bm25_path,
+        )
         logger.info(f"Vector store initialized at {settings.module_vector_path}")
     except Exception as e:
         logger.warning(f"Failed to initialize vector store: {e}")
@@ -55,7 +87,6 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application...")
     await close_db()
     logger.info("Application shutdown complete")
-
 
 # Create FastAPI application
 app = FastAPI(
@@ -96,7 +127,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Exception handlers
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -132,7 +162,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
-
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
@@ -152,10 +181,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "Internal server error"},
     )
 
-
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
-
 
 # Health check endpoint
 @app.get("/health", tags=["Health"])
@@ -171,7 +198,6 @@ async def health_check():
         "version": settings.APP_VERSION,
         "port": settings.PORT,
     }
-
 
 @app.get("/", tags=["Root"])
 async def root():

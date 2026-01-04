@@ -16,7 +16,6 @@ from backend.modules.rpj.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-
 def run_async(coro):
     """Helper to run async functions in sync context"""
     try:
@@ -26,7 +25,6 @@ def run_async(coro):
         asyncio.set_event_loop(loop)
 
     return loop.run_until_complete(coro)
-
 
 async def _update_task_status(task_id: str, status: str, progress: float, current_step: str):
     """更新任务状态"""
@@ -50,7 +48,6 @@ async def _update_task_status(task_id: str, status: str, progress: float, curren
         )
         await session.commit()
 
-
 async def _mark_task_failed(task_id: str, error_message: str):
     """标记任务失败"""
     from backend.core.db.session import async_session_maker
@@ -59,7 +56,6 @@ async def _mark_task_failed(task_id: str, error_message: str):
     async with async_session_maker() as session:
         await fail_task(session, task_id, error_message)
         await session.commit()
-
 
 # ============ 错题录入任务 ============
 
@@ -95,7 +91,6 @@ def process_question_task(
         run_async(_mark_task_failed(task_id, str(e)))
         raise self.retry(exc=e, countdown=60)
 
-
 async def _process_question_async(
     task_id: str,
     raw_input: str,
@@ -118,7 +113,6 @@ async def _process_question_async(
     )
 
     return result
-
 
 # ============ 相似题目检索任务 ============
 
@@ -152,7 +146,6 @@ def find_similar_questions_task(
         run_async(_mark_task_failed(task_id, str(e)))
         raise self.retry(exc=e, countdown=30)
 
-
 async def _find_similar_async(
     task_id: str,
     question_id: int,
@@ -173,7 +166,6 @@ async def _find_similar_async(
     )
 
     return result
-
 
 # ============ OCR 试卷批改任务 ============
 
@@ -207,7 +199,6 @@ def ocr_exam_task(
         run_async(_mark_task_failed(task_id, str(e)))
         raise self.retry(exc=e, countdown=30)
 
-
 async def _ocr_exam_async(
     task_id: str,
     image_path: str,
@@ -228,7 +219,6 @@ async def _ocr_exam_async(
     )
 
     return result
-
 
 # ============ 重新分析任务 ============
 
@@ -258,7 +248,6 @@ def reanalyze_question_task(
         run_async(_mark_task_failed(task_id, str(e)))
         raise self.retry(exc=e, countdown=30)
 
-
 async def _reanalyze_async(task_id: str, question_id: int) -> dict:
     """异步重新分析"""
     from backend.core.db.session import async_session_maker
@@ -281,7 +270,6 @@ async def _reanalyze_async(task_id: str, question_id: int) -> dict:
     )
 
     return result
-
 
 # ============ 批量处理任务 ============
 

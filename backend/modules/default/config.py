@@ -11,7 +11,6 @@ from functools import lru_cache
 from typing import List
 from backend.core.base_config import BaseAppSettings
 
-
 class DefaultSettings(BaseAppSettings):
     """默认模块配置 - 处理所有学科"""
 
@@ -32,12 +31,10 @@ class DefaultSettings(BaseAppSettings):
     # 日志文件
     LOG_FILE: str = "./logs/default.log"
 
-
 @lru_cache()
 def get_settings() -> DefaultSettings:
     """Get cached Default settings instance"""
     return DefaultSettings()
-
 
 # 导出settings实例供模块使用
 settings = get_settings()

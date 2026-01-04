@@ -37,17 +37,17 @@ export const useAuthStore = create(
         } catch (error) {
           // 处理验证错误，显示详细的错误信息
           let errorMessage = '注册失败'
-          
+
           if (error.response?.data) {
             const data = error.response.data
-            
+
             // 处理 422 验证错误
             if (error.response.status === 422 && data.error_details) {
               // 解析验证错误详情
               const fieldErrors = data.error_details.map(err => {
                 const field = err.field.replace('body -> ', '')
                 let message = err.message
-                
+
                 // 友好的错误消息映射
                 const fieldNames = {
                   'username': '用户名',
@@ -56,9 +56,9 @@ export const useAuthStore = create(
                   'full_name': '姓名',
                   'grade': '年级',
                 }
-                
+
                 const fieldName = fieldNames[field] || field
-                
+
                 // 错误消息翻译
                 if (message.includes('at least 3 characters')) {
                   message = '至少需要3个字符'
@@ -69,10 +69,10 @@ export const useAuthStore = create(
                 } else if (message.includes('value is not a valid email')) {
                   message = '邮箱格式不正确'
                 }
-                
+
                 return `${fieldName}: ${message}`
               })
-              
+
               errorMessage = fieldErrors.join('；')
             } else if (data.errors && Array.isArray(data.errors)) {
               // 兼容旧的错误格式
@@ -81,9 +81,9 @@ export const useAuthStore = create(
               errorMessage = data.detail
             }
           }
-          
-          return { 
-            success: false, 
+
+          return {
+            success: false,
             error: errorMessage,
             errorDetails: error.response?.data?.error_details || null
           }
@@ -100,12 +100,11 @@ export const useAuthStore = create(
     }),
     {
       name: 'auth-storage',
-      partialize: (state) => ({ 
-        token: state.token, 
+      partialize: (state) => ({
+        token: state.token,
         isAuthenticated: state.isAuthenticated,
         user: state.user,
       }),
     }
   )
 )
-

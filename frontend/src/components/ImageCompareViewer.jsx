@@ -5,9 +5,9 @@ import { X, ZoomIn, ZoomOut, Download, ArrowLeftRight } from 'lucide-react'
  * 图片对比查看器
  * 支持左右并排展示两张图片，同步缩放
  */
-export default function ImageCompareViewer({ 
-  isOpen, 
-  onClose, 
+export default function ImageCompareViewer({
+  isOpen,
+  onClose,
   leftImage = { url: '', title: '原始' },
   rightImage = { url: '', title: '批改' }
 }) {
@@ -228,4 +228,3 @@ export default function ImageCompareViewer({
     </div>
   )
 }
-

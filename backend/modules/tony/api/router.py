@@ -4,7 +4,12 @@ TONY Module - API Router
 """
 
 from fastapi import APIRouter
-from .endpoints import questions, ocr, corrections, learning, guidance, image_files, users, tasks, feedback
+from .endpoints.intake import questions
+from .endpoints.ai_correction import ocr, corrections
+from .endpoints.learning import learning, guidance
+from .endpoints.review import review
+from .endpoints.shared import image_files, users, tasks, feedback
+from .endpoints.stats import feedback as feedback_stats
 
 api_router = APIRouter()
 
@@ -14,7 +19,10 @@ api_router.include_router(ocr.router, prefix="/ocr", tags=["OCR"])
 api_router.include_router(corrections.router, prefix="/corrections", tags=["Corrections"])
 api_router.include_router(learning.router, prefix="/learning", tags=["Learning"])
 api_router.include_router(guidance.router, prefix="/guidance", tags=["Guidance"])
+# Review endpoints are still mounted under /questions/... for backward compatibility
+api_router.include_router(review.router, prefix="/questions", tags=["Review"])
 api_router.include_router(image_files.router, prefix="/image-files", tags=["Image Files"])
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
+api_router.include_router(feedback_stats.router, prefix="/feedback", tags=["Feedback"])

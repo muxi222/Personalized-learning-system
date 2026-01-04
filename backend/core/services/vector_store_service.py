@@ -11,7 +11,6 @@ from .hybrid_search_service import get_hybrid_search_service
 
 logger = logging.getLogger(__name__)
 
-
 class VectorStoreService:
     """
     向量数据库服务
@@ -22,13 +21,30 @@ class VectorStoreService:
         self._hybrid_service = get_hybrid_search_service()
         self._initialized = False
 
-    async def initialize(self) -> bool:
-        """Initialize vector store connection"""
+    async def initialize(
+        self,
+        *,
+        index_path: Optional[str] = None,
+        bm25_path: Optional[str] = None,
+        force_recreate: bool = False,
+        **_: Any,
+    ) -> bool:
+        """
+        Initialize vector store connection.
+
+        Backward-compatible:
+        - accept legacy args: index_path (FAISS dir), bm25_path, force_recreate
+        - ignore extra kwargs to avoid startup warnings across modules
+        """
         if self._initialized:
             return True
 
         try:
-            self._initialized = await self._hybrid_service.initialize()
+            self._initialized = await self._hybrid_service.initialize(
+                vector_store_path=index_path,
+                bm25_index_path=bm25_path,
+                force_recreate=force_recreate,
+            )
             if self._initialized:
                 logger.info("Vector store initialized via FAISS hybrid service")
             return self._initialized
@@ -57,7 +73,7 @@ class VectorStoreService:
     ) -> bool:
         """
         Add a single embedding to the vector store
-        
+
         Args:
             doc_id: Unique document ID (usually question_id)
             embedding: Embedding vector
@@ -120,13 +136,13 @@ class VectorStoreService:
     ) -> List[Dict[str, Any]]:
         """
         Search for similar documents by embedding
-        
+
         Args:
             query_embedding: Query embedding vector
             n_results: Number of results to return
             where: Optional filter conditions
             include: Fields to include in results
-            
+
         Returns:
             List of similar documents with scores
         """
@@ -228,10 +244,8 @@ class VectorStoreService:
             return await self.initialize()
         return True
 
-
 # Singleton instance
 _vector_store_service: Optional[VectorStoreService] = None
-
 
 @lru_cache()
 def get_vector_store_service() -> VectorStoreService:
@@ -240,4 +254,3 @@ def get_vector_store_service() -> VectorStoreService:
     if _vector_store_service is None:
         _vector_store_service = VectorStoreService()
     return _vector_store_service
-

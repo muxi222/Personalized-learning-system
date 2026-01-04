@@ -35,7 +35,6 @@ router = APIRouter()
 
 UPLOAD_DIR = "./data/uploads"
 
-
 def validate_subject(subject: str) -> None:
     """
     验证学科是否属于RPJ模块
@@ -49,6 +48,27 @@ def validate_subject(subject: str) -> None:
                    f"Supported subjects: {settings.SUBJECTS}"
         )
 
+
+@router.get("/review/due", response_model=List[QuestionResponse])
+async def get_due_for_review(
+    limit: int = Query(10, ge=1, le=50),
+    subject: Optional[str] = Query(None, description="学科筛选（可选）"),
+    chapter: Optional[str] = Query(None, description="题目类型/章节筛选（可选）"),
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    TODO: 学生实现 - 获取需要复习的错题（RPJ模块）
+    - 支持 subject=chinese/english/politics（同模块多学科）
+    - 支持 chapter 筛选（题目类型/章节）
+    - 参考完整实现：default、tony 模块
+    """
+    if subject and subject not in settings.SUBJECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Subject '{subject}' is not supported by RPJ module. Supported subjects: {settings.SUBJECTS}",
+        )
+    raise HTTPException(status_code=501, detail="TODO: Implement review/due in RPJ module")
 
 @router.post("/", response_model=TaskResponse, status_code=202)
 async def create_question(
@@ -110,6 +130,32 @@ async def create_question(
     #
     # background_tasks.add_task(process_async)
 
+    # TODO(student): 学科判定 + 分类归一化（统一模板 v1；与 tony 最新实现对齐的关键能力）
+    # 【输入】user_selected_subject=question_data.subject，text=question_data.content（+OCR文本如有）
+    # 【输出】保存到数据库前，需要生成：
+    #   - detected_subject + confidence(0~1)
+    #   - chapter: 从 CHAPTER_TAXONOMY[detected_subject] 选 1 个（否则“综合”）
+    #   - knowledge_points: 从 KNOWLEDGE_POINT_TAXONOMY[detected_subject] 选 1~3 个（否则“综合”）
+    #   - tags: 2~6 个短词（用于检索，避免太碎）
+    # 【规则】
+    #   - 若 detected_subject != user_selected_subject 且 confidence >= 0.75：提示“学科不匹配”，拒绝入库并提示用户改学科/换内容
+    #   - taxonomy 必须收敛：chapter 建议 6~10 个，knowledge_points 建议 10~25 个；同义项合并，避免发散
+    # 【推荐 taxonomy 示例（RPJ: chinese/english/politics）】
+    #   CHAPTER_TAXONOMY = {
+    #     "chinese": ["阅读理解", "文言文", "诗词鉴赏", "写作", "基础知识(字词句)", "综合"],
+    #     "english": ["词汇语法", "完形填空", "阅读理解", "写作", "听力", "综合"],
+    #     "politics": ["法律与规则", "道德与价值观", "国家制度", "经济与社会", "时政与案例", "综合"],
+    #   }
+    #   KNOWLEDGE_POINT_TAXONOMY = {
+    #     "chinese": ["主旨概括", "人物形象", "修辞手法", "表达方式", "文言实词虚词", "病句与标点", "写作立意与结构", "综合"],
+    #     "english": ["时态语态", "从句", "非谓语", "词汇辨析", "阅读策略", "写作句型", "综合"],
+    #     "politics": ["宪法与法律", "权利与义务", "社会主义核心价值观", "法治思维", "公民责任", "时事热点", "综合"],
+    #   }
+    # 【实现建议】
+    #   - 调用 settings.LLM_API_ENDPOINT 的 /chat/completions（二次判定+归一化）
+    #   - 优先更强模型（gemini-3-pro-preview / gpt-5.2），可通过环境变量 RPJ_HIGH_ACCURACY_MODEL 覆盖
+    # 【参考实现】backend/modules/tony/agents/question_intake_ocr_agent.py（仅 tony 模块完整实现）
+
     # ============ 当前返回Mock响应 ============
     logger.info(f"[RPJ] 收到错题提交请求: task_id={task_id}, subject={question_data.subject}")
 
@@ -118,7 +164,6 @@ async def create_question(
         status=TaskStatus.PENDING,
         message="题目已提交，正在处理中（学生TODO：实现实际处理逻辑）"
     )
-
 
 @router.post("/ocr", response_model=TaskResponse, status_code=202)
 async def create_question_from_image(
@@ -165,6 +210,18 @@ async def create_question_from_image(
     # ============ TODO 5: 触发QuestionIntakeAgent ============
     # 提示: 将OCR识别的内容传递给Agent处理
 
+    # TODO(student): 学科判定 + 分类归一化（统一模板 v1；与 tony 最新实现对齐的关键能力）
+    # 【输入】user_selected_subject=subject，text=OCR识别出的题目文本/结构化题目
+    # 【输出】保存到数据库前，需要生成：
+    #   - detected_subject + confidence(0~1)
+    #   - chapter: 从 CHAPTER_TAXONOMY[detected_subject] 选 1 个（否则“综合”）
+    #   - knowledge_points: 从 KNOWLEDGE_POINT_TAXONOMY[detected_subject] 选 1~3 个（否则“综合”）
+    #   - tags: 2~6 个短词（用于检索，避免太碎）
+    # 【规则】detected_subject != user_selected_subject 且 confidence>=0.75：提示“学科不匹配”，拒绝入库并提示用户改学科/换内容
+    # 【推荐 taxonomy 示例】见上方 create_question 中模板
+    # 【实现建议】OCR 后调用更强模型二次判定+归一化（RPJ_HIGH_ACCURACY_MODEL 可覆盖）
+    # 【参考实现】backend/modules/tony/agents/question_intake_ocr_agent.py（仅 tony 模块完整实现）
+
     logger.info(f"[RPJ] 收到OCR错题提交: task_id={task_id}, subject={subject}")
 
     return TaskResponse(
@@ -172,7 +229,6 @@ async def create_question_from_image(
         status=TaskStatus.PENDING,
         message="图片已上传，正在识别中（学生TODO：实现OCR和处理逻辑）"
     )
-
 
 @router.get("/", response_model=QuestionListResponse)
 async def list_questions(
@@ -214,7 +270,6 @@ async def list_questions(
         message="学生TODO：实现数据库查询逻辑"
     )
 
-
 @router.get("/{question_id}", response_model=QuestionDetail)
 async def get_question(
     question_id: int,
@@ -245,7 +300,6 @@ async def get_question(
         status_code=404,
         detail="学生TODO：实现题目详情查询逻辑"
     )
-
 
 @router.put("/{question_id}", response_model=QuestionResponse)
 async def update_question(
@@ -278,7 +332,6 @@ async def update_question(
         detail="学生TODO：实现题目更新逻辑"
     )
 
-
 @router.delete("/{question_id}")
 async def delete_question(
     question_id: int,
@@ -307,7 +360,6 @@ async def delete_question(
         status_code=404,
         detail="学生TODO：实现题目删除逻辑"
     )
-
 
 @router.post("/{question_id}/similar", response_model=QuestionListResponse)
 async def find_similar_questions(

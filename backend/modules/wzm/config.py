@@ -11,9 +11,8 @@ from functools import lru_cache
 from typing import List
 from backend.core.base_config import BaseAppSettings
 
-
 class WZMSettings(BaseAppSettings):
-    """WZM模块配置 - 历史、地理、其他"""
+    """WZM模块配置 - 化学"""
 
     # 模块特定配置
     MODULE_NAME: str = "wzm"
@@ -26,12 +25,10 @@ class WZMSettings(BaseAppSettings):
     # 日志文件
     LOG_FILE: str = "./logs/wzm.log"
 
-
 @lru_cache()
 def get_settings() -> WZMSettings:
     """Get cached WZM settings instance"""
     return WZMSettings()
-
 
 # 导出settings实例供模块使用
 settings = get_settings()
