@@ -238,6 +238,32 @@ export default function QuestionList() {
     return Number.isFinite(id) ? id : null
   }
 
+  const sortGroupQuestions = (qs) => {
+    const arr = Array.isArray(qs) ? qs : []
+    // Keep original order as fallback, but prefer explicit ordering fields when present.
+    return arr
+      .map((q, idx) => ({ q, __idx: idx }))
+      .sort((a, b) => {
+        const av = a?.q || {}
+        const bv = b?.q || {}
+        const ai = Number.isFinite(Number(av.upload_index)) ? Number(av.upload_index) : null
+        const bi = Number.isFinite(Number(bv.upload_index)) ? Number(bv.upload_index) : null
+        if (ai != null && bi != null && ai !== bi) return ai - bi
+        if (ai != null && bi == null) return -1
+        if (ai == null && bi != null) return 1
+
+        const an = Number.isFinite(Number(av.question_number)) ? Number(av.question_number) : null
+        const bn = Number.isFinite(Number(bv.question_number)) ? Number(bv.question_number) : null
+        if (an != null && bn != null && an !== bn) return an - bn
+        if (an != null && bn == null) return -1
+        if (an == null && bn != null) return 1
+
+        // stable fallback: keep backend order
+        return a.__idx - b.__idx
+      })
+      .map(x => x.q)
+  }
+
   const handleSearch = (e) => {
     e.preventDefault()
     setPage(1)
@@ -585,7 +611,7 @@ export default function QuestionList() {
                         </div>
 
                         <div className="space-y-2">
-                          {(group.questions || []).map((q) => (
+                          {sortGroupQuestions(group.questions || []).map((q, qi) => (
                             <Link
                               key={q.id}
                               to={`/questions/${q.id}${q.subject ? `?subject=${encodeURIComponent(q.subject)}` : ''}`}
@@ -593,8 +619,13 @@ export default function QuestionList() {
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                  <div className="text-white text-sm font-medium line-clamp-1">
-                                    {q.title || (q.content ? q.content.slice(0, 60) : '题目内容')}
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-primary-500/15 text-primary-200 text-xs font-semibold flex-shrink-0">
+                                      {qi + 1}
+                                    </span>
+                                    <div className="text-white text-sm font-medium line-clamp-1">
+                                      {q.title || (q.content ? q.content.slice(0, 60) : '题目内容')}
+                                    </div>
                                   </div>
                                   <div className="text-slate-400 text-xs line-clamp-1 mt-1">
                                     {q.content}

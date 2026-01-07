@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import text
+from sqlalchemy import event
 
 from ..base_config import get_base_settings
 
@@ -36,7 +37,7 @@ def _create_engine() -> AsyncEngine:
         if db_path != ":memory:":
             os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
 
-        return create_async_engine(
+        eng = create_async_engine(
             database_url,
             echo=settings.DATABASE_ECHO,
             connect_args={
@@ -45,6 +46,25 @@ def _create_engine() -> AsyncEngine:
             },
             poolclass=StaticPool,
         )
+
+        # SQLite concurrency tuning:
+        # - WAL allows readers and writers to coexist (read transactions won't block writers).
+        # - busy_timeout makes SQLite wait instead of failing immediately when encountering locks.
+        # These settings are critical when endpoints do long OCR/LLM calls.
+        @event.listens_for(eng.sync_engine, "connect")
+        def _sqlite_on_connect(dbapi_connection, _connection_record):  # pragma: no cover
+            try:
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL;")
+                cursor.execute("PRAGMA synchronous=NORMAL;")
+                cursor.execute("PRAGMA busy_timeout=30000;")  # milliseconds
+                cursor.execute("PRAGMA foreign_keys=ON;")
+                cursor.close()
+            except Exception:
+                # Best-effort: do not block app startup if PRAGMA fails
+                logger.exception("[sqlite] failed to set PRAGMA journal_mode/busy_timeout")
+
+        return eng
 
     # PostgreSQL configuration
     return create_async_engine(

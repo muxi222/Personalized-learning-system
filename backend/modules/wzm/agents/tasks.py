@@ -99,7 +99,7 @@ async def _process_question_async(
     student_answer: Optional[str] = None,
 ) -> dict:
     """异步处理错题"""
-    from .question_intake_agent import QuestionIntakeAgent
+    from .intake.question_intake_agent import QuestionIntakeAgent
 
     await _update_task_status(task_id, "processing", 5.0, "initializing")
 
@@ -153,7 +153,7 @@ async def _find_similar_async(
     top_k: int,
 ) -> dict:
     """异步查找相似题目"""
-    from .similar_question_agent import SimilarQuestionAgent
+    from .learning.similar_question_agent import SimilarQuestionAgent
 
     await _update_task_status(task_id, "processing", 10.0, "searching")
 
@@ -206,7 +206,7 @@ async def _ocr_exam_async(
     subject: str,
 ) -> dict:
     """异步OCR批改"""
-    from .ocr_agent import OCRAgent
+    from .ai_correction.ocr_agent import OCRAgent
 
     await _update_task_status(task_id, "processing", 5.0, "ocr_starting")
 
@@ -252,7 +252,7 @@ async def _reanalyze_async(task_id: str, question_id: int) -> dict:
     """异步重新分析"""
     from backend.core.db.session import async_session_maker
     from backend.core.crud.crud_question import get_question
-    from .question_intake_agent import QuestionIntakeAgent
+    from .intake.question_intake_agent import QuestionIntakeAgent
 
     async with async_session_maker() as session:
         question = await get_question(session, question_id)
