@@ -1,15 +1,15 @@
-# 环境设置与启动指南
+## 环境设置与启动指南（本地 / Conda）
 
-## 前置要求
+### 前置要求
 
 - **Conda**: Anaconda 或 Miniconda
 - **Python**: 3.10+
 - **Node.js**: 16+ (用于前端)
-- **Redis**: 用于任务队列
+- **Redis**: 用于任务队列（Celery broker/result backend）
 
-## 快速开始
+### 快速开始
 
-### 1. 创建 Conda 环境
+#### 1) 创建 Conda 环境
 
 ```bash
 # 创建环境
@@ -25,7 +25,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### 2. 配置环境变量
+#### 2) 配置环境变量
 
 ```bash
 # 复制环境变量模板
@@ -35,38 +35,30 @@ cp env.example .env
 vim .env
 ```
 
-必需的环境变量：
-- `OPENAI_API_KEY`: OpenAI API 密钥
-- `ANTHROPIC_API_KEY`: Anthropic API 密钥（可选）
-- `GOOGLE_API_KEY`: Google Gemini API 密钥（用于 OCR）
-- `REDIS_URL`: Redis 连接地址
+推荐配置（最小可运行集）：
+- `LLM_API_ENDPOINT` + `LLM_API_KEY`: 统一的 LLM API 端点（用于 Gemini OCR 等）
+- `SECRET_KEY`: JWT/鉴权密钥（生产必须更换）
 
-### 3. 启动服务
+可选：
+- `OPENAI_API_KEY` / `OPENAI_API_BASE` / `OPENAI_MODEL`: 用于对接 OpenAI-compatible 推理服务（如 vLLM）
+- `GRAPHRAG_ENABLED=true`: 启用 GraphRAG（读取 `data/training/<module>/graphrag/graph.json`）
+
+#### 3) 启动服务（在线服务）
 
 ```bash
-# 进入脚本目录
-cd deploy/scripts
+# 启动所有模块 + 前端（推荐）
+./deploy/scripts/start.sh all
 
-# 启动所有服务
-./start.sh
+# 启动单模块（示例：tony）
+./deploy/scripts/start.sh api_tony
+./deploy/scripts/start.sh agent_tony
 
-# 仅启动 API 服务
-./start.sh api
-
-# 仅启动 Agent Worker
-./start.sh agent
-
-# 仅启动前端
-./start.sh frontend
-
-# 查看服务状态
-./start.sh status
-
-# 停止所有服务
-./start.sh stop
+# 状态/停止
+./deploy/scripts/start.sh status
+./deploy/scripts/start.sh stop_all
 ```
 
-### 4. 初始化数据目录
+#### 4) 初始化数据目录
 
 首次运行前，创建必要的目录结构：
 
@@ -79,9 +71,9 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 #      data/uploads/{username_email}/questions/{subject}/
 ```
 
-### 5. 访问服务
+#### 5) 访问服务
 
-- **API 文档**: http://localhost:6100/docs
+- **API 文档**: `http://localhost:6100/docs`（default）或 `http://localhost:6005/docs`（tony）
 - **前端界面**: http://localhost:8000
 
 ### 6. 功能使用指南
@@ -117,7 +109,7 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 3. 按学科、难度筛选
 4. 查看错因分析和举一反三
 
-## 依赖说明
+### 依赖说明
 
 **requirements.txt** 包含了所有项目依赖：
 - 核心运行时依赖（FastAPI、LangChain、SQLAlchemy 等）
@@ -126,7 +118,7 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 
 **注意**: 如需 GPU 支持，请根据 CUDA 版本参考 [PyTorch 官方文档](https://pytorch.org/get-started/locally/) 安装对应版本的 PyTorch。
 
-## 项目结构
+### 项目结构
 
 ```
 learning_assistant/
@@ -143,7 +135,7 @@ learning_assistant/
 └── pyproject.toml       # 项目配置
 ```
 
-## 常见问题
+### 常见问题
 
 ### 1. Conda 环境找不到？
 
@@ -184,7 +176,7 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
-## 开发工作流
+### 开发工作流
 
 ### 运行测试
 
@@ -205,11 +197,17 @@ ruff backend/
 mypy backend/
 ```
 
-### 启动微调
+### 启动 GraphRAG / 训练 / 模型服务化（离线流水线）
 
 ```bash
-conda activate 312_edu
-python scripts/fine_tuning/run_qlora.py --config configs/qlora_config.yaml
+# 统一入口（支持 --module，tony 完整实现）
+./deploy/scripts/pipeline.sh help
+
+# 构建 tony GraphRAG KB
+./deploy/scripts/pipeline.sh kb --module tony --build-index --embedding-backend hash
+
+# 准备数据集
+./deploy/scripts/pipeline.sh datasets --module tony
 ```
 
 ## Docker 部署（可选）

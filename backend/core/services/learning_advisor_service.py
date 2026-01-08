@@ -194,7 +194,8 @@ class LearningAdvisorService:
         subject_map = {}
 
         for q in questions:
-            for kp in (q.tags or []):
+            # Prefer structured knowledge_points; fall back to tags if needed for legacy data.
+            for kp in ((q.knowledge_points or []) or (q.tags or [])):
                 knowledge_point_errors[kp] += 1
                 subject_map[kp] = q.subject.value if hasattr(q.subject, 'value') else str(q.subject)
 
@@ -368,19 +369,24 @@ class LearningAdvisorService:
             embedding_service = get_embedding_service()
             query_embedding = await embedding_service.embed_text(question.content)
 
-            if not query_embedding:
-                return []
-
             # 混合检索
             search_service = get_hybrid_search_service()
             await search_service.initialize()
 
-            results = await search_service.hybrid_search(
-                query_text=question.content,
-                query_embedding=query_embedding,
-                top_k=top_k + 1,  # 多取一个，排除自己
-                filter_metadata={"subject": question.subject.value},
-            )
+            if query_embedding:
+                results = await search_service.hybrid_search(
+                    query_text=question.content,
+                    query_embedding=query_embedding,
+                    top_k=top_k + 1,  # 多取一个，排除自己
+                    filter_metadata={"subject": question.subject.value},
+                )
+            else:
+                # Fallback: offline / no-embedding environment.
+                results = await search_service.search_bm25(
+                    query_text=question.content,
+                    top_k=top_k + 1,
+                    filter_metadata={"subject": question.subject.value},
+                )
 
             # 过滤掉原题目
             similar_questions = []

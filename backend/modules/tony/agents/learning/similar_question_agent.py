@@ -195,6 +195,34 @@ async def vector_retrieval(state: SimilarQuestionState) -> Dict[str, Any]:
         retrieved_ids = [int(r["id"]) for r in filtered_results]
         similarity_scores = [r.get("score", 0) for r in filtered_results]
 
+        # Optional GraphRAG expansion (feature-gated; no behavior change by default)
+        try:
+            if getattr(settings, "GRAPHRAG_ENABLED", False):
+                from backend.core.services.graphrag_service import get_graphrag_service
+
+                graphrag = get_graphrag_service()
+                await graphrag.initialize(graph_path=settings.module_graphrag_graph_path)
+
+                subject = state.get("subject") or original_question.get("subject") or "other"
+                kps = state.get("knowledge_points") or original_question.get("knowledge_points") or []
+                exclude = set(retrieved_ids + ([question_id] if question_id else []))
+                extra_ids = graphrag.find_questions_by_knowledge_points(
+                    subject=subject,
+                    knowledge_points=list(kps),
+                    top_k=max(10, top_k * 2),
+                    exclude_question_ids=exclude,
+                )
+
+                # Keep vector results first; append graph-expanded candidates.
+                for eid in extra_ids:
+                    if eid not in exclude:
+                        retrieved_ids.append(eid)
+                        similarity_scores.append(0.0)  # unknown score; downstream can ignore
+                        exclude.add(eid)
+        except Exception as _e:
+            # Never fail the main flow due to optional GraphRAG enhancement.
+            logger.debug(f"[vector_retrieval] GraphRAG expansion skipped: {_e}")
+
         logger.info(f"[vector_retrieval] Found {len(retrieved_ids)} similar questions")
 
         return {

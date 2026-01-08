@@ -1,0 +1,26 @@
+{
+  "_comment": "Tony preference optimization (DPO). Requires data from datasets/scripts/prepare_preferences.py",
+  "method": "dpo",
+  "model_name": "OpenPipe/Qwen3-14B-Instruct",
+  "dataset_path": "data/training/tony/datasets/preference/train.jsonl",
+  "output_dir": "data/training/tony/checkpoints/dpo_lora",
+
+  "lora_r": 32,
+  "lora_alpha": 16,
+  "lora_dropout": 0.05,
+  "lora_target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+
+  "num_epochs": 1,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 16,
+  "learning_rate": 1e-5,
+  "max_seq_length": 2048,
+
+  "use_4bit": true,
+  "bnb_4bit_compute_dtype": "bfloat16",
+  "bnb_4bit_quant_type": "nf4",
+  "use_nested_quant": false,
+
+  "beta": 0.1
+}
+

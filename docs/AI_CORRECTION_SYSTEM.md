@@ -1,4 +1,9 @@
-# AI批注历史系统设计文档
+# AI批注历史系统（实现细节参考）
+
+> 本文档保留为 **AI 批改系统的实现细节参考**。
+>
+> 从整体架构、模块化工程、训练/服务化选型、以及 AI 批改与错题本/学习建议/复习的整合视角，请以主设计文档为准：
+> - `docs/AI_learning_assistant_design.md`
 
 ## 1. 概述
 
@@ -303,60 +308,10 @@ hint: "月考试卷"
 
 ## 5. 前端实现
 
-### 5.1 批改历史页面 (`CorrectionHistory.jsx`)
+本节 UI/交互设计内容已合并至主设计文档（避免重复维护）：
+- `docs/AI_learning_assistant_design.md`（“关键业务流程 / 图片 URL 规范 / 前端 proxy 约束”）
 
-**路由**：`/corrections`
-
-**功能模块**：
-
-#### 统计卡片（顶部）
-```
-┌─────────────────────────────────────────────────┐
-│ 批改次数: 5      题目总数: 50                   │
-│ 平均正确率: 82%  平均得分: 85.0                 │
-└─────────────────────────────────────────────────┘
-```
-
-#### 学科表现卡片
-```
-┌─────────────────────────────────────────────────┐
-│ 各学科表现                                       │
-├──────────┬──────────┬──────────┬───────────────┤
-│ 数学     │ 英语     │ 物理     │ ...           │
-│ 批改:3次 │ 批改:2次 │ 批改:1次 │               │
-│ 正确率:85%│正确率:78%│正确率:90%│               │
-│ 错题:5   │ 错题:8   │ 错题:2   │               │
-└──────────┴──────────┴──────────┴───────────────┘
-```
-
-#### 筛选栏
-- 时间周期：本周 / 本月 / 本季度 / 本年
-- 学科筛选：全部学科 / 数学 / 英语 / ...
-
-#### 批注记录卡片
-```
-┌──────────────────────┐
-│   [试卷图片预览]      │
-│   [学科标签]          │
-├──────────────────────┤
-│ 数学月考试卷          │
-│ 2024-12-18 10:30     │
-├──────────────────────┤
-│ 85 / 100    85%      │
-│ [进度条]             │
-├──────────────────────┤
-│ 总:10 对:8 错:2      │
-├──────────────────────┤
-│ 薄弱点: 导数 极值    │
-├──────────────────────┤
-│ [查看详细分析]       │
-└──────────────────────┘
-```
-
-### 5.2 图片查看器 (`ImageViewer.jsx`)
-
-**功能**：
-- ✅ 全屏放大查看
+前端具体实现文件仍可参考本文末“文件清单”。
 - ✅ 缩放：50% - 300%（滚轮/按钮）
 - ✅ 旋转：90°增量
 - ✅ 拖拽移动（放大后）
@@ -519,65 +474,37 @@ def _load_chinese_font(self, size: int = 24):
 
 **API路径**：
 ```
-GET /api/v1/ocr/images/{subject}/{filename}
+GET /api/v1/ocr/images/corrections/{correction_id}/{image_type}
+GET /api/v1/image-files/{image_id}/content
 ```
 
 **前端使用**：
 ```javascript
-// 批注图片
-const imageUrl = `/api/v1/ocr/images/${subject}/${filename}`
+// 批注图片（原图/批改后图）
+// 注意：图片访问由 default 模块统一提供，因此在“前端 proxy 模式”下通常是：
+// /api/default/v1/ocr/images/corrections/<id>/original
+// /api/default/v1/ocr/images/corrections/<id>/corrected
+const correctionImageUrl = `/api/default/v1/ocr/images/corrections/${correctionId}/${imageType}`
 
-// 错题图片
-const imageUrl = `/api/v1/ocr/images/${subject}/uuid_q3.jpg`
+// 通用图片文件（ImageFile.id），用于错题/批注等图片二进制访问
+// <img> 无法携带 Authorization header 时，可用 ?token=...（由后端解析）
+const imageFileUrl = `/api/default/v1/image-files/${imageId}/content?token=${token}`
 ```
 
 **后端处理**：
-- 尝试多个目录：corrections/ → questions/ → 兼容旧路径
-- 自动识别 MIME 类型
-- 返回 FileResponse
+- **批注图片**：default 模块通过 `ExamCorrection` 的 `original_image_id/corrected_image_id` 找到 `ImageFile`，再定位文件并返回 `FileResponse`
+- **通用图片**：default 模块通过 `ImageFile.id` 校验用户权限并返回 `FileResponse`
 
 ---
 
-## 8. 用户体验设计
+## 8. 用户体验设计（已合并到主设计文档）
 
-### 8.1 批改历史页面
-
-**设计原则**：
-- 信息密度适中，不拥挤
-- 重要指标突出显示
-- 视觉层次清晰
-- 符合青少年审美
-
-**交互流程**：
-1. 进入页面 → 自动显示本周统计
-2. 切换时间周期 → 统计数据实时更新
-3. 筛选学科 → 只显示该学科记录
-4. 点击卡片 → 查看详细分析
-5. 点击图片 → 全屏放大查看
-
-**视觉反馈**：
-- 加载状态：骨架屏动画
-- 悬浮效果：亮度提升 + 放大图标
-- 正确率颜色：
-  - ≥60% → 绿色（emerald）
-  - <60% → 橙/红色（amber/red）
-- 进度条：渐变色彩，动态宽度
-
-### 8.2 图片查看器
-
-**操作方式**：
-- **鼠标**：点击放大，滚轮缩放，拖拽移动
-- **键盘**：ESC关闭
-- **触摸**：捏合缩放，拖拽移动
-
-**UI元素**：
-- 顶部：标题 + 关闭按钮
-- 底部：缩放、旋转、下载按钮
-- 中央：提示文字（操作指引）
+为减少冗余维护，本节 UX 设计已合并到：
+- `docs/AI_learning_assistant_design.md`
 
 ---
 
-## 9. 数据流图
+## 9. 数据流图（概览）
 
 ```mermaid
 graph TD
@@ -599,18 +526,18 @@ graph TD
 
 ---
 
-## 10. 安全性考虑
+## 10. 安全性考虑（概要）
 
 ### 10.1 访问控制
-- ✅ 所有API需要JWT认证
-- ✅ 用户只能查看自己的记录
-- ✅ 图片访问验证用户权限
+- ✅ 所有 API 需要认证（JWT）
+- ✅ 用户只能访问自己的批改/错题/图片
+- ✅ 图片访问必须校验用户权限（default 模块统一处理）
 
 ### 10.2 文件安全
 - ✅ 文件类型验证（仅图片）
-- ✅ 文件大小限制（建议<10MB）
-- ✅ 文件名UUID化，防止路径遍历
-- ✅ 按用户隔离存储
+- ✅ 文件大小限制（建议 <10MB）
+- ✅ 文件名 UUID 化，防止路径遍历
+- ✅ 按用户隔离存储（uploads/<user>/...）
 
 ### 10.3 数据隐私
 - ✅ 试卷内容仅用户本人可见
@@ -733,9 +660,8 @@ alembic upgrade head
 ### 14.2 目录初始化
 
 ```bash
-# 创建学科分类目录
-mkdir -p data/uploads/corrections/{math,english,physics,chemistry,chinese,biology,other}
-mkdir -p data/uploads/questions/{math,english,physics,chemistry,chinese,biology,other}
+# 创建基础数据目录（用户/学科子目录会在首次上传时自动创建）
+mkdir -p data/{sqlite,faiss,bm25,uploads,redis} logs
 ```
 
 ### 14.3 环境变量
@@ -777,15 +703,16 @@ mkdir -p data/uploads/questions/{math,english,physics,chemistry,chinese,biology,
 
 ### 文件清单
 
-**后端（8个）**：
-1. `backend/app/db/models.py` - 数据模型
-2. `backend/app/crud/crud_exam_correction.py` - CRUD操作
-3. `backend/app/crud/__init__.py` - 导出
-4. `backend/app/api/v1/endpoints/corrections.py` - REST API
-5. `backend/app/api/v1/endpoints/ocr.py` - 增强批改逻辑
-6. `backend/app/api/v1/endpoints/__init__.py` - 导出
-7. `backend/app/api/v1/router.py` - 路由注册
-8. `backend/app/services/gemini_ocr_service.py` - 字体修复
+**后端（关键文件）**：
+1. `backend/core/db/models.py` - 数据模型（`ExamCorrection` / `Question` / `ImageFile` 等）
+2. `backend/core/crud/crud_exam_correction.py` - 批改记录 CRUD（列表/统计/删除等）
+3. `backend/core/crud/crud_image_file.py` - 图片文件入库/去重/引用计数等
+4. `backend/core/services/gemini_ocr_service.py` - OCR/试卷结构化分析核心（Provider 模式）
+5. `backend/modules/tony/services/gemini_ocr_prompts.py` - tony 模块 OCR prompts/provider（完整实现）
+6. `backend/modules/<module>/api/endpoints/ai_correction/ocr.py` - OCR 分析入口（如 `tony`：`POST /api/v1/ocr/analyze`）
+7. `backend/modules/<module>/api/endpoints/ai_correction/corrections.py` - 批改历史列表/统计接口
+8. `backend/modules/default/api/endpoints/ocr.py` - 批注图片统一访问接口（by correction_id）
+9. `backend/modules/default/api/endpoints/image_files.py` - 图片内容统一访问接口（by image_id）
 
 **前端（6个）**：
 9. `frontend/src/pages/CorrectionHistory.jsx` - 批改历史页面
@@ -797,11 +724,12 @@ mkdir -p data/uploads/questions/{math,english,physics,chemistry,chinese,biology,
 15. `frontend/src/pages/QuestionDetail.jsx` - 集成查看器
 16. `frontend/src/pages/QuestionList.jsx` - 缩略图+查看器
 
-**文档（2个）**：
-17. `docs/CHANGELOG.md` - 更新日志
-18. `docs/AI_CORRECTION_SYSTEM.md` - 系统设计文档（新建）
+**文档（推荐入口）**：
+- `docs/DEPLOYMENT.md` - 部署与运维（含 proxy / docker / 模型服务化）
+- `docs/TRAINING.md` - GraphRAG/训练流水线（Tony first）
+- `docs/AI_CORRECTION_SYSTEM.md` - 本文档
 
 ---
 
-**系统已就绪，可以开始使用！** 🎊
+**系统已就绪，可以开始使用。**
 

@@ -1,0 +1,28 @@
+services:
+  tony-vllm:
+    image: vllm/vllm-openai:latest
+    container_name: tony-vllm
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      # Optional: speed/compat tweaks
+      - VLLM_LOGGING_LEVEL=INFO
+    volumes:
+      # Persist HF cache + local adapters/models under data/
+      - ../../../../data:/workspace/data
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    command: >
+      --model OpenPipe/Qwen3-14B-Instruct
+      --served-model-name tony-qwen3-14b
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+    # GPU settings (compose v2 + nvidia-container-toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+

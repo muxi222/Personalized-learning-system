@@ -1,83 +1,21 @@
 #!/usr/bin/env python3
 """
-异步Embedding脚本
-根据设计文档4.1节第4步: 异步Embedding流程
+LEGACY script (deprecated).
 
-功能:
-1. 从消息队列消费待处理的题目
-2. 根据学科选择对应的Embedding模型
-3. 计算向量并存入向量数据库
+Embedding/index building is now module-owned under:
+  `training/modules/<module>/embedding/`
+
+For Tony, use:
+  `training/modules/tony/embedding/scripts/build_index.py`
+
+Or the pipeline helper:
+  `./deploy/scripts/pipeline.sh embed-index --module tony ...`
 """
 
-import os
-import sys
-import asyncio
-import logging
-from typing import Optional, List, Dict, Any
-from pathlib import Path
-
-# 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-
-from sentence_transformers import SentenceTransformer
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+raise SystemExit(
+    "Deprecated: use training/modules/<module>/embedding/scripts/build_index.py "
+    "(Tony implemented) or deploy/scripts/pipeline.sh embed-index --module tony"
 )
-logger = logging.getLogger(__name__)
-
-
-# Embedding模型配置 (设计文档3.1节技术栈选型)
-EMBEDDING_MODELS = {
-    # 中文模型 - BGE系列
-    "chinese": {
-        "model_name": "BAAI/bge-large-zh-v1.5",
-        "dimension": 1024,
-        "subjects": ["数学", "物理", "化学", "生物", "语文", "历史", "地理", "政治"],
-    },
-    # 英文模型
-    "english": {
-        "model_name": "jinaai/jina-embeddings-v2-base-en",
-        "dimension": 768,
-        "subjects": ["英语", "english"],
-    },
-    # 多语言模型 (默认)
-    "multilingual": {
-        "model_name": "moka-ai/m3e-large",
-        "dimension": 1024,
-        "subjects": [],  # 默认
-    },
-}
-
-
-class EmbeddingWorker:
-    """
-    Embedding工作进程
-    根据设计文档4.1节: 一个独立的Worker进程消费消息
-    """
-    
-    def __init__(self):
-        self.models: Dict[str, SentenceTransformer] = {}
-        self.device = "cuda" if self._has_cuda() else "cpu"
-        
-    @staticmethod
-    def _has_cuda() -> bool:
-        try:
-            import torch
-            return torch.cuda.is_available()
-        except ImportError:
-            return False
-    
-    def _get_model_key_for_subject(self, subject: str) -> str:
-        """根据学科选择对应的Embedding模型"""
-        subject_lower = subject.lower()
-        
-        for key, config in EMBEDDING_MODELS.items():
-            if subject_lower in [s.lower() for s in config["subjects"]]:
-                return key
-        
-        return "multilingual"  # 默认使用多语言模型
     
     def _load_model(self, model_key: str) -> SentenceTransformer:
         """懒加载Embedding模型"""

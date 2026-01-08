@@ -42,6 +42,7 @@ numpy>=1.26.0
 
 # ============= HTTP & 认证 =============
 httpx>=0.26.0
+PySocks>=1.7.1
 python-multipart>=0.0.6
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4

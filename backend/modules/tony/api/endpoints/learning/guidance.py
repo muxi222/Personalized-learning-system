@@ -142,6 +142,24 @@ async def get_learning_plan(
 
     # 获取待复习题目
     review_questions = await crud_question.get_questions_for_review(db, user_id, limit=10)
+    recommended_ids = [q.id for q in review_questions]
+
+    # Optional GraphRAG-based expansion: fetch more practice questions by weak knowledge points.
+    try:
+        from backend.modules.tony.config import settings
+        if getattr(settings, "GRAPHRAG_ENABLED", False):
+            from backend.core.services.graphrag_service import get_graphrag_service
+            graphrag = get_graphrag_service()
+            await graphrag.initialize(graph_path=settings.module_graphrag_graph_path)
+            extra = graphrag.find_questions_by_knowledge_points(
+                subject=(profile.get("weak_subjects") or ["other"])[0],
+                knowledge_points=profile.get("weak_knowledge_points", []),
+                top_k=20,
+                exclude_question_ids=set(recommended_ids),
+            )
+            recommended_ids.extend(extra)
+    except Exception as _e:
+        logger.debug(f"GraphRAG expansion skipped in learning-plan: {_e}")
 
     # 生成学习计划
     llm = get_llm_service()
@@ -164,7 +182,7 @@ async def get_learning_plan(
     return LearningPlanResponse(
         plan_text=plan_text or "暂时无法生成学习计划，请稍后再试。",
         weak_knowledge_points=profile.get("weak_knowledge_points", []),
-        recommended_review_questions=[q.id for q in review_questions],
+        recommended_review_questions=recommended_ids,
     )
 
 @router.get("/student-profile", response_model=StudentProfileResponse)

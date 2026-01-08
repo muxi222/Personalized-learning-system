@@ -82,6 +82,7 @@ class HybridSearchService:
         vector_store_path: Optional[str] = None,
         bm25_index_path: Optional[str] = None,
         force_recreate: bool = False,
+        embedding_dimension: Optional[int] = None,
     ) -> bool:
         """初始化混合检索服务（支持按模块覆盖索引目录）"""
         if self._initialized:
@@ -95,6 +96,9 @@ class HybridSearchService:
                 self._vector_store_path = str(vector_store_path)
             if bm25_index_path:
                 self._bm25_index_path = str(bm25_index_path)
+            if embedding_dimension and int(embedding_dimension) > 0:
+                # Allow training scripts / module overrides to control embedding dimension.
+                self._dimension = int(embedding_dimension)
 
             # 确保目录存在
             Path(self._vector_store_path).mkdir(parents=True, exist_ok=True)
@@ -270,6 +274,30 @@ class HybridSearchService:
 
         try:
             metadata = metadata or {}
+
+            # Dimension safety: allow first-write to define dimension when creating a fresh index.
+            if self._faiss_index is None:
+                # should not happen if initialize succeeded, but keep it safe
+                import faiss
+                self._dimension = len(embedding)
+                self._faiss_index = faiss.IndexFlatIP(self._dimension)
+            else:
+                expected = int(getattr(self._faiss_index, "d", self._dimension))
+                if len(embedding) != expected:
+                    if getattr(self._faiss_index, "ntotal", 0) == 0:
+                        # Fresh index: rebuild with correct dimension.
+                        import faiss
+                        logger.warning(
+                            f"FAISS dimension mismatch on empty index (expected={expected}, got={len(embedding)}). "
+                            f"Rebuilding index with dimension={len(embedding)}."
+                        )
+                        self._dimension = len(embedding)
+                        self._faiss_index = faiss.IndexFlatIP(self._dimension)
+                    else:
+                        raise ValueError(
+                            f"Embedding dimension mismatch (expected={expected}, got={len(embedding)}). "
+                            "Rebuild your index or ensure EMBEDDING_DIMENSION matches."
+                        )
 
             # 检查是否已存在，如果存在则更新
             if doc_id in self._document_store:

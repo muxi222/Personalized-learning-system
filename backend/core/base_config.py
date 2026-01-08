@@ -166,6 +166,22 @@ class BaseAppSettings(BaseSettings):
         """每个模块独立的BM25索引路径"""
         return f"{self.BM25_INDEX_PATH}/{self.MODULE_NAME}"
 
+    # ============ GraphRAG (模块独立路径) ============
+    # GraphRAG uses:
+    # - a lightweight knowledge graph (`graph.json`)
+    # - the existing hybrid retriever (FAISS+BM25) for seed retrieval
+    GRAPHRAG_ENABLED: bool = False
+    GRAPHRAG_BASE_PATH: str = "./data/training"
+    GRAPHRAG_GRAPH_FILENAME: str = "graph.json"
+
+    @property
+    def module_graphrag_dir(self) -> str:
+        return f"{self.GRAPHRAG_BASE_PATH}/{self.MODULE_NAME}/graphrag"
+
+    @property
+    def module_graphrag_graph_path(self) -> str:
+        return f"{self.module_graphrag_dir}/{self.GRAPHRAG_GRAPH_FILENAME}"
+
     # ============ LLM Helper Methods (共享) ============
 
     def get_llm_api_key(self, provider: Optional[str] = None) -> Optional[str]:
