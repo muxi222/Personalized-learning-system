@@ -1,77 +1,183 @@
-"""
-OCR识别Agent (XMX模块 - 学生实现版本)
-
-本文件为框架代码，需要学生完成核心Agent逻辑的实现。
-完整实现请参考: backend/modules/tony/agents/ai_correction/ocr_agent.py
-
-建议实现思路（对照 tony 模块）：
-1) 输入校验 + 学科校验
-   - 常见输入：image_path / user_id / task_id / subject / grade / hint
-   - 使用 BaseAgent.validate_subject(subject) 约束学科
-
-2) OCR/版面解析 -> 结构化题目
-   - 输出建议字段（示例）：
-     - success: bool
-     - questions: list[dict]（按题号顺序）
-     - total_score / max_score / accuracy_rate
-     - overall_analysis / weak_points / improvement_suggestions
-     - corrected_image_base64（可选：批改图）
-
-3) 批改/正确性判断（如图片存在老师批改痕迹）
-   - 优先级建议：老师打勾/打叉 > 老师写的正确答案 > 模型推断 > 分值/得分
-
-4) 任务状态更新/结果落库（由上层 tasks/endpoints 配合完成）
-"""
-
 import logging
-from typing import Dict, Any
+import uuid
+import json
+import re
+from typing import Dict, Any, List
+from langgraph.graph import StateGraph, END
+
 from backend.core.agents.base_agent import BaseAgent
+from backend.core.agents.state import AgentState
 from backend.modules.xmx.config import settings
 
 logger = logging.getLogger(__name__)
 
-class OCRAgent(BaseAgent):
-    """
-    OCR识别Agent
+def clean_json_response(raw_str: str) -> str:
+    """清洗 AI 返回的 Markdown JSON 标签"""
+    if not raw_str or not isinstance(raw_str, str):
+        return ""
+    json_block = re.search(r'```json\s*(.*?)\s*```', raw_str, re.DOTALL)
+    if json_block:
+        return json_block.group(1).strip()
+    brace_match = re.search(r'(\{.*\})', raw_str, re.DOTALL)
+    if brace_match:
+        return brace_match.group(1).strip()
+    return raw_str.strip()
 
-    TODO: 学生需要实现以下功能
-    1. 继承自 BaseAgent，使用 subject 验证
-    2. 实现核心处理逻辑
-    3. 使用 LangGraph 构建工作流
-    4. 返回处理结果
+class OCRAgentState(AgentState):
+    image_path: str
+    subject: str
+    user_id: int
+    task_id: str
+    ocr_result: Dict[str, Any] = {}
+    questions: List[Dict[str, Any]] = []
+    analysis_report: Dict[str, Any] = {}
+    errors: List[str] = []
 
-    参考实现: backend/modules/tony/agents/ocr_agent.py
-    """
+async def ocr_process_node(state: OCRAgentState) -> Dict[str, Any]:
+    """核心节点：极其鲁棒的 OCR 数据解析"""
+    try:
+        from backend.core.services.gemini_ocr_service import GeminiOCRService, SubjectType
+        ocr_service = GeminiOCRService()
+        
+        subject_str = state.get("subject", "economics")
+        try:
+            subject_type = SubjectType(subject_str)
+        except:
+            subject_type = SubjectType.OTHER
+        
+        # 1. 调用 Gemini 获取结果
+        result_obj = await ocr_service.analyze_exam_image(
+            image_path=state.get("image_path"),
+            subject=subject_type
+        )
 
-    def __init__(self):
-        super().__init__(subjects=settings.SUBJECTS)
-        logger.info(f"[{settings.MODULE_NAME.upper()}] 初始化 OCRAgent")
+        # 2. 多重适配解析逻辑 (针对 ExamAnalysisResult 对象优化)
+        res_dict = {}
+        
+        # 路径 A: 尝试 Pydantic 序列化 (v2: model_dump, v1: dict)
+        if hasattr(result_obj, "model_dump"):
+            res_dict = result_obj.model_dump()
+        elif hasattr(result_obj, "dict"):
+            res_dict = result_obj.dict()
+        
+        # 路径 B: 已经是字典
+        elif isinstance(result_obj, dict):
+            res_dict = result_obj
+            
+        # 路径 C: 原始字符串处理
+        elif isinstance(result_obj, str):
+            try:
+                cleaned_text = clean_json_response(result_obj)
+                res_dict = json.loads(cleaned_text)
+            except:
+                return {"errors": ["AI返回字符串解析失败"], "questions": []}
+        
+        # 路径 D: 暴力反射 (针对日志中 ExamAnalysisResult 类属性提取)
+        else:
+            logger.info(f"Falling back to attribute reflection for type: {type(result_obj)}")
+            res_dict = {
+                "questions": getattr(result_obj, "questions", []),
+                "total_score": getattr(result_obj, "total_score", 0),
+                "max_score": getattr(result_obj, "max_score", 100),
+                "accuracy_rate": getattr(result_obj, "accuracy_rate", 0),
+                "overall_analysis": getattr(result_obj, "overall_analysis", ""),
+                "subject": str(getattr(result_obj, "subject", ""))
+            }
 
-    async def process(self, **kwargs) -> Dict[str, Any]:
-        """
-        处理主逻辑
-
-        TODO: 学生需要实现此方法
-
-        参数:
-            **kwargs: 根据Agent类型不同而不同
-
-        返回:
-            Dict[str, Any]: 处理结果
-
-        实现步骤:
-        1. 验证输入参数
-        2. 调用subject验证 (已在BaseAgent中实现)
-        3. 构建LangGraph工作流
-        4. 执行Agent逻辑
-        5. 返回结果
-
-        参考: backend/modules/tony/agents/ocr_agent.py
-        """
-        # ============ TODO: 实现Agent逻辑 ============
-        logger.warning(f"[{settings.MODULE_NAME.upper()}] OCRAgent.process() 需要学生实现")
+        # 3. 统一数据结构清洗
+        raw_questions = res_dict.get("questions") or []
+        # 处理 Pydantic 对象列表转为 纯 Dict 列表
+        questions = []
+        for q in raw_questions:
+            if hasattr(q, "model_dump"):
+                questions.append(q.model_dump())
+            elif hasattr(q, "dict"):
+                questions.append(q.dict())
+            elif isinstance(q, dict):
+                questions.append(q)
+            else:
+                # 尝试通过 __dict__ 获取
+                questions.append(vars(q) if hasattr(q, "__dict__") else {})
 
         return {
-            "success": False,
-            "message": "学生TODO: 实现OCRAgent的process方法"
+            "questions": questions,
+            "ocr_result": {
+                "total_score": float(res_dict.get("total_score") or 0),
+                "max_score": float(res_dict.get("max_score") or 100),
+                "accuracy_rate": float(res_dict.get("accuracy_rate") or 0),
+                "overall_analysis": res_dict.get("overall_analysis", "批改完成")
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"OCR Node Error: {str(e)}", exc_info=True)
+        return {"errors": [f"解析异常: {str(e)}"], "questions": []}
+
+async def analysis_node(state: OCRAgentState) -> Dict[str, Any]:
+    """分析节点：从 OCR 结果中提取建议"""
+    ocr_res = state.get("ocr_result", {})
+    return {
+        "analysis_report": {
+            "suggestions": [ocr_res.get("overall_analysis", "分析完成")],
+            "weak_points": state.get("analysis_report", {}).get("weak_points", [])
+        }
+    }
+
+class OCRAgent(BaseAgent):
+    def __init__(self):
+        super().__init__(subjects=settings.SUBJECTS)
+        self.graph = self._build_workflow()
+
+    def _build_workflow(self):
+        wf = StateGraph(OCRAgentState)
+        wf.add_node("ocr", ocr_process_node)
+        wf.add_node("analysis", analysis_node)
+        wf.set_entry_point("ocr")
+        wf.add_edge("ocr", "analysis")
+        wf.add_edge("analysis", END)
+        return wf.compile()
+
+async def process(self, **kwargs) -> Dict[str, Any]:
+    task_id = kwargs.get("task_id", str(uuid.uuid4()))
+    # 初始化状态时确保所有预期字段都存在
+    initial_state = {
+        **kwargs, 
+        "questions": [], 
+        "errors": [], 
+        "ocr_result": {}, 
+        "analysis_report": {}
+    }
+    
+    try:
+        current_state = initial_state
+        async for chunk in self.graph.astream(initial_state):
+            for output in chunk.values():
+                current_state.update(output)
+        
+        # 核心：构造与前端/API模型 1:1 对应的返回结构
+        ocr_res = current_state.get("ocr_result", {})
+        analysis = current_state.get("analysis_report", {})
+        
+        return {
+            "success": not bool(current_state.get("errors")),
+            "task_id": task_id,
+            "data": {
+                # 必须确保这些 key 与你的 Pydantic Schema (OCRAnalysisResponse) 完全一致
+                "subject": current_state.get("subject", "economics"),
+                "questions": current_state.get("questions", []),  # 即使失败也要给空列表
+                "total_score": float(ocr_res.get("total_score", 0)),
+                "max_score": float(ocr_res.get("max_score", 100)),
+                "accuracy_rate": float(ocr_res.get("accuracy_rate", 0)),
+                "overall_analysis": ocr_res.get("overall_analysis", ""),
+                "weak_points": analysis.get("weak_points", []),
+                "improvement_suggestions": analysis.get("suggestions", [])
+            },
+            "errors": current_state.get("errors")
+        }
+    except Exception as e:
+        logger.error(f"Agent Final Process Error: {e}")
+        return {
+            "success": False, 
+            "data": {"questions": [], "total_score": 0}, # 保证基础结构
+            "errors": [str(e)]
         }

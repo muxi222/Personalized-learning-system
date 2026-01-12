@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { questionApi } from '../lib/api'
+import { questionApi, imageFilesApi } from '../lib/api'
 import {
   Search,
   Filter,
@@ -58,7 +58,9 @@ export default function QuestionList() {
   const [prevGroupBy, setPrevGroupBy] = useState('upload')
   const queryClient = useQueryClient()
   const [isSelectionMode, setIsSelectionMode] = useState(false)
-  const [selectedItems, setSelectedItems] = useState([])
+  const [selectionKind, setSelectionKind] = useState('question') // question | image
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState([])
+  const [selectedImageIds, setSelectedImageIds] = useState([])
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerImage, setViewerImage] = useState({ url: '', title: '' })
   const pageSize = 10
@@ -110,16 +112,45 @@ export default function QuestionList() {
   const totalPages = Math.ceil((isGrouped ? totalGroups : totalQuestions) / pageSize)
 
   const batchDeleteMutation = useMutation({
-    mutationFn: (ids) => questionApi.batchDelete(ids),
+    mutationFn: async ({ kind, ids }) => {
+      if (kind === 'image') {
+        const imageIds = Array.isArray(ids) ? ids : []
+        let deleted_images = 0
+        let deleted_questions = 0
+        let failed_images = 0
+        for (const imageId of imageIds) {
+          try {
+            const resp = await imageFilesApi.deleteGroup(imageId)
+            deleted_images += 1
+            deleted_questions += Number(resp?.data?.deleted_questions || 0)
+          } catch (e) {
+            failed_images += 1
+          }
+        }
+        return { data: { deleted_images, deleted_questions, failed_images } }
+      }
+      return questionApi.batchDelete(ids)
+    },
     onSuccess: (resp) => {
       queryClient.invalidateQueries({ queryKey: ['questions'] })
-      const { deleted_count, failed_count } = resp?.data || {}
-      if (!failed_count) {
-        toast.success(`已成功删除 ${deleted_count || selectedItems.length} 道错题`)
+      if (selectionKind === 'image') {
+        const { deleted_images, deleted_questions, failed_images } = resp?.data || {}
+        if (!failed_images) {
+          toast.success(`已删除 ${deleted_images || 0} 张图片（共 ${deleted_questions || 0} 道错题）`)
+        } else {
+          toast.success(`已删除 ${deleted_images || 0} 张图片（共 ${deleted_questions || 0} 道错题），${failed_images} 张失败`)
+        }
       } else {
-        toast.success(`已删除 ${deleted_count || 0} 道错题，${failed_count} 道删除失败`)
+        const { deleted_count, failed_count } = resp?.data || {}
+        if (!failed_count) {
+          const n = deleted_count || selectedQuestionIds.length
+          toast.success(`已成功删除 ${n} 道错题`)
+        } else {
+          toast.success(`已删除 ${deleted_count || 0} 道错题，${failed_count} 道删除失败`)
+        }
       }
-      setSelectedItems([])
+      setSelectedQuestionIds([])
+      setSelectedImageIds([])
       setIsSelectionMode(false)
     },
     onError: () => {
@@ -127,31 +158,49 @@ export default function QuestionList() {
     },
   })
 
+  const selectedCount = selectionKind === 'image' ? selectedImageIds.length : selectedQuestionIds.length
+
   const toggleSelection = (id) => {
-    setSelectedItems(prev =>
-      prev.includes(id)
-        ? prev.filter(item => item !== id)
-        : [...prev, id]
-    )
+    if (selectionKind === 'image') {
+      setSelectedImageIds(prev =>
+        prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+      )
+    } else {
+      setSelectedQuestionIds(prev =>
+        prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+      )
+    }
   }
 
   const toggleSelectAll = () => {
-    if (selectedItems.length === questions.length) {
-      setSelectedItems([])
-    } else {
-      setSelectedItems(questions.map(q => q.id))
+    if (selectionKind === 'image') {
+      const ids = groups
+        .map(g => {
+          const fromQuestions = (g.questions || []).find(q => q?.source_image_id)?.source_image_id
+          const fromPreview = extractImageIdFromUrl(g.preview_image_url)
+          return fromQuestions || fromPreview
+        })
+        .filter(Boolean)
+      if (selectedImageIds.length === ids.length) setSelectedImageIds([])
+      else setSelectedImageIds(ids)
+      return
     }
+
+    if (selectedQuestionIds.length === questions.length) setSelectedQuestionIds([])
+    else setSelectedQuestionIds(questions.map(q => q.id))
   }
 
   const handleBatchDelete = async () => {
-    if (selectedItems.length === 0) {
+    const ids = selectionKind === 'image' ? selectedImageIds : selectedQuestionIds
+    if (ids.length === 0) {
       toast.error('请先选择要删除的错题')
       return
     }
-    if (!confirm(`确定要删除 ${selectedItems.length} 道错题吗？`)) {
+    const hint = selectionKind === 'image' ? `确定要删除选中的 ${ids.length} 张图片对应的全部错题吗？` : `确定要删除 ${ids.length} 道错题吗？`
+    if (!confirm(hint)) {
       return
     }
-    batchDeleteMutation.mutate(selectedItems)
+    batchDeleteMutation.mutate({ kind: selectionKind, ids })
   }
 
   const handleDeleteChapter = async () => {
@@ -223,7 +272,8 @@ export default function QuestionList() {
       queryClient.invalidateQueries({ queryKey: ['questions'] })
       queryClient.invalidateQueries({ queryKey: ['question-chapters'] })
       queryClient.invalidateQueries({ queryKey: ['question-knowledge-points'] })
-      setSelectedItems([])
+      setSelectedQuestionIds([])
+      setSelectedImageIds([])
       setIsSelectionMode(false)
     } catch (e) {
       toast.error('删除筛选结果失败')
@@ -236,6 +286,26 @@ export default function QuestionList() {
     if (!m) return null
     const id = parseInt(m[1], 10)
     return Number.isFinite(id) ? id : null
+  }
+
+  const coerceBool = (v) => {
+    if (v === true || v === false) return v
+    if (v === 1 || v === 0) return Boolean(v)
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase()
+      if (['true', '1', 'yes', 'y', 'correct', 'right'].includes(s)) return true
+      if (['false', '0', 'no', 'n', 'wrong', 'incorrect'].includes(s)) return false
+    }
+    return null
+  }
+
+  const inferIsCorrect = (q) => {
+    const v = coerceBool(q?.is_correct)
+    if (v === true || v === false) return v
+    if (typeof q?.score === 'number' && typeof q?.max_score === 'number' && q.max_score > 0) {
+      return q.score >= q.max_score
+    }
+    return null
   }
 
   const sortGroupQuestions = (qs) => {
@@ -445,17 +515,50 @@ export default function QuestionList() {
                 onClick={toggleSelectAll}
                 className="btn-secondary px-3 py-2 text-sm"
               >
-                {selectedItems.length === questions.length ? '取消全选' : '全选'}
+                {selectionKind === 'image'
+                  ? (selectedImageIds.length === groups.length ? '取消全选' : '全选')
+                  : (selectedQuestionIds.length === questions.length ? '取消全选' : '全选')
+                }
               </button>
               <button
                 type="button"
                 onClick={handleBatchDelete}
-                disabled={selectedItems.length === 0 || batchDeleteMutation.isPending}
+                disabled={selectedCount === 0 || batchDeleteMutation.isPending}
                 className="bg-red-500/20 hover:bg-red-500/30 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
               >
                 <Trash2 className="w-4 h-4 inline mr-1" />
-                {batchDeleteMutation.isPending ? '删除中...' : `删除 (${selectedItems.length})`}
+                {batchDeleteMutation.isPending ? '删除中...' : `删除 (${selectedCount})`}
               </button>
+              {groupBy === 'upload' && isGrouped && (
+                <div className="flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-900/40 p-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectionKind('image')
+                      setSelectedQuestionIds([])
+                    }}
+                    className={clsx(
+                      'px-2 py-1 text-xs rounded-md transition-all',
+                      selectionKind === 'image' ? 'bg-primary-500/20 text-primary-200' : 'text-slate-300 hover:bg-slate-800/50'
+                    )}
+                  >
+                    按图片
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectionKind('question')
+                      setSelectedImageIds([])
+                    }}
+                    className={clsx(
+                      'px-2 py-1 text-xs rounded-md transition-all',
+                      selectionKind === 'question' ? 'bg-primary-500/20 text-primary-200' : 'text-slate-300 hover:bg-slate-800/50'
+                    )}
+                  >
+                    按错题
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleDeleteFiltered}
@@ -467,7 +570,8 @@ export default function QuestionList() {
                 type="button"
                 onClick={() => {
                   setIsSelectionMode(false)
-                  setSelectedItems([])
+                  setSelectedQuestionIds([])
+                  setSelectedImageIds([])
                   // 退出批量管理时恢复之前的分组方式
                   setGroupBy(prevGroupBy)
                 }}
@@ -480,12 +584,11 @@ export default function QuestionList() {
             <button
               type="button"
               onClick={() => {
-                // 批量删除按“平铺列表”更直观，进入批量管理时强制切换为 none
                 setPrevGroupBy(groupBy)
-                setGroupBy('none')
-                setChapterFilter('')
-                setKnowledgePointFilter('')
                 setIsSelectionMode(true)
+                // 默认选择维度：upload 分组优先按图片，其它情况按错题
+                if (groupBy === 'upload' && isGrouped) setSelectionKind('image')
+                else setSelectionKind('question')
               }}
               className="btn-secondary px-3 py-2 text-sm flex items-center gap-1"
             >
@@ -535,6 +638,40 @@ export default function QuestionList() {
                       {/* 组预览图 */}
                       {group.preview_image_url && (
                         <div className="relative flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-slate-800/50 border border-slate-700/50 hover:border-primary-500/50 transition-all group">
+                          {/* 选择框（批量管理模式，按图片） */}
+                          {isSelectionMode && selectionKind === 'image' && imageId && (
+                            <input
+                              type="checkbox"
+                              className="absolute top-2 left-2 w-5 h-5 accent-primary-500 z-10"
+                              checked={selectedImageIds.includes(imageId)}
+                              onChange={() => toggleSelection(imageId)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          )}
+
+                          {/* 图片维度删除 */}
+                          {!isSelectionMode && imageId && (
+                            <button
+                              type="button"
+                              className="absolute top-2 right-2 p-1.5 rounded-md bg-black/60 hover:bg-red-500/70 text-white z-10 transition-all"
+                              title="删除本图片对应的全部错题"
+                              onClick={async (e) => {
+                                e.stopPropagation()
+                                if (!confirm('确定要删除这张图片对应的全部错题吗？此操作不可恢复。')) return
+                                try {
+                                  const resp = await questionApi.batchDeleteByImages([imageId])
+                                  const { deleted_count } = resp?.data || {}
+                                  toast.success(`已删除 ${deleted_count || 0} 道错题`)
+                                  queryClient.invalidateQueries({ queryKey: ['questions'] })
+                                } catch (err) {
+                                  toast.error('删除失败')
+                                }
+                              }}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+
                           <div
                             className="w-full h-full cursor-pointer"
                             onClick={(e) => {
@@ -558,14 +695,35 @@ export default function QuestionList() {
 
                           {/* 快捷入口：本图题目 */}
                           {canGoImageGroup && (
-                            <Link
-                              to={`/questions/image/${imageId}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="absolute bottom-2 left-2 px-2 py-1 rounded-md bg-primary-500/80 hover:bg-primary-500 text-white text-xs font-medium transition-all"
-                              title="查看本次上传图片中的全部题目"
-                            >
-                              本图题目
-                            </Link>
+                            <div className="absolute bottom-2 left-2 flex items-center gap-2">
+                              <Link
+                                to={`/questions/image/${imageId}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="px-2 py-1 rounded-md bg-primary-500/80 hover:bg-primary-500 text-white text-xs font-medium transition-all"
+                                title="查看本次上传图片中的全部题目"
+                              >
+                                本图题目
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  if (!confirm('确定要删除这张图片下的所有错题吗？此操作不可恢复。')) return
+                                  imageFilesApi.deleteGroup(imageId)
+                                    .then((resp) => {
+                                      const { deleted_questions } = resp?.data || {}
+                                      toast.success(`已删除该图片下 ${deleted_questions ?? 0} 道错题`)
+                                      queryClient.invalidateQueries({ queryKey: ['questions'] })
+                                    })
+                                    .catch(() => toast.error('删除失败'))
+                                }}
+                                className="px-2 py-1 rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-medium transition-all"
+                                title="删除本图全部错题"
+                              >
+                                删除
+                              </button>
+                            </div>
                           )}
                         </div>
                       )}
@@ -612,12 +770,25 @@ export default function QuestionList() {
 
                         <div className="space-y-2">
                           {sortGroupQuestions(group.questions || []).map((q, qi) => (
+                            (() => {
+                              const isCorrect = inferIsCorrect(q)
+                              return (
                             <Link
                               key={q.id}
                               to={`/questions/${q.id}${q.subject ? `?subject=${encodeURIComponent(q.subject)}` : ''}`}
                               className="block rounded-lg bg-slate-800/40 hover:bg-slate-800/60 border border-slate-700/40 hover:border-primary-500/40 transition-all p-3"
                             >
                               <div className="flex items-start justify-between gap-3">
+                                {/* 选择框（批量管理模式，按错题） */}
+                                {isSelectionMode && selectionKind === 'question' && (
+                                  <input
+                                    type="checkbox"
+                                    className="mt-1 w-5 h-5 accent-primary-500"
+                                    checked={selectedQuestionIds.includes(q.id)}
+                                    onChange={() => toggleSelection(q.id)}
+                                    onClick={(e) => e.preventDefault()}
+                                  />
+                                )}
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2">
                                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-primary-500/15 text-primary-200 text-xs font-semibold flex-shrink-0">
@@ -626,6 +797,21 @@ export default function QuestionList() {
                                     <div className="text-white text-sm font-medium line-clamp-1">
                                       {q.title || (q.content ? q.content.slice(0, 60) : '题目内容')}
                                     </div>
+                                    <span
+                                      className={clsx(
+                                        'text-xs px-2 py-0.5 rounded-full border flex-shrink-0',
+                                        isCorrect === true && 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+                                        isCorrect === false && 'bg-red-500/10 text-red-300 border-red-500/30',
+                                        isCorrect == null && 'bg-slate-500/10 text-slate-300 border-slate-500/30'
+                                      )}
+                                    >
+                                      {isCorrect === true ? '正确' : isCorrect === false ? '错误' : '未知'}
+                                    </span>
+                                    {typeof q?.score === 'number' && typeof q?.max_score === 'number' && (
+                                      <span className="text-slate-400 text-xs flex-shrink-0">
+                                        {q.score}/{q.max_score}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="text-slate-400 text-xs line-clamp-1 mt-1">
                                     {q.content}
@@ -634,6 +820,8 @@ export default function QuestionList() {
                                 <ArrowRight className="w-4 h-4 text-slate-500 flex-shrink-0 mt-0.5" />
                               </div>
                             </Link>
+                              )
+                            })()
                           ))}
                         </div>
                       </div>
@@ -655,7 +843,7 @@ export default function QuestionList() {
                     <input
                       type="checkbox"
                       className="mt-2 w-5 h-5 accent-primary-500"
-                      checked={selectedItems.includes(question.id)}
+                      checked={selectedQuestionIds.includes(question.id)}
                       onChange={() => toggleSelection(question.id)}
                     />
                   )}

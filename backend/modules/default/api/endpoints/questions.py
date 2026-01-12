@@ -34,6 +34,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+def _norm_text(s: object) -> str:
+    if not isinstance(s, str):
+        return ""
+    return " ".join(s.strip().split()).lower()
+
+
+def _infer_is_correct_from_answers(student_answer: object, correct_answer: object) -> Optional[bool]:
+    """
+    Best-effort inference when DB `is_correct` is missing:
+    - only infer when both answers are non-empty strings
+    - normalize whitespace + lowercase
+    """
+    sa = _norm_text(student_answer)
+    ca = _norm_text(correct_answer)
+    if not sa or not ca:
+        return None
+    return True if sa == ca else False
+
 @router.get("/review/due", response_model=List[QuestionResponse])
 async def get_due_for_review(
     request: Request,
@@ -196,8 +214,10 @@ async def build_question_image_urls_default(
 class BatchDeleteQuestionsRequest(BaseModel):
     # 二选一：
     # - 按题目维度删除：question_ids
+    # - 按图片维度删除：image_ids（删除与该 source_image_id 关联的所有错题）
     # - 按筛选条件删除：subject/difficulty/search/chapter/knowledge_point（任意组合，至少一个非空）
     question_ids: Optional[List[int]] = None
+    image_ids: Optional[List[int]] = None
     subject: Optional[str] = None
     chapter: Optional[str] = None
     knowledge_point: Optional[str] = None
@@ -450,6 +470,16 @@ async def list_questions(
                     first_img_id = path_to_image_id.get(str(paths[0])) if paths else None
                     if first_img_id and getattr(item, "source_image_id", None) is None:
                         item.source_image_id = int(first_img_id)
+
+            # Fill is_correct if missing (based on answers)
+            try:
+                if getattr(item, "is_correct", None) is None:
+                    item.is_correct = _infer_is_correct_from_answers(
+                        getattr(item, "student_answer", None),
+                        getattr(item, "correct_answer", None),
+                    )
+            except Exception:
+                pass
             items.append(item)
 
         return QuestionListResponse(total=total, page=page, page_size=page_size, items=items)
@@ -549,6 +579,16 @@ async def list_questions(
                         item.source_image_id = int(img.id)
             except Exception:
                 pass
+
+        # Fill is_correct if missing (based on answers)
+        try:
+            if getattr(item, "is_correct", None) is None:
+                item.is_correct = _infer_is_correct_from_answers(
+                    getattr(item, "student_answer", None),
+                    getattr(item, "correct_answer", None),
+                )
+        except Exception:
+            pass
 
         if group_by == "upload":
             order_idx = getattr(q, "upload_index", None)
@@ -680,6 +720,9 @@ async def batch_delete_questions(
         request.search = None
 
     # ===== 1) 按题目维度删除 =====
+    if request.question_ids and request.image_ids:
+        raise HTTPException(status_code=400, detail="question_ids 和 image_ids 不能同时提供")
+
     if request.question_ids:
         for qid in request.question_ids:
             try:
@@ -713,6 +756,60 @@ async def batch_delete_questions(
                 failed_count += 1
                 failed_ids.append(qid)
                 logger.error(f"[DEFAULT] batch_delete_questions failed for {qid}: {e}")
+
+    # ===== 2) 按图片维度删除（source_image_id）=====
+    elif request.image_ids:
+        from sqlalchemy import select, and_
+        from backend.core.db.models import Question, AgentTask, Feedback
+        from sqlalchemy import delete
+
+        # 规范化 image_ids
+        uniq: list[int] = []
+        seen = set()
+        for x in (request.image_ids or []):
+            try:
+                ix = int(x)
+            except Exception:
+                continue
+            if ix <= 0 or ix in seen:
+                continue
+            seen.add(ix)
+            uniq.append(ix)
+
+        if not uniq:
+            return BatchDeleteQuestionsResponse(deleted_count=0, failed_count=0, failed_ids=[])
+
+        qs = list(
+            (await db.execute(
+                select(Question)
+                .where(and_(Question.user_id == int(user_id), Question.source_image_id.in_(uniq)))
+            )).scalars().all()
+        )
+        qids = [int(q.id) for q in qs]
+        if not qids:
+            return BatchDeleteQuestionsResponse(deleted_count=0, failed_count=0, failed_ids=[])
+
+        # 图片引用计数 - 尽力处理（失败不阻塞删除）
+        for q in qs:
+            try:
+                for path in (q.image_urls or []):
+                    await crud_image_file.decrement_reference_count_by_path(db, path)
+            except Exception as e:
+                logger.warning(f"[DEFAULT] decrement image refcount failed for question {q.id}: {e}")
+            if getattr(q, "source_image_id", None):
+                affected_image_ids.append(int(q.source_image_id))
+
+        # 批量删除任务/反馈/题目（分批，避免 sqlite 变量上限）
+        def chunks(arr: List[int], size: int = 300):
+            for i in range(0, len(arr), size):
+                yield arr[i:i + size]
+
+        for part in chunks(qids):
+            await db.execute(delete(AgentTask).where(AgentTask.question_id.in_(part)))
+            await db.execute(delete(Feedback).where(Feedback.question_id.in_(part)))
+            await db.execute(delete(Question).where(and_(Question.user_id == int(user_id), Question.id.in_(part))))
+
+        deleted_count = len(qids)
 
     # ===== 2) 按筛选条件删除（subject/difficulty/search/chapter/knowledge_point）=====
     else:

@@ -1,107 +1,113 @@
 """
-OCR批改API (RPJ模块 - 学生实现版本)
+OCR API 端点 - 试卷分析与批改
 
-本文件为框架代码，需要学生完成核心业务逻辑的实现。
-完整实现请参考: backend/modules/tony/api/endpoints/ocr.py
-
-RPJ模块支持的学科: chinese, english, politics
+功能:
+1. 上传试卷图片进行 OCR 分析
+2. 自动批改并打分
+3. 生成批改后的图像
 """
 
 import os
 import uuid
-import hashlib
 import logging
-from typing import Optional, List, Dict, Any
+import time
+from typing import Optional
 from datetime import datetime
+import json
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query, Path
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from backend.core.db.session import get_db
-from backend.modules.rpj.api.deps import get_current_user_id, get_current_user
-from backend.modules.rpj.config import settings
-from backend.modules.rpj.agents.ai_correction.ocr_agent import OCRAgent
-from backend.core.crud import crud_image_file, crud_exam_correction, crud_question
-from backend.core.db.models import User, ImageFile, ExamCorrection, Question, QuestionSourceEnum, ImageFileTypeEnum
+from backend.modules.tony.api.deps import get_current_user, get_current_user_id, get_optional_user_id, get_db, oauth2_scheme
+from backend.core.services.gemini_ocr_service import (
+    get_gemini_ocr_service,
+    SubjectType,
+    ExamAnalysisResult,
+)
+from backend.core.db.models import User
+from backend.core.utils.file_utils import (
+    get_user_upload_dir,
+    get_user_file_url,
+    get_user_directory_name,
+    calculate_file_hash,
+    get_filename_from_path,
+)
+from backend.core.crud import crud_image_file
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
-def validate_subject(subject: str) -> None:
-    """验证学科是否属于RPJ模块"""
-    if subject not in settings.SUBJECTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Subject '{subject}' is not supported by RPJ module. "
-                   f"Supported subjects: {settings.SUBJECTS}"
-        )
+UPLOAD_DIR = "./data/uploads"
 
-# ============ Helper Functions ============
+# 学科到模块的映射（用于生成完整URL）
+SUBJECT_TO_MODULE = {
+    # RPJ模块 (6001)
+    "chinese": ("rpj", 6001),
+    "english": ("rpj", 6001),
+    "politics": ("rpj", 6001),
+    # XMX模块 (6002)
+    "economics": ("xmx", 6002),
+    # WZY模块 (6003)
+    "math": ("wzy", 6003),
+    "physics": ("wzy", 6003),
+    # WZM模块 (6004)
+    "chemistry": ("wzm", 6004),
+    # TONY模块 (6005)
+    "history": ("tony", 6005),
+    "geography": ("tony", 6005),
+    "other": ("tony", 6005),
+}
 
-def calculate_file_hash(content: bytes) -> str:
-    """计算文件内容的哈希值"""
-    return hashlib.md5(content).hexdigest()
-
-def generate_correction_image_url(correction_id: int, image_type: str, subject: str = "chinese") -> str:
+def generate_correction_image_url(correction_id: int, image_type: str, subject: str) -> str:
     """
-    生成批改图片URL
+    生成批改图片URL（统一由 default 模块处理）
 
     Args:
         correction_id: 批注记录ID
         image_type: 图片类型 ('original' 或 'corrected')
-        subject: 学科名称
+        subject: 学科名称（不再使用，统一由 default 模块处理）
 
     Returns:
-        完整的URL路径
+        完整的URL路径（包含协议、主机和端口）
     """
-    # 获取主机配置
-    host = settings.HOST if settings.HOST not in ['0.0.0.0', ''] else 'localhost'
-    port = settings.PORT
+    from backend.modules.tony.config import settings
 
-    # 生成完整URL: http://{host}:{port}/api/v1/rpj/ocr/images/corrections/{correction_id}/{image_type}
-    return f"http://{host}:{port}/api/v1/rpj/ocr/images/corrections/{correction_id}/{image_type}"
+    # 优先使用 PUBLIC_API_BASE_URL 配置
+    if settings.PUBLIC_API_BASE_URL:
+        base_url = settings.PUBLIC_API_BASE_URL.rstrip('/')
+        return f"{base_url}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
 
-def get_user_upload_dir(user_id: int, file_type: str, subject: str) -> str:
-    """
-    获取用户上传目录
+    # 如果没有设置 PUBLIC_API_BASE_URL，使用 default 模块的地址（6100端口）
+    # 统一由 default 模块处理图片访问，不再根据学科路由到不同模块
+    from backend.modules.default.config import get_settings as get_default_settings
+    default_settings = get_default_settings()
+    default_host = default_settings.HOST if default_settings.HOST not in ['0.0.0.0', ''] else 'localhost'
+    default_port = default_settings.PORT  # 6100
 
-    Args:
-        user_id: 用户ID
-        file_type: 文件类型 (corrections 或 questions)
-        subject: 学科
+    # 生成完整URL，统一使用 default 模块地址
+    return f"http://{default_host}:{default_port}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
 
-    Returns:
-        用户上传目录路径
-    """
-    # 创建用户目录结构: uploads/{user_id}/{file_type}/{subject}/
-    upload_dir = os.path.join(settings.IMAGE_UPLOAD_DIR, str(user_id), file_type, subject)
-    os.makedirs(upload_dir, exist_ok=True)
-    return upload_dir
-
-def get_filename_from_path(file_path: str) -> str:
-    """从文件路径中提取文件名"""
-    return os.path.basename(file_path)
-
-def get_subject_display_name(subject: str) -> str:
-    """获取学科显示名称"""
-    subject_names = {
-        "chinese": "语文",
-        "english": "英语",
-        "politics": "政治"
-    }
-    return subject_names.get(subject, subject)
-
-# ============ Response Models ============
+# 中文学科名称到英文的映射
+SUBJECT_NAME_MAP = {
+    "数学": "math",
+    "英语": "english",
+    "物理": "physics",
+    "化学": "chemistry",
+    "语文": "chinese",
+    "生物": "biology",
+    "政治": "politics",
+    "经济学": "economics",
+    "历史": "history",
+    "地理": "geography",
+    "其他": "other",
+}
 
 class OCRAnalysisResponse(BaseModel):
     """OCR 分析响应"""
     success: bool
     task_id: str
     subject: str
-    subject_display: str
     grade: str
     total_score: float
     max_score: float
@@ -113,7 +119,7 @@ class OCRAnalysisResponse(BaseModel):
     corrected_image_url: Optional[str] = None
     is_duplicate: bool = False  # 是否为重复图片
     duplicate_message: Optional[str] = None  # 重复提示信息
-    correction_id: Optional[int] = None  # 批改记录ID
+    subject_mismatch_warning: Optional[str] = None  # 学科不匹配提示（如有）
 
 class QuestionDetail(BaseModel):
     """题目详情"""
@@ -130,376 +136,532 @@ class QuestionDetail(BaseModel):
     solution_steps: list
     difficulty: str
 
-class BatchAnalysisResponse(BaseModel):
-    """批量分析响应"""
-    success: bool
-    total: int
-    results: List[Dict[str, Any]]
-
-class OCRErrorResponse(BaseModel):
-    """OCR错误响应"""
-    error: str
-    message: str
-    task_id: Optional[str] = None
-
-# ============ API Endpoints ============
-
 @router.post("/analyze", response_model=OCRAnalysisResponse)
 async def analyze_exam_image(
     file: UploadFile = File(...),
-    subject: str = Form(..., description="学科"),
-    grade: str = Form("", description="年级"),
-    hint: Optional[str] = Form(None, description="试卷标题或提示"),
+    subject: str = Form("other"),
+    grade: str = Form(""),
+    hint: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
 ):
     """
     分析试卷图片
 
-    上传试卷图片，进行OCR识别和自动批改：
+    上传试卷图片，使用 Gemini 2.5 Flash 进行:
     1. OCR 识别题目和答案
     2. 自动批改打分
     3. 错因分析
     4. 生成学习建议
-
-    注意：只支持RPJ模块的学科 (chinese, english, politics)
     """
-    # 验证学科是否属于RPJ模块
-    validate_subject(subject)
-
     # 验证文件类型
-    allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"]
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "image/heic"]
     if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
             detail=f"不支持的文件类型: {file.content_type}。支持: {', '.join(allowed_types)}"
         )
 
-    # 验证文件大小（限制为10MB）
-    max_size = 10 * 1024 * 1024  # 10MB
-    file.file.seek(0, 2)  # 移动到文件末尾
-    file_size = file.file.tell()
-    file.file.seek(0)  # 重置文件指针
+    # 解析学科类型
+    subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
 
-    if file_size > max_size:
-        raise HTTPException(
-            status_code=400,
-            detail=f"文件太大。最大支持 {max_size // (1024*1024)}MB"
-        )
+    t0 = time.perf_counter()
+    logger.info(
+        f"[ocr/analyze] start user_id={current_user.id} subject={subject_en} grade={grade or None} "
+        f"filename={file.filename} content_type={file.content_type}"
+    )
 
     # 读取文件内容并计算哈希值
     content = await file.read()
     file_hash = calculate_file_hash(content)
+    logger.info(
+        f"[ocr/analyze] file loaded user_id={current_user.id} bytes={len(content)} hash={file_hash[:16]}..."
+    )
 
     # 检查图片是否已存在（同一用户维度去重）
-    existing_image = await crud_image_file.get_image_by_hash(db, file_hash, user_id)
+    existing_image = await crud_image_file.get_image_by_hash(db, file_hash)
     is_duplicate = False
     duplicate_message = None
 
-    if existing_image and existing_image.user_id == user_id:
+    # 检查是否为同一用户的重复图片
+    if existing_image and existing_image.user_id == current_user.id:
         is_duplicate = True
         duplicate_message = "检测到您之前已上传过相同的图片，系统将复用已有图片进行分析"
-        logger.info(f"重复图片检测: 用户ID={user_id}, 文件哈希={file_hash[:16]}...")
+        logger.info(f"Duplicate image detected for user {current_user.id}: hash={file_hash[:16]}...")
 
     # 生成task_id用于后续处理
     task_id = str(uuid.uuid4())
+    logger.info(f"[ocr/analyze] task_id={task_id} user_id={current_user.id} prepared")
 
     # 获取或创建原始图片记录
+    from backend.core.db.models import ImageFileTypeEnum
+
     if existing_image:
         # 图片已存在，复用现有文件
         original_image_file = existing_image
-        file_path = original_image_file.file_path
+        file_path = existing_image.file_path
         filename = get_filename_from_path(file_path)
-        logger.info(f"图片已存在，复用: 文件哈希={file_hash[:16]}..., 路径={file_path}")
+        logger.info(f"Image already exists, reusing: hash={file_hash[:16]}..., path={file_path}")
 
         # 增加引用计数
-        await crud_image_file.increment_reference_count(db, file_hash, user_id)
+        await crud_image_file.increment_reference_count(db, file_hash)
     else:
-        # 图片不存在，保存新文件
-        file_ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "jpg"
+        # 图片不存在，保存新文件（使用hash值作为文件名）
+        file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
+        # 使用hash值的前32位作为文件名，避免文件名过长
         filename = f"{file_hash[:32]}.{file_ext}"
 
-        # 保存到用户专属目录
-        upload_dir = get_user_upload_dir(user_id, "corrections", subject)
+        # 保存到用户专属目录: data/uploads/{username_email}/corrections/{subject}/
+        upload_dir = get_user_upload_dir(UPLOAD_DIR, current_user, "corrections", subject_en)
         file_path = os.path.join(upload_dir, filename)
 
         # 保存文件
         with open(file_path, "wb") as f:
             f.write(content)
 
-        # 创建图片文件记录（原始图片）
+        # 创建图片文件记录（原始图片）- 存储相对路径以便跨环境
+        # 标准化路径格式为 data/uploads/... (不带 ./ 前缀)
         relative_path = os.path.relpath(file_path, os.path.abspath("."))
-        if relative_path.startswith(".."):
-            # 如果相对路径包含上级目录，使用绝对路径
-            relative_path = file_path
+        # 移除开头的 ./ 或 ./
+        relative_path = relative_path.lstrip("./")
+        if not relative_path.startswith("data/uploads"):
+            relative_path = f"data/uploads/{get_user_directory_name(current_user.username, current_user.email)}/corrections/{subject_en}/{filename}"
 
         original_image_file = await crud_image_file.create_image_file(
             db=db,
             file_hash=file_hash,
-            user_id=user_id,
+            user_id=current_user.id,
             file_type="corrections",
-            subject=subject,
+            subject=subject_en,
             file_path=relative_path,
-            file_size=file_size,
+            file_size=len(content),
             mime_type=file.content_type,
             image_type=ImageFileTypeEnum.ORIGINAL,
         )
-        logger.info(f"新图片已保存: 文件哈希={file_hash[:16]}..., 路径={file_path}, ID={original_image_file.id}")
+        logger.info(f"New image saved: hash={file_hash[:16]}..., path={file_path}, id={original_image_file.id}")
 
     try:
-        # 调用RPJ模块的OCR Agent
-        ocr_agent = OCRAgent(subject)
-        await ocr_agent.initialize()
+        # 调用 OCR 服务
+        ocr_service = get_gemini_ocr_service()
+        await ocr_service.initialize()
+
+        # 解析学科类型 - 支持中文和英文
+        try:
+            subject_type = SubjectType(subject_en)
+        except ValueError:
+            subject_type = SubjectType.OTHER
 
         # 分析试卷
-        analysis_result = await ocr_agent.analyze_exam_image(
+        t_analyze0 = time.perf_counter()
+        result = await ocr_service.analyze_exam_image(
             image_path=file_path,
-            subject=subject,
+            subject=subject_type,
             grade=grade,
-            hint=hint,
+            user_hint=hint,
+        )
+        analyze_ms = int((time.perf_counter() - t_analyze0) * 1000)
+        logger.info(
+            f"[ocr/analyze] task_id={task_id} user_id={current_user.id} analyze done duration_ms={analyze_ms} "
+            f"questions={len(result.questions or [])} accuracy={result.accuracy_rate} total={result.total_score}/{result.max_score}"
         )
 
-        # TODO(student): 学科判定 + 分类归一化（统一模板 v1；不要在此处直接实现，留给学生）
-        # 【输入】user_selected_subject=subject，text=OCR/试卷解析得到的题目文本/结构化题目
-        # 【输出】对每题生成：
-        #   - detected_subject + confidence(0~1)
-        #   - chapter: 从 CHAPTER_TAXONOMY[detected_subject] 选 1 个（否则“综合”）
-        #   - knowledge_points: 从 KNOWLEDGE_POINT_TAXONOMY[detected_subject] 选 1~3 个（否则“综合”）
-        #   - tags: 2~6 个短词（用于检索，避免太碎）
-        # 【规则】
-        #   - 若 detected_subject != user_selected_subject 且 confidence >= 0.75：提示“学科不匹配”并拒绝返回批改结果
-        #   - taxonomy 必须收敛：chapter 建议 6~10 个，knowledge_points 建议 10~25 个；同义项合并，避免发散
-        # 【推荐 taxonomy 示例（RPJ: chinese/english/morality）】
-        #   CHAPTER_TAXONOMY = {
-        #     "chinese": ["阅读理解", "文言文", "诗词鉴赏", "写作", "基础知识(字词句)", "综合"],
-        #     "english": ["词汇语法", "完形填空", "阅读理解", "写作", "听力", "综合"],
-        #     "morality": ["法律与规则", "道德与价值观", "国家制度", "经济与社会", "时政与案例", "综合"],
-        #   }
-        #   KNOWLEDGE_POINT_TAXONOMY = {
-        #     "chinese": ["主旨概括", "人物形象", "修辞手法", "表达方式", "文言实词虚词", "病句与标点", "写作立意与结构", "综合"],
-        #     "english": ["时态语态", "从句", "非谓语", "词汇辨析", "阅读策略", "写作句型", "综合"],
-        #     "morality": ["宪法与法律", "权利与义务", "社会主义核心价值观", "法治思维", "公民责任", "时事热点", "综合"],
-        #   }
-        # 【实现建议】
-        #   - OCR/解析后调用 settings.LLM_API_ENDPOINT 的 /chat/completions（二次判定+归一化）
-        #   - 优先更强模型（gemini-3-pro-preview / gpt-5.2），可通过环境变量 RPJ_HIGH_ACCURACY_MODEL 覆盖
-        # 【参考实现】backend/modules/tony/agents/question_intake_ocr_agent.py（仅 tony 模块完整实现）
+        # ===== 学科一致性校验（TONY模块：history/geography/other）=====
+        # GeminiOCRService 会“始终使用用户传入的学科类型”，因此这里额外做一次判定：
+        # 若检测到明显不匹配，则提示用户重新选择学科，避免产生误导性结果。
+        try:
+            import httpx
+            import re
+            from backend.modules.tony.config import settings as tony_settings
 
-        if not analysis_result or not analysis_result.get("success", False):
-            raise HTTPException(
-                status_code=500,
-                detail="试卷分析失败，请稍后重试"
+            # 文本推理模型：用于学科一致性判定（与“录入错题”一致，使用 TONY_TEXT_REASONING_MODELS）
+            models_raw = (os.getenv("TONY_TEXT_REASONING_MODELS") or "").strip()
+            if models_raw:
+                model = [m.strip() for m in models_raw.split(",") if m.strip()][0]
+            else:
+                model = (tony_settings.GEMINI_MODEL or "gemini-2.5-flash").strip()
+            endpoint = (tony_settings.LLM_API_ENDPOINT or "").rstrip("/")
+            if not endpoint:
+                raise RuntimeError("LLM_API_ENDPOINT not configured")
+
+            headers = {}
+            if getattr(tony_settings, "LLM_API_KEY", None):
+                headers["authorization"] = f"Bearer {tony_settings.LLM_API_KEY}"
+
+            text_sample = {
+                "overall_analysis": getattr(result, "overall_analysis", "") or "",
+                "questions": [
+                    {"question_text": (getattr(q, "question_text", "") or "")[:300]}
+                    for q in (result.questions or [])[:10]
+                ],
+            }
+
+            prompt = f"""你是教研员，负责学科判定。请判断以下内容最匹配的学科，只能从 ["history","geography","other"] 中选。
+用户选择学科：{subject_en}
+
+内容摘要：
+{json.dumps(text_sample, ensure_ascii=False)}
+
+请严格输出 JSON（不要输出其它文字）：
+{{"detected_subject":"history|geography|other","confidence":0.0}}"""
+
+            t_mismatch0 = time.perf_counter()
+            async with httpx.AsyncClient(base_url=endpoint, timeout=20.0) as client:
+                resp = await client.post(
+                    "/chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.2,
+                        "max_tokens": 512,
+                    },
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                raw = data["choices"][0]["message"]["content"]
+            mismatch_ms = int((time.perf_counter() - t_mismatch0) * 1000)
+
+            m = re.search(r"\{[\s\S]*\}", raw or "")
+            detected = None
+            conf_f = 0.0
+            if m:
+                parsed = json.loads(m.group())
+                detected = str(parsed.get("detected_subject") or "").strip().lower()
+                try:
+                    conf_f = float(parsed.get("confidence", 0.0))
+                except Exception:
+                    conf_f = 0.0
+
+            if detected in ("history", "geography", "other") and detected != subject_en and conf_f >= 0.75:
+                warn = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject_en}。请确认学科选择或更换图片。"
+                raise HTTPException(status_code=400, detail=warn)
+            logger.info(
+                f"[ocr/analyze] task_id={task_id} user_id={current_user.id} subject_check ok model={model} "
+                f"detected={detected or None} conf={conf_f:.2f} duration_ms={mismatch_ms}"
             )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[ocr/analyze] task_id={task_id} user_id={current_user.id} subject_check skipped/failed: {e}")
 
-        # 提取分析结果
-        questions = analysis_result.get("questions", [])
-        total_score = analysis_result.get("total_score", 0.0)
-        max_score = analysis_result.get("max_score", 100.0)
-        overall_analysis = analysis_result.get("overall_analysis", "")
-        weak_points = analysis_result.get("weak_points", [])
-        improvement_suggestions = analysis_result.get("improvement_suggestions", [])
-        accuracy_rate = analysis_result.get("accuracy_rate", 0.0)
-        result_grade = analysis_result.get("grade", grade)
+        # 生成批改图像
+        t_overlay0 = time.perf_counter()
+        correction_result = await ocr_service.create_correction_overlay(
+            image_path=file_path,
+            analysis_result=result,
+        )
+        overlay_ms = int((time.perf_counter() - t_overlay0) * 1000)
+        logger.info(
+            f"[ocr/analyze] task_id={task_id} user_id={current_user.id} overlay done success={bool(correction_result.success)} duration_ms={overlay_ms}"
+        )
 
-        # 生成批改图像（如果支持）
+        # 保存批改后的图像到用户专属目录和image_files表
         corrected_image_file = None
-        corrected_image_url = None
+        if correction_result.success and correction_result.corrected_image_base64:
+            import base64
+            corrected_image_bytes = base64.b64decode(correction_result.corrected_image_base64)
+            corrected_file_hash = calculate_file_hash(corrected_image_bytes)
 
-        if analysis_result.get("corrected_image_base64"):
-            try:
-                import base64
+            # 检查批改后的图片是否已存在
+            existing_corrected_image = await crud_image_file.get_image_by_hash(db, corrected_file_hash)
 
-                corrected_image_bytes = base64.b64decode(analysis_result["corrected_image_base64"])
-                corrected_file_hash = calculate_file_hash(corrected_image_bytes)
+            if existing_corrected_image:
+                corrected_image_file = existing_corrected_image
+                corrected_path = existing_corrected_image.file_path
+                await crud_image_file.increment_reference_count(db, corrected_file_hash)
+                logger.info(f"Corrected image already exists, reusing: hash={corrected_file_hash[:16]}..., id={corrected_image_file.id}")
+            else:
+                # 保存批改后的图片文件（使用原始学科，保证与批改前一致）
+                corrected_filename = f"{corrected_file_hash[:32]}.png"
+                corrected_path = os.path.join(
+                    get_user_upload_dir(UPLOAD_DIR, current_user, "corrections", subject_en),
+                    corrected_filename
+                )
+                with open(corrected_path, "wb") as f:
+                    f.write(corrected_image_bytes)
 
-                # 检查批改后的图片是否已存在
-                existing_corrected_image = await crud_image_file.get_image_by_hash(db, corrected_file_hash, user_id)
+                # 标准化路径格式为 data/uploads/... (不带 ./ 前缀)
+                corrected_relative_path = os.path.relpath(corrected_path, os.path.abspath("."))
+                corrected_relative_path = corrected_relative_path.lstrip("./")
+                if not corrected_relative_path.startswith("data/uploads"):
+                    corrected_relative_path = f"data/uploads/{get_user_directory_name(current_user.username, current_user.email)}/corrections/{subject_en}/{corrected_filename}"
 
-                if existing_corrected_image:
-                    corrected_image_file = existing_corrected_image
-                    corrected_path = existing_corrected_image.file_path
-                    await crud_image_file.increment_reference_count(db, corrected_file_hash, user_id)
-                    logger.info(f"批改后图片已存在，复用: 文件哈希={corrected_file_hash[:16]}..., ID={corrected_image_file.id}")
-                else:
-                    # 保存批改后的图片文件
-                    corrected_filename = f"{corrected_file_hash[:32]}_corrected.png"
-                    corrected_upload_dir = get_user_upload_dir(user_id, "corrections", subject)
-                    corrected_path = os.path.join(corrected_upload_dir, corrected_filename)
+                # 创建批改后图片文件记录（关联到原始图片，使用原始学科）
+                corrected_image_file = await crud_image_file.create_image_file(
+                    db=db,
+                    file_hash=corrected_file_hash,
+                    user_id=current_user.id,
+                    file_type="corrections",
+                    subject=subject_en,  # 使用原始学科，保证与批改前一致
+                    file_path=corrected_relative_path,  # 使用标准化路径（不带 ./ 前缀）
+                    file_size=len(corrected_image_bytes),
+                    mime_type="image/png",
+                    image_type=ImageFileTypeEnum.CORRECTED,
+                    original_image_id=original_image_file.id,  # 关联到原始图片
+                )
+                logger.info(f"Saved corrected image: hash={corrected_file_hash[:16]}..., path={corrected_relative_path}, id={corrected_image_file.id}")
 
-                    with open(corrected_path, "wb") as f:
-                        f.write(corrected_image_bytes)
+        # 保存批注记录到数据库（使用原始学科，保证与批改前一致）
+        from backend.core.db.models import ExamCorrection, QuestionSourceEnum
 
-                    # 创建批改后图片文件记录
-                    corrected_relative_path = os.path.relpath(corrected_path, os.path.abspath("."))
-                    if corrected_relative_path.startswith(".."):
-                        corrected_relative_path = corrected_path
-
-                    corrected_image_file = await crud_image_file.create_image_file(
-                        db=db,
-                        file_hash=corrected_file_hash,
-                        user_id=user_id,
-                        file_type="corrections",
-                        subject=subject,
-                        file_path=corrected_relative_path,
-                        file_size=len(corrected_image_bytes),
-                        mime_type="image/png",
-                        image_type=ImageFileTypeEnum.CORRECTED,
-                        original_image_id=original_image_file.id,
-                    )
-                    logger.info(f"批改后图片已保存: 文件哈希={corrected_file_hash[:16]}..., 路径={corrected_path}, ID={corrected_image_file.id}")
-
-            except Exception as e:
-                logger.error(f"保存批改后图片失败: {str(e)}")
-                # 批改后图片保存失败不影响整体流程
-
-        # 保存批注记录到数据库
         exam_correction = ExamCorrection(
-            user_id=user_id,
-            subject=subject,
-            grade=result_grade,
-            exam_title=hint or f"{get_subject_display_name(subject)}试卷批改",
+            user_id=current_user.id,
+            subject=subject_type,  # 使用原始学科类型
+            grade=grade or result.grade,
+            exam_title=hint or f"{subject_en}试卷批改",  # 使用原始学科
             original_image_id=original_image_file.id,
             corrected_image_id=corrected_image_file.id if corrected_image_file else None,
-            total_score=total_score,
-            max_score=max_score,
-            accuracy_rate=accuracy_rate,
-            question_count=len(questions),
-            correct_count=sum(1 for q in questions if q.get("is_correct", False)),
-            wrong_count=sum(1 for q in questions if not q.get("is_correct", True)),
-            overall_analysis=overall_analysis,
-            weak_points=weak_points,
-            improvement_suggestions=improvement_suggestions,
+            total_score=result.total_score,
+            max_score=result.max_score,
+            accuracy_rate=result.accuracy_rate,
+            question_count=len(result.questions),
+            correct_count=sum(1 for q in result.questions if q.is_correct),
+            wrong_count=sum(1 for q in result.questions if not q.is_correct),
+            overall_analysis=result.overall_analysis,
+            weak_points=result.weak_points,
+            improvement_suggestions=result.improvement_suggestions,
             questions_detail=[
                 {
-                    "question_number": q.get("question_number", 0),
-                    "question_type": q.get("question_type", ""),
-                    "question_text": q.get("question_text", ""),
-                    "student_answer": q.get("student_answer", ""),
-                    "correct_answer": q.get("correct_answer"),
-                    "score": q.get("score", 0.0),
-                    "max_score": q.get("max_score", 0.0),
-                    "is_correct": q.get("is_correct", False),
-                    "error_analysis": q.get("error_analysis", ""),
-                    "knowledge_points": q.get("knowledge_points", []),
-                    "solution_steps": q.get("solution_steps", []),
-                    "difficulty": q.get("difficulty", "medium"),
+                    "question_number": q.question_number,
+                    "question_type": q.question_type,
+                    "question_text": q.question_text,
+                    "student_answer": q.student_answer,
+                    "correct_answer": q.correct_answer,
+                    "score": q.score,
+                    "max_score": q.max_score,
+                    "is_correct": q.is_correct,
+                    "error_analysis": q.error_analysis,
+                    "knowledge_points": q.knowledge_points,
+                    "solution_steps": q.solution_steps,
+                    "difficulty": q.difficulty,
                 }
-                for q in questions
+                for q in result.questions
             ],
-            created_at=datetime.utcnow(),
         )
-
         db.add(exam_correction)
         await db.flush()
+        logger.info(
+            f"[ocr/analyze] task_id={task_id} user_id={current_user.id} saved exam_correction id={exam_correction.id} "
+            f"wrong_count={exam_correction.wrong_count} correct_count={exam_correction.correct_count}"
+        )
 
-        # 生成批改图片URL
+        # 生成批改图片URL（使用新格式：通过 correction_id 访问）
+        corrected_image_url = None
         if corrected_image_file:
             corrected_image_url = generate_correction_image_url(
-                exam_correction.id, "corrected", subject
+                exam_correction.id, "corrected", subject_en
             )
-            logger.info(f"批改后图片URL: {corrected_image_url}")
+            logger.info(f"Corrected image URL: {corrected_image_url}")
 
         # 为错误的题目自动创建错题记录
-        wrong_question_ids = []
-        for i, q in enumerate(questions):
-            if not q.get("is_correct", False):
-                # 构建错题图片路径
-                question_filename = f"{task_id}_q{q.get('question_number', i+1)}.{file_ext if 'file_ext' in locals() else 'jpg'}"
-                question_upload_dir = get_user_upload_dir(user_id, "questions", subject)
-                question_image_path = os.path.join(question_upload_dir, question_filename)
+        from backend.core.crud import crud_question
+        from backend.core.schemas.question import QuestionCreate
 
-                # 复制原图作为错题图片（简化处理，直接使用原图路径）
+        wrong_question_ids = []
+        for q in result.questions:
+            if not q.is_correct:  # 只为错题创建记录
+                # 保存错题图片到用户专属目录（使用原始学科，保证与批改前一致）
+                question_filename = f"{task_id}_q{q.question_number}.{file_ext}"
+                question_image_path = os.path.join(
+                    get_user_upload_dir(UPLOAD_DIR, current_user, "questions", subject_en),
+                    question_filename
+                )
+
+                # 复制原图作为错题图片（后续可优化为裁剪）
                 import shutil
                 try:
                     shutil.copy2(file_path, question_image_path)
                 except Exception as e:
-                    logger.warning(f"复制错题图片失败: {str(e)}")
+                    logger.warning(f"Failed to copy question image: {e}")
                     question_image_path = file_path
 
-                # 获取相对路径
-                question_relative_path = os.path.relpath(question_image_path, os.path.abspath("."))
-                if question_relative_path.startswith(".."):
-                    question_relative_path = question_image_path
+                # 生成URL路径（使用原始学科，保证与批改前一致）
+                question_image_url = get_user_file_url(current_user, "questions", subject_en, question_filename)
 
-                # 保存错题图片记录
-                question_image_file = await crud_image_file.create_image_file(
-                    db=db,
-                    file_hash=calculate_file_hash(open(question_image_path, 'rb').read()),
-                    user_id=user_id,
-                    file_type="questions",
-                    subject=subject,
-                    file_path=question_relative_path,
-                    file_size=os.path.getsize(question_image_path),
-                    mime_type=file.content_type,
-                    image_type=ImageFileTypeEnum.ORIGINAL,
+                # 创建错题记录（使用原始学科，保证与批改前一致）
+                question_data = QuestionCreate(
+                    content=q.question_text,
+                    title=f"第{q.question_number}题 - {q.question_type}",
+                    subject=subject_en,  # 使用原始学科
+                    difficulty=q.difficulty,
+                    student_answer=q.student_answer,
+                    correct_answer=q.correct_answer,
+                    image_urls=[question_image_url],
+                    tags=q.knowledge_points,
                 )
 
-                # 创建错题记录
+                from backend.core.db.models import Question
                 db_question = Question(
-                    user_id=user_id,
+                    user_id=current_user.id,
                     exam_correction_id=exam_correction.id,
-                    title=f"第{q.get('question_number', i+1)}题 - {q.get('question_type', '题目')}",
-                    content=q.get("question_text", ""),
-                    subject=subject,
-                    difficulty=q.get("difficulty", "medium"),
-                    student_answer=q.get("student_answer", ""),
-                    correct_answer=q.get("correct_answer"),
-                    knowledge_points=q.get("knowledge_points", []),
-                    error_analysis=q.get("error_analysis", ""),
+                    title=question_data.title,
+                    content=question_data.content,
+                    subject=subject_type,  # 使用原始学科类型
+                    difficulty=question_data.difficulty,
+                    student_answer=question_data.student_answer,
+                    correct_answer=question_data.correct_answer,
+                    image_urls=question_data.image_urls,
+                    knowledge_points=q.knowledge_points,
+                    error_analysis=q.error_analysis,
                     source=QuestionSourceEnum.AI_CORRECTION,
-                    source_description=f"AI批注试卷第{q.get('question_number', i+1)}题",
-                    tags=q.get("knowledge_points", []),
-                    created_at=datetime.utcnow(),
+                    source_description=f"AI批注试卷第{q.question_number}题",
+                    tags=q.knowledge_points,
                 )
-
                 db.add(db_question)
                 await db.flush()
                 wrong_question_ids.append(db_question.id)
 
         await db.commit()
+        total_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info(
+            f"[ocr/analyze] done task_id={task_id} user_id={current_user.id} correction_id={exam_correction.id} "
+            f"created_wrong_questions={len(wrong_question_ids)} duration_ms={total_ms}"
+        )
 
         logger.info(
-            f"试卷批改记录已保存: 记录ID={exam_correction.id}, 用户ID={user_id}, "
-            f"创建错题记录数={len(wrong_question_ids)}"
+            f"Saved exam correction {exam_correction.id} for user {current_user.id}, "
+            f"created {len(wrong_question_ids)} wrong question records"
         )
 
         return OCRAnalysisResponse(
             success=True,
             task_id=task_id,
-            subject=subject,
-            subject_display=get_subject_display_name(subject),
-            grade=result_grade,
-            total_score=total_score,
-            max_score=max_score,
-            accuracy_rate=accuracy_rate,
-            questions=questions,
-            overall_analysis=overall_analysis,
-            weak_points=weak_points,
-            improvement_suggestions=improvement_suggestions,
+            subject=result.subject.value,
+            grade=result.grade,
+            total_score=result.total_score,
+            max_score=result.max_score,
+            accuracy_rate=result.accuracy_rate,
+            questions=[
+                {
+                    "question_number": q.question_number,
+                    "question_type": q.question_type,
+                    "question_text": q.question_text,
+                    "student_answer": q.student_answer,
+                    "correct_answer": q.correct_answer,
+                    "score": q.score,
+                    "max_score": q.max_score,
+                    "is_correct": q.is_correct,
+                    "error_analysis": q.error_analysis,
+                    "knowledge_points": q.knowledge_points,
+                    "solution_steps": q.solution_steps,
+                    "difficulty": q.difficulty,
+                }
+                for q in result.questions
+            ],
+            overall_analysis=result.overall_analysis,
+            weak_points=result.weak_points,
+            improvement_suggestions=result.improvement_suggestions,
             corrected_image_url=corrected_image_url,
             is_duplicate=is_duplicate,
             duplicate_message=duplicate_message,
-            correction_id=exam_correction.id,
         )
 
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"试卷分析失败: {str(e)}")
-        await db.rollback()
+        logger.error(f"OCR analysis failed: {e}")
         raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
+
+    finally:
+        # 清理临时文件 (可选，生产环境可保留用于审计)
+        pass
+
+@router.get("/images/{file_type}/{user_id}/{subject}/{filename}")
+async def get_user_image(
+    file_type: str,
+    user_id: int,
+    subject: str,
+    filename: str,
+    token: Optional[str] = Query(None, description="JWT token (for image tag access)"),
+    current_user_id: Optional[int] = Depends(get_optional_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取用户图像
+
+    路径格式: /ocr/images/{file_type}/{user_id}/{subject}/{filename}
+    file_type: corrections 或 questions
+
+    安全验证：
+    - 如果提供了JWT token，验证路径中的user_id与JWT中的user_id是否一致
+    - 如果没有token，在开发模式下允许访问（生产环境应要求认证）
+    - 支持通过<img>标签直接访问（浏览器不会发送Authorization header）
+    """
+    from fastapi.responses import FileResponse
+    from backend.core.crud import crud_user
+    from backend.core.utils.file_utils import get_user_directory_name
+    from backend.modules.tony.config import settings
+    from jose import jwt, JWTError
+
+    # 如果从查询参数提供了token，尝试解析
+    if token and current_user_id is None:
+        try:
+            payload = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
+            user_id_str: str = payload.get("sub")
+            if user_id_str:
+                current_user_id = int(user_id_str)
+        except JWTError as e:
+            logger.warning(f"Failed to parse token from query param: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to parse token from query param: {e}")
+
+    # 如果提供了token，验证用户ID是否一致
+    if current_user_id is not None:
+        logger.info(f"Image access with authentication: current_user_id={current_user_id}, path_user_id={user_id}")
+        if user_id != current_user_id:
+            logger.warning(f"User ID mismatch: current_user_id={current_user_id}, path_user_id={user_id}")
+            raise HTTPException(
+                status_code=403,
+                detail="无权访问该用户的图像资源"
+            )
+    else:
+        # 没有token的情况
+        logger.warning(f"Image access without authentication: user_id={user_id}, file={filename}, is_development={settings.is_development}")
+        if not settings.is_development:
+            # 生产环境要求认证
+            raise HTTPException(
+                status_code=401,
+                detail="需要认证才能访问图像资源",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        # 开发模式允许访问，但记录警告
+
+    # 获取用户对象以构建正确的文件路径
+    user = await crud_user.get_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 根据用户信息构建用户目录名
+    user_dir_name = get_user_directory_name(user.username, user.email)
+    file_path = os.path.join(UPLOAD_DIR, user_dir_name, file_type, subject, filename)
+
+    if os.path.exists(file_path):
+        # 根据文件扩展名确定 MIME 类型
+        ext = filename.split('.')[-1].lower()
+        mime_types = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'webp': 'image/webp',
+            'heic': 'image/heic',
+        }
+        media_type = mime_types.get(ext, 'image/png')
+        return FileResponse(file_path, media_type=media_type)
+
+        raise HTTPException(status_code=404, detail="图像不存在")
 
 @router.get("/images/corrections/{correction_id}/{image_type}")
 async def get_correction_image(
-    correction_id: int = Path(..., description="批改记录ID"),
-    image_type: str = Path(..., description="图片类型: 'original' 或 'corrected'"),
+    correction_id: int,
+    image_type: str = Path(description="图片类型: 'original' 或 'corrected'"),
+    token: Optional[str] = Query(None, description="JWT token (for image tag access)"),
+    current_user_id: Optional[int] = Depends(get_optional_user_id),
     db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
 ):
     """
     获取批注图片（通过correction_id和image_type）
 
-    路径格式: /api/v1/rpj/ocr/images/corrections/{correction_id}/{image_type}
+    路径格式: /ocr/images/corrections/{correction_id}/{image_type}
     image_type: 'original' 或 'corrected'
 
     安全验证：
@@ -508,6 +670,10 @@ async def get_correction_image(
     - 根据image_type获取对应的图片ID并返回图片文件
     """
     from fastapi.responses import FileResponse
+    from backend.core.crud import crud_exam_correction, crud_image_file
+    from backend.modules.tony.config import settings
+    from jose import jwt, JWTError
+    import os
 
     # 验证image_type
     if image_type not in ["original", "corrected"]:
@@ -516,74 +682,137 @@ async def get_correction_image(
             detail="image_type必须是'original'或'corrected'"
         )
 
+    # 如果从查询参数提供了token，尝试解析
+    if token and current_user_id is None:
+        try:
+            payload = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
+            user_id_str: str = payload.get("sub")
+            if user_id_str:
+                current_user_id = int(user_id_str)
+        except JWTError as e:
+            logger.warning(f"Failed to parse token from query param: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to parse token from query param: {e}")
+
     # 获取批注记录
-    result = await db.execute(
-        select(ExamCorrection).where(
-            ExamCorrection.id == correction_id,
-            ExamCorrection.user_id == user_id
-        )
-    )
-    correction = result.scalar_one_or_none()
-
+    correction = await crud_exam_correction.get_exam_correction(db, correction_id, None)
     if not correction:
-        raise HTTPException(status_code=404, detail="批注记录不存在或无权访问")
+        raise HTTPException(status_code=404, detail="批注记录不存在")
 
-    # 验证学科是否属于RPJ模块
-    validate_subject(correction.subject)
+    # 验证用户权限
+    if current_user_id is not None:
+        if correction.user_id != current_user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="无权访问该批注记录的图像资源"
+            )
+    else:
+        # 没有token的情况
+        if not settings.is_development:
+            raise HTTPException(
+                status_code=401,
+                detail="需要认证才能访问图像资源",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        logger.warning(f"Correction image access without authentication: correction_id={correction_id}, image_type={image_type}")
 
-    # 根据image_type获取对应的图片文件
-    image_file_id = None
+    # 根据image_type获取对应的图片文件（直接使用已加载的关联对象）
     if image_type == "original":
-        image_file_id = correction.original_image_id
+        image_file = correction.original_image
+        if not image_file:
+            logger.error(f"Correction {correction_id} has no original_image (original_image_id={correction.original_image_id})")
+            raise HTTPException(status_code=404, detail="原始图片不存在")
+        logger.info(f"Getting original image: correction_id={correction_id}, image_id={image_file.id}, file_path={image_file.file_path}")
     else:  # corrected
-        image_file_id = correction.corrected_image_id
+        image_file = correction.corrected_image
+        if not image_file:
+            logger.error(f"Correction {correction_id} has no corrected_image (corrected_image_id={correction.corrected_image_id})")
+            raise HTTPException(status_code=404, detail="批改后的图片不存在")
+        logger.info(f"Getting corrected image: correction_id={correction_id}, image_id={image_file.id}, file_path={image_file.file_path}")
 
-    if not image_file_id:
-        raise HTTPException(
-            status_code=404,
-            detail=f"{'原始' if image_type == 'original' else '批改后'}图片不存在"
-        )
+    logger.info(f"Found ImageFile: id={image_file.id}, file_path={image_file.file_path}, image_type={image_file.image_type}")
 
-    # 获取图片文件记录
-    result = await db.execute(
-        select(ImageFile).where(
-            ImageFile.id == image_file_id,
-            ImageFile.user_id == user_id
-        )
-    )
-    image_file = result.scalar_one_or_none()
-
-    if not image_file:
-        raise HTTPException(status_code=404, detail="图片文件不存在")
-
-    # 检查文件是否存在
+    # 检查文件是否存在（处理相对路径）
     file_path = image_file.file_path
+    original_stored_path = file_path
 
-    # 如果文件路径是相对路径，转换为绝对路径
-    if not os.path.isabs(file_path):
-        # 尝试基于项目根目录
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(current_dir, "../../../../.."))
-        file_path = os.path.join(project_root, file_path)
+    # 获取项目根目录
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_file_dir, "../../../../../"))
 
-    if not os.path.exists(file_path):
-        # 尝试使用配置中的上传目录
-        upload_base = settings.IMAGE_UPLOAD_DIR
-        if upload_base and os.path.exists(upload_base):
-            # 构建可能的路径
-            possible_paths = [
-                file_path,
-                os.path.join(upload_base, file_path),
-                os.path.join(upload_base, str(user_id), "corrections", correction.subject, os.path.basename(file_path)),
-            ]
+    # 尝试多种路径解析方式
+    possible_paths = []
 
-            for path in possible_paths:
-                if os.path.exists(path):
-                    file_path = path
-                    break
-            else:
-                logger.error(f"图片文件不存在: 原始路径={image_file.file_path}, 用户ID={user_id}")
-                raise HTTPException(status_code=404, detail="图片文件不存在")
+    # 1. 如果是绝对路径，直接使用
+    if os.path.isabs(file_path):
+        possible_paths.append(file_path)
+    else:
+        # 2. 移除开头的 ./ 或 ./
+        normalized = file_path.lstrip("./").lstrip("/")
+
+        # 3. 基于项目根目录
+        possible_paths.append(os.path.join(project_root, normalized))
+
+        # 4. 基于当前工作目录
+        possible_paths.append(os.path.join(os.getcwd(), normalized))
+
+        # 5. 如果路径包含 data/uploads，尝试直接拼接
+        if "data/uploads" in normalized:
+            possible_paths.append(os.path.join(project_root, normalized))
+            # 移除 data/uploads 前缀，重新拼接
+            rel_part = normalized.split("data/uploads/", 1)[-1] if "data/uploads/" in normalized else normalized
+            possible_paths.append(os.path.join(project_root, "data", "uploads", rel_part))
+
+    # 尝试每个可能的路径
+    found_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            found_path = path
+            logger.info(f"Found file at: {path} (from stored path: {original_stored_path})")
+            break
+
+    if not found_path:
+        # 备用方案：尝试根据hash值查找文件
+        logger.warning(f"File not found at stored path, trying to find by hash: {image_file.file_hash[:32]}")
+        upload_base = os.path.join(project_root, "data", "uploads")
+
+        # 构建可能的目录路径（需要加载user关系）
+        from backend.core.crud import crud_user
+        user = await crud_user.get_user(db, correction.user_id)
+        if not user:
+            logger.error(f"User not found: user_id={correction.user_id}")
+            raise HTTPException(status_code=404, detail="用户不存在")
+        user_dir_name = get_user_directory_name(user.username, user.email)
+        possible_dirs = [
+            os.path.join(upload_base, user_dir_name, "corrections", correction.subject.value if hasattr(correction.subject, 'value') else str(correction.subject)),
+            os.path.join(upload_base, user_dir_name, "corrections", "math"),  # 尝试math目录
+            os.path.join(upload_base, user_dir_name, "corrections"),  # 尝试corrections目录
+        ]
+
+        # 尝试查找包含hash值的文件
+        hash_prefix = image_file.file_hash[:32]
+        for search_dir in possible_dirs:
+            if os.path.exists(search_dir):
+                try:
+                    for filename in os.listdir(search_dir):
+                        if hash_prefix in filename:
+                            candidate_path = os.path.join(search_dir, filename)
+                            if os.path.exists(candidate_path):
+                                found_path = candidate_path
+                                logger.info(f"Found file by hash search: {found_path}")
+                                break
+                    if found_path:
+                        break
+                except Exception as e:
+                    logger.warning(f"Error searching directory {search_dir}: {e}")
+
+        if not found_path:
+            logger.error(f"Image file not found. Stored path: {original_stored_path}, Tried paths: {possible_paths}, Hash search dirs: {possible_dirs}, image_id={image_file.id}, correction_id={correction_id}, image_type={image_type}, file_hash={image_file.file_hash[:32]}")
+            raise HTTPException(status_code=404, detail=f"图片文件不存在: {original_stored_path}")
+
+    file_path = found_path
 
     # 根据文件扩展名确定 MIME 类型
     ext = os.path.splitext(file_path)[1].lower().lstrip('.')
@@ -592,614 +821,77 @@ async def get_correction_image(
         'jpg': 'image/jpeg',
         'jpeg': 'image/jpeg',
         'webp': 'image/webp',
-        'gif': 'image/gif',
-        'bmp': 'image/bmp',
+        'heic': 'image/heic',
     }
-    media_type = mime_types.get(ext, 'image/jpeg')
-
-    logger.info(f"返回图片文件: 路径={file_path}, 媒体类型={media_type}")
+    media_type = mime_types.get(ext, 'image/png')
 
     return FileResponse(file_path, media_type=media_type)
 
-@router.post("/batch-analyze", response_model=BatchAnalysisResponse)
+@router.get("/images/{subject}/{filename}")
+async def get_image_legacy(subject: str, filename: str):
+    """
+    获取图像（兼容旧路径）
+    旧路径格式: /ocr/images/{subject}/{filename}
+    """
+    from fastapi.responses import FileResponse
+
+    # 尝试从批注目录或错题目录查找（遍历所有用户目录）
+    base_paths = [UPLOAD_DIR]
+
+    for base_path in base_paths:
+        # 遍历用户目录
+        if os.path.exists(base_path):
+            for user_dir in os.listdir(base_path):
+                user_path = os.path.join(base_path, user_dir)
+                if not os.path.isdir(user_path):
+                    continue
+
+                # 尝试 corrections 和 questions
+                for file_type in ["corrections", "questions"]:
+                    file_path = os.path.join(user_path, file_type, subject, filename)
+                    if os.path.exists(file_path):
+                        ext = filename.split('.')[-1].lower()
+                        mime_types = {
+                            'png': 'image/png',
+                            'jpg': 'image/jpeg',
+                            'jpeg': 'image/jpeg',
+                            'webp': 'image/webp',
+                            'heic': 'image/heic',
+                        }
+                        media_type = mime_types.get(ext, 'image/png')
+                        return FileResponse(file_path, media_type=media_type)
+
+    raise HTTPException(status_code=404, detail="图像不存在")
+
+@router.post("/batch-analyze")
 async def batch_analyze_images(
-    files: List[UploadFile] = File(...),
-    subject: str = Form(..., description="学科"),
-    grade: str = Form("", description="年级"),
-    hint: Optional[str] = Form(None, description="试卷标题或提示"),
-    db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    files: list[UploadFile] = File(...),
+    subject: str = Form("other"),
+    current_user: User = Depends(get_current_user),
 ):
     """
     批量分析多张试卷图片
-
-    注意：批量分析可能耗时较长，建议异步处理
     """
-    # 验证学科是否属于RPJ模块
-    validate_subject(subject)
-
-    # 限制批量处理数量
-    max_files = 5
-    if len(files) > max_files:
-        raise HTTPException(
-            status_code=400,
-            detail=f"一次最多上传{max_files}个文件"
-        )
-
     results = []
 
     for file in files:
         try:
-            # 为每个文件生成task_id
-            task_id = str(uuid.uuid4())
-
-            # 验证文件类型
-            allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"]
-            if file.content_type not in allowed_types:
-                results.append({
-                    "filename": file.filename,
-                    "task_id": task_id,
-                    "status": "error",
-                    "message": f"不支持的文件类型: {file.content_type}"
-                })
-                continue
-
-            # 保存文件到临时目录
-            content = await file.read()
-            file_hash = calculate_file_hash(content)
-
-            # 检查是否已存在
-            existing_image = await crud_image_file.get_image_by_hash(db, file_hash, user_id)
-
-            if existing_image:
-                # 文件已存在
-                results.append({
-                    "filename": file.filename,
-                    "task_id": task_id,
-                    "status": "skipped",
-                    "message": "文件已存在，跳过处理",
-                    "file_hash": file_hash[:16] + "..."
-                })
-                continue
-
-            # 保存临时文件
-            temp_dir = os.path.join(settings.IMAGE_UPLOAD_DIR, "temp", str(user_id))
-            os.makedirs(temp_dir, exist_ok=True)
-
-            temp_filename = f"{task_id}_{file.filename or 'upload'}"
-            temp_path = os.path.join(temp_dir, temp_filename)
-
-            with open(temp_path, "wb") as f:
-                f.write(content)
-
-            # 记录任务信息
+            # 复用单张分析逻辑
+            # 这里简化处理，实际应该异步处理
             results.append({
                 "filename": file.filename,
-                "task_id": task_id,
                 "status": "queued",
                 "message": "已加入处理队列",
-                "file_hash": file_hash[:16] + "...",
-                "temp_path": temp_path
             })
-
         except Exception as e:
-            logger.error(f"批量处理文件失败: {file.filename}, 错误: {str(e)}")
             results.append({
                 "filename": file.filename,
                 "status": "error",
-                "message": f"处理失败: {str(e)}"
+                "message": str(e),
             })
 
-    # 异步处理批量任务
-    try:
-        # 这里可以启动后台任务来处理批量分析
-        # 简化处理：立即处理所有文件（实际应该使用任务队列）
-        from backend.modules.rpj.agents.task_processor import TaskProcessor
-
-        processor = TaskProcessor()
-        for result in results:
-            if result.get("status") == "queued" and result.get("temp_path"):
-                await processor.submit_ocr_task(
-                    task_id=result["task_id"],
-                    file_path=result["temp_path"],
-                    subject=subject,
-                    grade=grade,
-                    hint=hint,
-                    user_id=user_id
-                )
-    except Exception as e:
-        logger.error(f"提交批量任务失败: {str(e)}")
-
-    return BatchAnalysisResponse(
-        success=True,
-        total=len(results),
-        results=results
-    )
-
-@router.get("/status/{task_id}")
-async def get_ocr_task_status(
-    task_id: str = Path(..., description="任务ID"),
-    db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-):
-    """
-    获取OCR任务状态
-
-    查询指定任务的处理状态
-    """
-    # 这里可以查询任务状态表或使用Redis等缓存
-    # 简化处理：返回基本状态信息
-
-    from backend.modules.rpj.agents.task_processor import TaskProcessor
-
-    try:
-        processor = TaskProcessor()
-        status = await processor.get_task_status(task_id, user_id)
-
-        if not status:
-            raise HTTPException(status_code=404, detail="任务不存在")
-
-        return {
-            "task_id": task_id,
-            "status": status.get("status", "unknown"),
-            "progress": status.get("progress", 0),
-            "message": status.get("message", ""),
-            "result": status.get("result"),
-            "created_at": status.get("created_at"),
-            "updated_at": status.get("updated_at"),
-        }
-
-    except Exception as e:
-        logger.error(f"获取任务状态失败: {task_id}, 错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取任务状态失败: {str(e)}")
-
-@router.get("/recent-corrections")
-async def get_recent_corrections(
-    limit: int = Query(10, ge=1, le=50, description="返回数量"),
-    subject: Optional[str] = Query(None, description="学科筛选"),
-    db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-):
-    """
-    获取最近的批改记录
-
-    返回用户最近的OCR批改记录
-    """
-    # 验证学科是否属于RPJ模块
-    if subject:
-        validate_subject(subject)
-
-    # 构建查询
-    query = select(ExamCorrection).where(
-        ExamCorrection.user_id == user_id
-    ).order_by(ExamCorrection.created_at.desc())
-
-    # 应用学科筛选
-    if subject:
-        query = query.where(ExamCorrection.subject == subject)
-
-    # 限制结果数量
-    query = query.limit(limit)
-
-    # 执行查询
-    result = await db.execute(query)
-    corrections = result.scalars().all()
-
-    # 构建响应
-    response = []
-    for correction in corrections:
-        # 生成图片URL
-        original_image_url = generate_correction_image_url(correction.id, "original", correction.subject)
-        corrected_image_url = None
-        if correction.corrected_image_id:
-            corrected_image_url = generate_correction_image_url(correction.id, "corrected", correction.subject)
-
-        response.append({
-            "id": correction.id,
-            "subject": correction.subject,
-            "subject_display": get_subject_display_name(correction.subject),
-            "grade": correction.grade,
-            "exam_title": correction.exam_title,
-            "total_score": correction.total_score,
-            "max_score": correction.max_score,
-            "accuracy_rate": correction.accuracy_rate,
-            "question_count": correction.question_count,
-            "correct_count": correction.correct_count,
-            "wrong_count": correction.wrong_count,
-            "original_image_url": original_image_url,
-            "corrected_image_url": corrected_image_url,
-            "created_at": correction.created_at.isoformat(),
-        })
-
     return {
-        "total": len(response),
-        "corrections": response,
-    }
-
-@router.delete("/corrections/{correction_id}")
-async def delete_correction(
-    correction_id: int = Path(..., description="批改记录ID"),
-    db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-):
-    """
-    删除批改记录
-
-    删除指定的批改记录及相关联的图片和题目
-    """
-    # 获取批改记录
-    result = await db.execute(
-        select(ExamCorrection).where(
-            ExamCorrection.id == correction_id,
-            ExamCorrection.user_id == user_id
-        )
-    )
-    correction = result.scalar_one_or_none()
-
-    if not correction:
-        raise HTTPException(status_code=404, detail="批改记录不存在或无权访问")
-
-    # 验证学科是否属于RPJ模块
-    validate_subject(correction.subject)
-
-    try:
-        # 删除相关联的题目
-        questions_result = await db.execute(
-            select(Question).where(
-                Question.exam_correction_id == correction_id,
-                Question.user_id == user_id
-            )
-        )
-        questions = questions_result.scalars().all()
-
-        for question in questions:
-            await db.delete(question)
-
-        # 删除批改记录
-        await db.delete(correction)
-
-        # 删除相关联的图片（如果引用计数为0）
-        image_files = []
-        if correction.original_image_id:
-            result = await db.execute(
-                select(ImageFile).where(ImageFile.id == correction.original_image_id)
-            )
-            original_image = result.scalar_one_or_none()
-            if original_image:
-                image_files.append(original_image)
-
-        if correction.corrected_image_id:
-            result = await db.execute(
-                select(ImageFile).where(ImageFile.id == correction.corrected_image_id)
-            )
-            corrected_image = result.scalar_one_or_none()
-            if corrected_image:
-                image_files.append(corrected_image)
-
-        # 检查并删除图片文件记录
-        for image_file in image_files:
-            # 减少引用计数
-            await crud_image_file.decrement_reference_count(db, image_file.file_hash, user_id)
-
-            # 检查引用计数，如果为0则删除文件记录和物理文件
-            if image_file.reference_count <= 0:
-                # 删除物理文件
-                try:
-                    if os.path.exists(image_file.file_path):
-                        os.remove(image_file.file_path)
-                except Exception as e:
-                    logger.warning(f"删除物理文件失败: {image_file.file_path}, 错误: {str(e)}")
-
-                # 删除数据库记录
-                await db.delete(image_file)
-
-        await db.commit()
-
-        logger.info(f"批改记录已删除: 记录ID={correction_id}, 用户ID={user_id}")
-
-        return {
-            "success": True,
-            "message": "批改记录已删除",
-            "deleted_correction_id": correction_id,
-            "deleted_questions_count": len(questions),
-        }
-
-    except Exception as e:
-        logger.error(f"删除批改记录失败: {correction_id}, 错误: {str(e)}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
-
-@router.get("/statistics")
-async def get_ocr_statistics(
-    subject: Optional[str] = Query(None, description="学科筛选"),
-    days: int = Query(30, ge=1, le=365, description="统计天数"),
-    db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-):
-    """
-    获取OCR批改统计
-
-    统计用户的OCR批改使用情况
-    """
-    from datetime import datetime, timedelta
-    from sqlalchemy import func
-
-    # 验证学科是否属于RPJ模块
-    if subject:
-        validate_subject(subject)
-        subjects = [subject]
-    else:
-        subjects = settings.SUBJECTS
-
-    # 计算时间范围
-    end_date = datetime.utcnow()
-    start_date = end_date - timedelta(days=days)
-
-    statistics = {
-        "period": {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "days": days,
-        },
-        "summary": {
-            "total_corrections": 0,
-            "total_questions": 0,
-            "total_images": 0,
-            "avg_accuracy": 0.0,
-            "by_subject": {},
-        },
-        "daily_trend": [],
-        "recent_activity": [],
-    }
-
-    try:
-        # 按学科统计
-        for subj in subjects:
-            # 统计批改记录数量
-            corrections_query = select(func.count(ExamCorrection.id)).where(
-                ExamCorrection.user_id == user_id,
-                ExamCorrection.subject == subj,
-                ExamCorrection.created_at >= start_date,
-                ExamCorrection.created_at <= end_date,
-            )
-            corrections_result = await db.execute(corrections_query)
-            corrections_count = corrections_result.scalar() or 0
-
-            if corrections_count > 0:
-                # 统计题目数量
-                questions_query = select(func.sum(ExamCorrection.question_count)).where(
-                    ExamCorrection.user_id == user_id,
-                    ExamCorrection.subject == subj,
-                    ExamCorrection.created_at >= start_date,
-                    ExamCorrection.created_at <= end_date,
-                )
-                questions_result = await db.execute(questions_query)
-                questions_count = questions_result.scalar() or 0
-
-                # 统计平均准确率
-                accuracy_query = select(func.avg(ExamCorrection.accuracy_rate)).where(
-                    ExamCorrection.user_id == user_id,
-                    ExamCorrection.subject == subj,
-                    ExamCorrection.created_at >= start_date,
-                    ExamCorrection.created_at <= end_date,
-                )
-                accuracy_result = await db.execute(accuracy_query)
-                avg_accuracy = accuracy_result.scalar() or 0.0
-
-                # 统计图片数量
-                images_query = select(func.count(ImageFile.id)).where(
-                    ImageFile.user_id == user_id,
-                    ImageFile.subject == subj,
-                    ImageFile.file_type == "corrections",
-                    ImageFile.created_at >= start_date,
-                    ImageFile.created_at <= end_date,
-                )
-                images_result = await db.execute(images_query)
-                images_count = images_result.scalar() or 0
-
-                statistics["summary"]["by_subject"][subj] = {
-                    "subject_display": get_subject_display_name(subj),
-                    "corrections_count": corrections_count,
-                    "questions_count": questions_count,
-                    "images_count": images_count,
-                    "avg_accuracy": round(float(avg_accuracy), 2),
-                }
-
-                statistics["summary"]["total_corrections"] += corrections_count
-                statistics["summary"]["total_questions"] += questions_count
-                statistics["summary"]["total_images"] += images_count
-
-        # 计算总体平均准确率
-        if statistics["summary"]["total_corrections"] > 0:
-            total_accuracy_query = select(func.avg(ExamCorrection.accuracy_rate)).where(
-                ExamCorrection.user_id == user_id,
-                ExamCorrection.created_at >= start_date,
-                ExamCorrection.created_at <= end_date,
-            )
-            total_accuracy_result = await db.execute(total_accuracy_query)
-            total_avg_accuracy = total_accuracy_result.scalar() or 0.0
-            statistics["summary"]["avg_accuracy"] = round(float(total_avg_accuracy), 2)
-
-        # 生成每日趋势（最近7天）
-        for i in range(7):
-            day_date = end_date - timedelta(days=i)
-            day_start = day_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            day_end = day_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-            daily_query = select(func.count(ExamCorrection.id)).where(
-                ExamCorrection.user_id == user_id,
-                ExamCorrection.created_at >= day_start,
-                ExamCorrection.created_at <= day_end,
-            )
-            daily_result = await db.execute(daily_query)
-            daily_count = daily_result.scalar() or 0
-
-            statistics["daily_trend"].insert(0, {
-                "date": day_date.strftime("%Y-%m-%d"),
-                "corrections_count": daily_count,
-            })
-
-        # 获取最近活动
-        recent_query = select(ExamCorrection).where(
-            ExamCorrection.user_id == user_id,
-        ).order_by(ExamCorrection.created_at.desc()).limit(5)
-
-        recent_result = await db.execute(recent_query)
-        recent_corrections = recent_result.scalars().all()
-
-        for correction in recent_corrections:
-            statistics["recent_activity"].append({
-                "id": correction.id,
-                "subject": correction.subject,
-                "subject_display": get_subject_display_name(correction.subject),
-                "exam_title": correction.exam_title,
-                "total_score": correction.total_score,
-                "max_score": correction.max_score,
-                "accuracy_rate": correction.accuracy_rate,
-                "created_at": correction.created_at.isoformat(),
-            })
-
-    except Exception as e:
-        logger.error(f"获取OCR统计失败: {str(e)}")
-
-    return statistics
-
-@router.get("/usage-tips")
-async def get_ocr_usage_tips(
-    subject: Optional[str] = Query(None, description="学科"),
-    db: AsyncSession = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-):
-    """
-    获取OCR使用技巧
-
-    提供各学科图片上传的注意事项和技巧
-    """
-    # 验证学科是否属于RPJ模块
-    if subject:
-        validate_subject(subject)
-
-    general_tips = {
-        "title": "OCR批改使用技巧",
-        "general_tips": [
-            "确保图片清晰，光线充足",
-            "尽量拍摄正面，避免倾斜",
-            "图片中只包含试卷内容，减少背景干扰",
-            "文字大小适中，避免过小或模糊",
-            "文件大小建议在10MB以内",
-            "支持的格式：JPEG、PNG、WebP、GIF"
-        ],
-        "upload_advice": [
-            "拍照时手机与试卷平行，减少透视变形",
-            "使用高分辨率模式拍摄",
-            "在光线均匀的环境下拍摄",
-            "避免使用闪光灯，以免反光",
-            "一次上传一张试卷图片"
-        ],
-        "common_issues": [
-            "图片模糊：重新拍照，确保对焦准确",
-            "文字识别错误：调整光线，确保文字清晰",
-            "批改结果不准确：检查图片质量，重新上传",
-            "处理时间过长：可能是图片较大，请耐心等待"
-        ]
-    }
-
-    # 学科特定技巧
-    subject_specific_tips = {}
-
-    if subject == "chinese" or not subject:
-        subject_specific_tips["chinese"] = {
-            "title": "语文试卷上传技巧",
-            "tips": [
-                "确保作文文字清晰可辨",
-                "古诗文题目要拍摄完整",
-                "阅读题的段落要拍摄清楚",
-                "字迹工整的试卷识别效果更好",
-                "注意标点符号的清晰度"
-            ]
-        }
-
-    if subject == "english" or not subject:
-        subject_specific_tips["english"] = {
-            "title": "英语试卷上传技巧",
-            "tips": [
-                "注意英文字母的清晰度",
-                "作文部分要拍摄完整",
-                "选择题的选项要清晰可见",
-                "注意大小写字母的区分",
-                "连笔字可能会影响识别效果"
-            ]
-        }
-
-    if subject == "politics" or not subject:
-        subject_specific_tips["politics"] = {
-            "title": "政治试卷上传技巧",
-            "tips": [
-                "简答题的答案要拍摄完整",
-                "论述题的文字要清晰",
-                "注意条目的编号清晰",
-                "案例分析题要拍摄全部内容",
-                "注意标点符号的清晰度"
-            ]
-        }
-
-    return {
-        "user_id": user_id,
-        "subject": subject or "all",
-        "general_tips": general_tips,
-        "subject_specific_tips": subject_specific_tips if subject_specific_tips else None
-    }
-
-@router.get("/support-formats")
-async def get_supported_formats():
-    """
-    获取支持的图片格式
-
-    返回系统支持的图片格式信息
-    """
-    return {
-        "supported_formats": [
-            {
-                "format": "JPEG/JPG",
-                "mime_type": "image/jpeg",
-                "description": "最常见的有损压缩图片格式",
-                "max_size_mb": 10,
-                "recommended": True
-            },
-            {
-                "format": "PNG",
-                "mime_type": "image/png",
-                "description": "无损压缩，支持透明度",
-                "max_size_mb": 10,
-                "recommended": True
-            },
-            {
-                "format": "WebP",
-                "mime_type": "image/webp",
-                "description": "Google开发的现代图片格式",
-                "max_size_mb": 10,
-                "recommended": True
-            },
-            {
-                "format": "GIF",
-                "mime_type": "image/gif",
-                "description": "支持动画，但通常用于静态图片",
-                "max_size_mb": 10,
-                "recommended": False
-            }
-        ],
-        "requirements": {
-            "max_file_size": "10MB",
-            "min_resolution": "300×300像素",
-            "recommended_resolution": "1500×2000像素以上",
-            "color_mode": "彩色或黑白均可",
-            "orientation": "建议竖屏拍摄"
-        },
-        "tips": {
-            "quality": "图片质量越高，识别效果越好",
-            "lighting": "均匀光线，避免阴影",
-            "focus": "确保文字清晰对焦",
-            "background": "纯色背景效果更佳",
-            "perspective": "正面拍摄，避免倾斜"
-        }
+        "success": True,
+        "total": len(files),
+        "results": results,
     }

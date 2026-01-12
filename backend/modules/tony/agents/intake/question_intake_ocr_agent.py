@@ -1205,7 +1205,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from backend.core.services.gemini_ocr_service import get_gemini_ocr_service, SubjectType
 
-        ocr_service = get_gemini_ocr_service()
+        ocr_service = get_gemini_ocr_service(settings)
         await ocr_service.initialize()
 
         subject_map = {
@@ -1943,7 +1943,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     try:
-        ocr_service = get_gemini_ocr_service()
+        ocr_service = get_gemini_ocr_service(settings)
         await ocr_service.initialize()
 
         # 使用 analyze_exam_image 方法进行 OCR 识别

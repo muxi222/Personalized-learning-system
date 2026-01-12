@@ -549,7 +549,8 @@ async def create_question_with_image_old(
 
             try:
                 # 1. OCR识别
-                ocr_service = get_gemini_ocr_service()
+                from backend.modules.tony.config import settings as tony_settings
+                ocr_service = get_gemini_ocr_service(tony_settings)
                 await ocr_service.initialize()
 
                 # 解析学科类型 - 支持中文和英文
@@ -943,7 +944,7 @@ async def reanalyze_question(
     # Start background reanalysis using new agent
     async def reanalyze_async():
         from backend.modules.tony.agents.intake.question_intake_agent import analyze_error, update_result
-        from backend.modules.tony.agents.state import QuestionIntakeState
+        from backend.core.agents.state import QuestionIntakeState
         from backend.core.db.session import async_session_maker
 
         try:

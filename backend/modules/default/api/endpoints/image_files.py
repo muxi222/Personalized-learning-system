@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, asc
 
-from backend.modules.default.api.deps import get_db, get_optional_user_id
+from backend.modules.default.api.deps import get_db, get_optional_user_id, get_current_user_id
 from backend.modules.default.config import settings
 from backend.core.crud import crud_image_file
 from backend.core.db.models import Question
@@ -129,6 +129,12 @@ class ImageQuestionGroupResponse(BaseModel):
     image_url: str
     stats: ImageQuestionGroupStats
     questions: List[ImageQuestionGroupQuestionItem]
+
+
+class DeleteImageQuestionGroupResponse(BaseModel):
+    image_id: int
+    deleted_questions: int
+    deleted_image: bool
 
 
 def _build_image_file_content_url(image_id: int) -> str:
@@ -259,4 +265,88 @@ async def get_image_file_questions(
         questions=items,
     )
 
+
+@router.delete("/image-files/{image_id}", response_model=DeleteImageQuestionGroupResponse)
+async def delete_image_question_group(
+    image_id: int = Path(..., description="ImageFile.id（错题本图片维度）"),
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    Delete a wrongbook "image group": remove all Questions whose source_image_id == image_id,
+    then delete the corresponding image_files row (file_type='questions') if it becomes orphaned.
+
+    Note: This endpoint lives in default module to support cross-subject wrongbook UI.
+    """
+    from sqlalchemy import delete
+    from backend.core.db.models import AgentTask, Feedback, Question as QuestionModel
+
+    # Ensure image exists and belongs to user (avoid leaking existence across users)
+    img = await crud_image_file.get_image_file(db, image_id, user_id)
+    if not img:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Collect question ids for this image group
+    qids = [
+        int(x)
+        for x in (
+            await db.execute(
+                select(QuestionModel.id)
+                .where(QuestionModel.user_id == int(user_id))
+                .where(QuestionModel.source_image_id == int(image_id))
+            )
+        ).scalars().all()
+        if x is not None
+    ]
+
+    # Delete tasks/feedback/questions in chunks (SQLite param limit safety)
+    def chunks(arr: List[int], size: int = 300):
+        for i in range(0, len(arr), size):
+            yield arr[i : i + size]
+
+    for part in chunks(qids):
+        await db.execute(delete(AgentTask).where(AgentTask.question_id.in_(part)))
+        await db.execute(delete(Feedback).where(Feedback.question_id.in_(part)))
+        await db.execute(
+            delete(QuestionModel).where(
+                QuestionModel.user_id == int(user_id),
+                QuestionModel.id.in_(part),
+            )
+        )
+
+    deleted_questions = len(qids)
+
+    # Mark image_files row for deletion if it becomes orphaned after question deletion.
+    orphan_paths: List[str] = []
+    try:
+        orphan_paths = await crud_image_file.mark_delete_orphan_question_images(
+            db,
+            user_id=int(user_id),
+            image_ids=[int(image_id)],
+        )
+    except Exception as e:
+        logger.warning(f"[DEFAULT] mark_delete_orphan_question_images skipped/failed: {e}")
+
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[DEFAULT] delete_image_question_group commit failed: {e}")
+        raise HTTPException(status_code=500, detail="删除失败")
+
+    # After successful commit, delete physical files (best-effort).
+    deleted_image = False
+    try:
+        if orphan_paths:
+            stats = crud_image_file.delete_files_best_effort(orphan_paths)
+            deleted_image = bool(stats.get("deleted", 0) > 0)
+            logger.info(f"[DEFAULT] deleted orphan question image files: {stats}")
+    except Exception as e:
+        logger.warning(f"[DEFAULT] delete orphan question image files failed: {e}")
+
+    return DeleteImageQuestionGroupResponse(
+        image_id=int(image_id),
+        deleted_questions=int(deleted_questions),
+        deleted_image=bool(deleted_image or bool(orphan_paths)),
+    )
 

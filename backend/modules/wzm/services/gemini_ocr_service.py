@@ -36,7 +36,7 @@ from ..base_config import get_base_settings
 from .llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
 from .llm_trace import write_llm_trace
 
-_default_settings = get_base_settings()
+settings = get_base_settings()
 
 logger = logging.getLogger(__name__)
 
@@ -223,12 +223,11 @@ class GeminiOCRService:
     4. 红笔批改效果
     """
 
-    def __init__(self, settings=_default_settings):
+    def __init__(self):
         self._http_client: Optional[httpx.AsyncClient] = None
         self._initialized = False
-        self._settings = settings
-        self._api_endpoint = getattr(settings, "LLM_API_ENDPOINT", None)
-        self._api_key = getattr(settings, "LLM_API_KEY", None)
+        self._api_endpoint = settings.LLM_API_ENDPOINT
+        self._api_key = settings.LLM_API_KEY
 
     async def initialize(self) -> bool:
         """初始化 HTTP 客户端"""
@@ -286,8 +285,7 @@ class GeminiOCRService:
         - prompt 文案已拆分到各模块的 `services/gemini_ocr_prompts.py` 中（当前以 tony 为准）。
         - 核心服务仅保留公共逻辑，不在此处维护具体学科 prompt 文案。
         """
-        provider = _get_gemini_prompt_provider(getattr(self._settings, "MODULE_NAME", "tony"))
-        logger.info(f"provider: {provider}")
+        provider = _get_gemini_prompt_provider(getattr(settings, "MODULE_NAME", "tony"))
         try:
             return provider.get_subject_prompt(str(subject.value))
         except Exception:
@@ -307,7 +305,7 @@ class GeminiOCRService:
 
         使用 gemini-2.5-flash + thinking_config 进行深度分析:
         1. OCR 提取题目和学生解答
-        2. 自动纠错
+        2. 自动纠错并给出正确答案
         3. 详细解析
         4. 打分
 
@@ -339,8 +337,8 @@ class GeminiOCRService:
                 '.webp': 'image/webp',
             }
             mime_type = mime_types.get(image_ext, 'image/jpeg')
-            provider = _get_gemini_prompt_provider(getattr(self._settings, "MODULE_NAME", "tony"))
-            logger.info(f"provider: {provider}")
+
+            provider = _get_gemini_prompt_provider(getattr(settings, "MODULE_NAME", "tony"))
 
             # 模块可插拔：intake_mode 识别规则放到模块 provider（当前以 tony 为准）
             try:
@@ -357,7 +355,7 @@ class GeminiOCRService:
             )
 
             # 构建 API 请求（OpenAI Vision API 格式）
-            ocr_model = provider.resolve_ocr_model(default_model=getattr(self._settings, "GEMINI_MODEL", "gemini-2.5-flash"))
+            ocr_model = provider.resolve_ocr_model(default_model=settings.GEMINI_MODEL)
             temperature = float(provider.resolve_temperature(intake_mode=bool(intake_mode)))
             max_tokens = int(provider.resolve_max_tokens())
             request_data = {
@@ -387,7 +385,7 @@ class GeminiOCRService:
             ocr_model = (
                 os.getenv("OCR_VISION_MODEL")
                 or os.getenv("TONY_OCR_VISION_MODEL")
-                or getattr(self._settings, "GEMINI_MODEL", "gemini-2.5-flash")
+                or settings.GEMINI_MODEL
             )
             request_data = {
                 "model": ocr_model,
@@ -446,9 +444,9 @@ class GeminiOCRService:
 
             # 调用 API（对 503/5xx/429 做短重试，提升可用性）
             logger.info(f"Sending request to {self._api_endpoint}/chat/completions")
-            max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or getattr(self._settings, "LLM_RETRY_MAX_ATTEMPTS", 3) or 3)
-            base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or getattr(self._settings, "LLM_RETRY_BASE_DELAY_SECONDS", 0.6) or 0.6)
-            max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or getattr(self._settings, "LLM_RETRY_MAX_DELAY_SECONDS", 30.0) or 30.0)
+            max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or getattr(settings, "LLM_RETRY_MAX_ATTEMPTS", 3) or 3)
+            base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_BASE_DELAY_SECONDS", 0.6) or 0.6)
+            max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_MAX_DELAY_SECONDS", 30.0) or 30.0)
             response = None
             last_exc: Optional[Exception] = None
             t_req0 = time.perf_counter()
@@ -829,7 +827,7 @@ class GeminiOCRService:
         }
         mime_type = mime_types.get(image_ext, "image/jpeg")
 
-        used_model = model or os.getenv("OCR_VISION_MODEL") or os.getenv("TONY_OCR_VISION_MODEL") or getattr(self._settings, "GEMINI_MODEL", "gemini-2.5-flash")
+        used_model = model or os.getenv("OCR_VISION_MODEL") or os.getenv("TONY_OCR_VISION_MODEL") or settings.GEMINI_MODEL
         request_data = {
             "model": used_model,
             "messages": [
@@ -848,9 +846,9 @@ class GeminiOCRService:
             "max_tokens": max_tokens,
         }
 
-        max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or getattr(self._settings, "LLM_RETRY_MAX_ATTEMPTS", 3) or 3)
-        base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or getattr(self._settings, "LLM_RETRY_BASE_DELAY_SECONDS", 0.6) or 0.6)
-        max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or getattr(self._settings, "LLM_RETRY_MAX_DELAY_SECONDS", 30.0) or 30.0)
+        max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or getattr(settings, "LLM_RETRY_MAX_ATTEMPTS", 3) or 3)
+        base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_BASE_DELAY_SECONDS", 0.6) or 0.6)
+        max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or getattr(settings, "LLM_RETRY_MAX_DELAY_SECONDS", 30.0) or 30.0)
 
         resp: Optional[httpx.Response] = None
         last_exc: Optional[Exception] = None
@@ -1114,6 +1112,7 @@ class GeminiOCRService:
 
         模拟「红笔批改」效果，在原图上添加:
         - 对勾/叉号
+        - 错误答案旁边的正确答案标注
         - 分数标注
         - 评语
 
@@ -1133,8 +1132,8 @@ class GeminiOCRService:
             draw = ImageDraw.Draw(img)
 
             # 加载中文字体
-            font = self._load_chinese_font(size=24)
-            small_font = self._load_chinese_font(size=16)
+            font = self._load_chinese_font(size=20)
+            small_font = self._load_chinese_font(size=12)
 
             # 颜色设置
             colors = {
@@ -1154,6 +1153,7 @@ class GeminiOCRService:
             draw.text((img.width - 200, 30), total_text, fill=color, font=font)
             correction_notes.append(total_text)
 
+            start_y = 0
             # 添加评语
             if analysis_result.overall_analysis:
                 # 确保评语是 Unicode 字符串
@@ -1175,7 +1175,7 @@ class GeminiOCRService:
 
                 # 从底部向上绘制，最多显示5行
                 max_lines = min(5, len(wrapped_lines))
-                start_y = img.height - (max_lines * line_height + 30)
+                start_y = img.height - (max_lines * line_height + 5)
 
                 # 绘制每一行
                 for i, line in enumerate(wrapped_lines[:max_lines]):
@@ -1184,6 +1184,41 @@ class GeminiOCRService:
                         draw.text((30, y_pos), line, fill=color, font=small_font)
 
                 correction_notes.append(f"评语: {analysis_text}")
+
+            # 添加正确答案
+            if analysis_result.questions:
+                ans = ""
+                p = 0
+                for ques in analysis_result.questions:
+                    p = p + 1
+                    ans_t = ques.correct_answer
+                    # 确保答案是 Unicode 字符串
+                    if isinstance(ans, bytes):
+                        ans_t = ans_t.decode('utf-8')
+                    p_t = str(p).decode('utf-8')
+                    ans = ans + p_t + "." + ans_t
+
+                # 计算可用的文本宽度（留出左右边距）
+                text_max_width = img.width - 60  # 左右各留30像素边距
+
+                 # 将答案换行
+                wrapped_lines = self._wrap_text(ans, small_font, text_max_width)
+
+                # 计算行高
+                bbox = draw.textbbox((0, 0), "测试", font=small_font)
+                line_height = bbox[3] - bbox[1] + 4  # 行高 + 间距
+
+                # 从底部向上绘制，最多显示5行
+                max_lines = min(5, len(wrapped_lines))
+                start_y = img.height - (max_lines * line_height + start_y + 5)
+
+                # 绘制每一行
+                for i, line in enumerate(wrapped_lines[:max_lines]):
+                    y_pos = start_y + (i * line_height)
+                    if y_pos >= 0:  # 确保不超出图片顶部
+                        draw.text((30, y_pos), line, fill=color, font=small_font)
+
+                correction_notes.append(f"正确答案: {analysis_text}")
 
             # 保存为 base64
             import io
@@ -1255,29 +1290,11 @@ class GeminiOCRService:
 
 # Singleton instance
 _gemini_ocr_service: Optional[GeminiOCRService] = None
-_gemini_ocr_services_by_key: Dict[str, GeminiOCRService] = {}
 
-def get_gemini_ocr_service(settings: Optional[Any] = None) -> GeminiOCRService:
-    """
-    Get Gemini OCR service instance.
-
-    - Backward compatible: `get_gemini_ocr_service()` returns a singleton bound to base settings.
-    - Module-aware: `get_gemini_ocr_service(module_settings)` returns a cached instance per
-      (module_name, endpoint, api_key) so each module can bind its own settings.
-    """
+@lru_cache()
+def get_gemini_ocr_service() -> GeminiOCRService:
+    """Get singleton Gemini OCR service instance"""
     global _gemini_ocr_service
-
-    if settings is None:
-        if _gemini_ocr_service is None:
-            _gemini_ocr_service = GeminiOCRService(_default_settings)
-        return _gemini_ocr_service
-
-    module_name = str(getattr(settings, "MODULE_NAME", "base") or "base")
-    endpoint = str(getattr(settings, "LLM_API_ENDPOINT", "") or "")
-    api_key = str(getattr(settings, "LLM_API_KEY", "") or "")
-    key = f"{module_name}|{endpoint}|{api_key}"
-    inst = _gemini_ocr_services_by_key.get(key)
-    if inst is None:
-        inst = GeminiOCRService(settings)
-        _gemini_ocr_services_by_key[key] = inst
-    return inst
+    if _gemini_ocr_service is None:
+        _gemini_ocr_service = GeminiOCRService()
+    return _gemini_ocr_service

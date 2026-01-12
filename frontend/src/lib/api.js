@@ -183,6 +183,14 @@ export const questionApi = {
   },
 
   /**
+   * 按图片维度批量删除错题（统一走 default 模块）
+   * @param {number[]} imageIds - image_files.id 列表（删除关联 source_image_id 的全部错题）
+   */
+  batchDeleteByImages: (imageIds) => {
+    return createApiClient(null).post('/questions/batch-delete', { image_ids: imageIds })
+  },
+
+  /**
    * 按分类(题目类型/章节)批量删除错题（统一走 default 模块）
    * @param {{subject?: string, chapter: string, difficulty?: string, search?: string}} params
    */
@@ -278,6 +286,12 @@ export const imageFilesApi = {
   getQuestions: (imageId) => {
     // Use default module to avoid depending on last-selected subject routing
     return createApiClient(null).get(`/image-files/${imageId}/questions`)
+  },
+  /**
+   * 删除该图片对应的全部错题（图片维度删除）
+   */
+  deleteGroup: (imageId) => {
+    return createApiClient(null).delete(`/image-files/${imageId}`)
   },
 }
 

@@ -1,37 +1,40 @@
 """
-OCR API 端点 - 试卷分析与批改 (Refactored)
+OCR API 端点 - 试卷分析与批改 (化学专用版 / Chemistry Only) - Fixed
 
 功能:
 1. 上传试卷图片进行 OCR 分析
-2. 自动批改并打分
-3. 生成批改后的图像
-4. 安全的图像资源访问
+2. 强制校验学科：仅支持化学 (Chemistry)
+3. 自动批改并打分
+4. 修复 file_ext 作用域错误
+5. 修复 Pydantic dict() 兼容性问题
 """
 
 import os
 import uuid
 import logging
 import shutil
-from typing import Optional, Tuple
-from pathlib import Path
+import asyncio
 import base64
+from typing import Optional, List, Dict, Any
+from pathlib import Path
 
-# 引入异步文件操作库（学生模块环境可能未安装：保持可导入）
+# 引入异步文件操作库
 try:
-    import aiofiles  # type: ignore
-except Exception:  # pragma: no cover
+    import aiofiles
+except ImportError:
     aiofiles = None
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query, Path as PathParam, Request
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query, Path as PathParam
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import jwt, JWTError
 
-# 内部模块导入 (保持原样)
-from backend.modules.tony.api.deps import get_current_user, get_optional_user_id, get_db
-from backend.modules.tony.config import settings
-from backend.core.services.gemini_ocr_service import (
+# 内部模块导入
+from backend.modules.wzm.api.deps import get_current_user, get_optional_user_id, get_db
+from backend.modules.wzm.config import settings
+from backend.modules.wzm.services.gemini_ocr_service import (
     get_gemini_ocr_service,
     SubjectType,
     ExamAnalysisResult,
@@ -46,101 +49,32 @@ from backend.core.crud import crud_image_file, crud_exam_correction, crud_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-def validate_subject(subject: str) -> None:
-    """验证学科是否属于WZM模块"""
-    if subject not in settings.SUBJECTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Subject '{subject}' is not supported by WZM module. "
-                   f"Supported subjects: {settings.SUBJECTS}"
-        )
-
 # --- 配置常量 ---
-# 使用 pathlib 定义根目录，自动处理系统差异
-PROJECT_ROOT = Path(__file__).resolve().parents[5]  # 根据文件位置调整层级
-UPLOAD_ROOT = Path("./data/uploads") # 相对运行目录
-# 允许的图片类型
+PROJECT_ROOT = Path(__file__).resolve().parents[5]
+UPLOAD_ROOT = Path("./data/uploads")
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic"}
+
+# 仅支持的学科标识
+TARGET_SUBJECT_EN = "chemistry"
+TARGET_SUBJECT_CN = "化学"
 
 # 学科映射
 SUBJECT_NAME_MAP = {
-    "数学": "math", "英语": "english", "物理": "physics", "化学": "chemistry",
-    "语文": "chinese", "生物": "biology", "政治": "politics",
-    "经济学": "economics", "历史": "history", "地理": "geography", "其他": "other",
+    "化学": "chemistry", 
+    "chemistry": "chemistry",
+    "其他": "other",
+    "other": "other"
 }
 
-# --- 辅助函数 ---
+# --- 知识体系配置 ---
+CHAPTER_TAXONOMY = {
+    "chemistry": ["物质结构", "化学反应原理", "无机化学", "有机化学", "实验与探究", "计算与守恒", "综合"],
+    "other": ["综合"]
+}
 
-async def save_file_async(content: bytes, file_path: Path):
-    """异步保存文件，自动创建父目录"""
-    try:
-        if not file_path.parent.exists():
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-        # aiofiles 不存在时降级为同步写入（学生TODO：补齐依赖或改为线程池）
-        if aiofiles is None:
-            with open(file_path, "wb") as f:
-                f.write(content)
-        else:
-            async with aiofiles.open(file_path, "wb") as f:
-                await f.write(content)
-    except Exception as e:
-        logger.error(f"Async file save failed: {e}")
-        raise HTTPException(status_code=500, detail="文件保存失败")
-
-def get_clean_relative_path(full_path: Path) -> str:
-    """
-    将绝对路径或复杂路径转换为相对于 uploads 目录的清洁路径
-    用于存入数据库，格式如: user_x/corrections/math/abc.jpg
-    """
-    try:
-        # 尝试相对于 UPLOAD_ROOT 取路径
-        return str(full_path.relative_to(UPLOAD_ROOT))
-    except ValueError:
-        # 如果路径不在 UPLOAD_ROOT 下（容错），尝试清洗
-        path_str = str(full_path).replace("\\", "/")
-        if "data/uploads/" in path_str:
-            return path_str.split("data/uploads/")[-1]
-        return path_str
-
-def generate_api_url(path: str) -> str:
-    """生成相对 API URL，解耦域名和端口"""
-    return f"/api/v1/ocr{path}"
-
-# --- 依赖项 (Dependencies) ---
-
-async def verify_image_access(
-    token: Optional[str] = Query(None),
-    current_user_id: Optional[int] = Depends(get_optional_user_id),
-) -> int:
-    """
-    统一图片访问鉴权。
-    优先检查 Header 中的 Token (通过 Depends 获取)，
-    其次检查 Query Param 中的 Token (用于 img 标签)。
-    返回 user_id，如果未认证且非开发环境则抛出异常。
-    """
-    # 1. Header 认证成功
-    if current_user_id is not None:
-        return current_user_id
-
-    # 2. Query Param 认证 (手动解析)
-    if token:
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-            user_id_str: str = payload.get("sub")
-            if user_id_str:
-                return int(user_id_str)
-        except JWTError:
-            logger.warning("Invalid token in query param")
-
-    # 3. 开发环境豁免 (返回 -1 标识)
-    if settings.is_development:
-        return -1
-
-    raise HTTPException(
-        status_code=401,
-        detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+KNOWLEDGE_POINT_TAXONOMY = {
+    "chemistry": ["氧化还原", "化学平衡", "电化学", "酸碱盐", "物质结构与性质", "官能团与有机反应", "实验操作与安全", "离子反应", "化学计量"],
+}
 
 # --- Pydantic Models ---
 
@@ -159,108 +93,160 @@ class OCRAnalysisResponse(BaseModel):
     corrected_image_url: Optional[str] = None
     is_duplicate: bool = False
     duplicate_message: Optional[str] = None
+    filename: Optional[str] = None
 
-# --- API Endpoints ---
+# --- 辅助函数 ---
 
-@router.post("/analyze", response_model=OCRAnalysisResponse)
-async def analyze_exam_image(
-    file: UploadFile = File(...),
-    subject: str = Form("other"),
-    grade: str = Form(""),
-    hint: Optional[str] = Form(None),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
+async def save_file_async(content: bytes, file_path: Path):
+    """异步保存文件"""
+    try:
+        if not file_path.parent.exists():
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if aiofiles is None:
+            with open(file_path, "wb") as f:
+                f.write(content)
+        else:
+            async with aiofiles.open(file_path, "wb") as f:
+                await f.write(content)
+    except Exception as e:
+        logger.error(f"File save failed: {e}")
+        raise HTTPException(status_code=500, detail="文件保存失败")
+
+def get_clean_relative_path(full_path: Path) -> str:
+    """将路径转换为相对于 uploads 目录的清洁路径"""
+    try:
+        return str(full_path.relative_to(UPLOAD_ROOT))
+    except ValueError:
+        parts = full_path.parts
+        if "uploads" in parts:
+            idx = parts.index("uploads")
+            if idx + 1 < len(parts):
+                return str(Path(*parts[idx+1:]))
+        return full_path.name
+
+def generate_api_url(path: str) -> str:
+    return f"/api/v1/ocr{path}"
+
+async def verify_image_access(
+    token: Optional[str] = Query(None),
+    current_user_id: Optional[int] = Depends(get_optional_user_id),
+) -> int:
+    if current_user_id is not None:
+        return current_user_id
+    if token:
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            user_id_str: str = payload.get("sub")
+            if user_id_str:
+                return int(user_id_str)
+        except JWTError:
+            pass
+    if settings.is_development:
+        return -1
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+# --- 核心业务逻辑 ---
+
+async def _process_single_image(
+    db: AsyncSession,
+    user: User,
+    file_content: bytes,
+    filename: str,
+    mime_type: str,
+    user_selected_subject: str,
+    grade: str,
+    hint: Optional[str]
+) -> OCRAnalysisResponse:
     """
-    分析试卷图片：上传 -> 异步保存 -> OCR -> 批改 -> 存库
+    核心处理函数
     """
-    # 1. 验证文件
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(status_code=400, detail=f"不支持的文件类型。支持: {ALLOWED_MIME_TYPES}")
+    # 1. 校验输入学科
+    subject_en = SUBJECT_NAME_MAP.get(user_selected_subject, "unknown")
+    if subject_en == "unknown":
+        raise HTTPException(
+            status_code=400, 
+            detail=f"仅支持化学学科。不支持的学科输入: {user_selected_subject}"
+        )
 
-    subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
-    content = await file.read()
-    file_hash = calculate_file_hash(content)
+    file_hash = calculate_file_hash(file_content)
     task_id = str(uuid.uuid4())
+    save_subject_dir = TARGET_SUBJECT_EN
+    
+    # [修复] 提取文件扩展名提到最前，确保在任何分支都能访问
+    file_ext = filename.split(".")[-1] if "." in filename else "jpg"
 
-    # 2. 检查去重
+    user_dir_name = get_user_directory_name(user.username, user.email)
+    base_save_dir = UPLOAD_ROOT / user_dir_name / "corrections" / save_subject_dir
+    
+    # 2. 检查重复
     existing_image = await crud_image_file.get_image_by_hash(db, file_hash)
     is_duplicate = False
-    duplicate_msg = None
+    original_image_file = None
+    files_to_rollback = []
 
-    # 构建用户目录路径: ./data/uploads/{user}/corrections/{subject}/
-    user_dir_name = get_user_directory_name(current_user.username, current_user.email)
-    base_save_dir = UPLOAD_ROOT / user_dir_name / "corrections" / subject_en
-
-    # 3. 处理原始图片 (Original Image)
-    if existing_image and existing_image.user_id == current_user.id:
+    if existing_image and existing_image.user_id == user.id:
         is_duplicate = True
-        duplicate_msg = "检测到重复图片，使用已有记录分析"
         original_image_file = existing_image
-        file_path_obj = UPLOAD_ROOT / existing_image.file_path # 拼回完整路径
+        file_path_obj = UPLOAD_ROOT / existing_image.file_path
         await crud_image_file.increment_reference_count(db, file_hash)
     else:
-        # 新文件保存
-        file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
-        filename = f"{file_hash[:32]}.{file_ext}"
-        file_path_obj = base_save_dir / filename
-
-        await save_file_async(content, file_path_obj)
-
-        # 存入相对路径
+        save_filename = f"{file_hash[:32]}.{file_ext}"
+        file_path_obj = base_save_dir / save_filename
+        
+        await save_file_async(file_content, file_path_obj)
+        files_to_rollback.append(file_path_obj)
+        
         relative_path = get_clean_relative_path(file_path_obj)
 
         original_image_file = await crud_image_file.create_image_file(
             db=db,
             file_hash=file_hash,
-            user_id=current_user.id,
+            user_id=user.id,
             file_type="corrections",
-            subject=subject_en,
+            subject=save_subject_dir,
             file_path=relative_path,
-            file_size=len(content),
-            mime_type=file.content_type,
+            file_size=len(file_content),
+            mime_type=mime_type,
             image_type=ImageFileTypeEnum.ORIGINAL,
         )
 
-    # 记录临时文件用于回滚
-    files_to_rollback = [] if is_duplicate else [file_path_obj]
-
     try:
-        # 4. 调用 OCR 服务
+        # 3. OCR 分析
         ocr_service = get_gemini_ocr_service()
-        await ocr_service.initialize()
+        if ocr_service is None:
+             raise HTTPException(status_code=503, detail="OCR Service Unavailable")
 
-        # Gemini 调用
-        analysis_result = await ocr_service.analyze_exam_image(
-            image_path=str(file_path_obj), # 传递字符串路径
-            subject=SubjectType(subject_en) if subject_en in SubjectType.__members__ else SubjectType.OTHER,
-            grade=grade,
-            user_hint=hint,
-        )
+        try:
+            analysis_result = await ocr_service.analyze_exam_image(
+                image_path=str(file_path_obj),
+                subject=SubjectType.CHEMISTRY, 
+                grade=grade,
+                user_hint=hint,
+            )
+        except AttributeError as e:
+            if "'NoneType' object has no attribute 'post'" in str(e):
+                raise HTTPException(status_code=503, detail="OCR服务未就绪 (依赖缺失: httpx[socks])")
+            raise e
+        
+        if not analysis_result:
+             raise HTTPException(status_code=500, detail="OCR Analysis returned empty result")
 
-        # TODO(student): 学科判定 + 分类归一化（统一模板 v1；不要在此处直接实现，留给学生）
-        # 【输入】user_selected_subject=subject_en，text=OCR提取出的题目文本/结构化题目
-        # 【输出】对每题生成：
-        #   - detected_subject + confidence(0~1)
-        #   - chapter: 从 CHAPTER_TAXONOMY[detected_subject] 选 1 个（否则“综合”）
-        #   - knowledge_points: 从 KNOWLEDGE_POINT_TAXONOMY[detected_subject] 选 1~3 个（否则“综合”）
-        #   - tags: 2~6 个短词（用于检索，避免太碎）
-        # 【规则】
-        #   - 若 detected_subject != user_selected_subject 且 confidence >= 0.75：提示“学科不匹配”并拒绝返回批改结果
-        #   - taxonomy 必须收敛：chapter 建议 6~10 个，knowledge_points 建议 10~25 个；同义项合并，避免发散
-        # 【推荐 taxonomy 示例（WZM: chemistry）】
-        #   CHAPTER_TAXONOMY = {
-        #     "chemistry": ["物质结构", "化学反应原理", "无机化学", "有机化学", "实验与探究", "计算与守恒", "综合"],
-        #   }
-        #   KNOWLEDGE_POINT_TAXONOMY = {
-        #     "chemistry": ["氧化还原", "化学平衡", "电化学", "酸碱盐", "物质结构与性质", "官能团与有机反应", "实验操作与安全", "定量计算", "综合"],
-        #   }
-        # 【实现建议】
-        #   - OCR 后调用 settings.LLM_API_ENDPOINT 的 /chat/completions（二次判定+归一化）
-        #   - 优先更强模型（gemini-3-pro-preview / gpt-5.2），可通过环境变量 WZM_HIGH_ACCURACY_MODEL 覆盖
-        # 【参考实现】backend/modules/tony/agents/question_intake_ocr_agent.py（仅 tony 模块完整实现）
+        # 4. 学科检查
+        detected_subject = analysis_result.subject.value
+        if detected_subject != TARGET_SUBJECT_EN:
+            logger.warning(f"Subject Mismatch! Expected: {TARGET_SUBJECT_EN}, Detected: {detected_subject}")
 
-        # 5. 生成批改图片 (Corrected Image)
+        # 5. 知识点归一化
+        valid_kps = KNOWLEDGE_POINT_TAXONOMY.get(TARGET_SUBJECT_EN, [])
+        if valid_kps:
+            for q in analysis_result.questions:
+                cleaned_kps = [kp for kp in q.knowledge_points if kp in valid_kps]
+                if not cleaned_kps and q.knowledge_points:
+                    cleaned_kps = q.knowledge_points[:2] 
+                q.knowledge_points = cleaned_kps
+
+        # 6. 生成批改图片
         correction_overlay = await ocr_service.create_correction_overlay(
             image_path=str(file_path_obj),
             analysis_result=analysis_result,
@@ -270,41 +256,41 @@ async def analyze_exam_image(
         if correction_overlay.success and correction_overlay.corrected_image_base64:
             corrected_bytes = base64.b64decode(correction_overlay.corrected_image_base64)
             corrected_hash = calculate_file_hash(corrected_bytes)
-
-            # 检查批改图是否存在
+            
             existing_corr = await crud_image_file.get_image_by_hash(db, corrected_hash)
-
             if existing_corr:
                 corrected_image_file = existing_corr
                 await crud_image_file.increment_reference_count(db, corrected_hash)
             else:
                 corr_filename = f"{corrected_hash[:32]}.png"
                 corr_path_obj = base_save_dir / corr_filename
-
+                
                 await save_file_async(corrected_bytes, corr_path_obj)
-                files_to_rollback.append(corr_path_obj) # 加入回滚列表
-
-                corr_relative_path = get_clean_relative_path(corr_path_obj)
+                files_to_rollback.append(corr_path_obj)
+                
+                corr_rel_path = get_clean_relative_path(corr_path_obj)
 
                 corrected_image_file = await crud_image_file.create_image_file(
                     db=db,
                     file_hash=corrected_hash,
-                    user_id=current_user.id,
+                    user_id=user.id,
                     file_type="corrections",
-                    subject=subject_en,
-                    file_path=corr_relative_path,
+                    subject=TARGET_SUBJECT_EN,
+                    file_path=corr_rel_path,
                     file_size=len(corrected_bytes),
                     mime_type="image/png",
                     image_type=ImageFileTypeEnum.CORRECTED,
                     original_image_id=original_image_file.id,
                 )
 
-        # 6. 保存批注记录 (Correction Record)
+        # 7. 保存记录
+        questions_json = jsonable_encoder(analysis_result.questions)
+
         exam_correction = ExamCorrection(
-            user_id=current_user.id,
-            subject=analysis_result.subject,
+            user_id=user.id,
+            subject=SubjectType(TARGET_SUBJECT_EN),
             grade=grade or analysis_result.grade,
-            exam_title=hint or f"{subject_en}试卷批改",
+            exam_title=hint or "化学试卷智能批改",
             original_image_id=original_image_file.id,
             corrected_image_id=corrected_image_file.id if corrected_image_file else None,
             total_score=analysis_result.total_score,
@@ -316,43 +302,39 @@ async def analyze_exam_image(
             overall_analysis=analysis_result.overall_analysis,
             weak_points=analysis_result.weak_points,
             improvement_suggestions=analysis_result.improvement_suggestions,
-            questions_detail=[q.dict() for q in analysis_result.questions],
+            questions_detail=questions_json,
         )
         db.add(exam_correction)
-        await db.flush() # 获取 ID
+        await db.flush()
 
-        # 7. 处理错题 (Wrong Questions)
-        questions_dir = UPLOAD_ROOT / user_dir_name / "questions" / subject_en
-
+        # 8. 处理错题
+        questions_dir = UPLOAD_ROOT / user_dir_name / "questions" / TARGET_SUBJECT_EN
+        
         for q in analysis_result.questions:
             if not q.is_correct:
                 q_filename = f"{task_id}_q{q.question_number}.{file_ext}"
                 q_path_obj = questions_dir / q_filename
 
-                # 异步复制错题图 (如果是在同一个卷上，其实可以复用 aiofiles 读取写入，这里用 shutil 简化)
-                # 注意：shutil 是同步的，为了不阻塞，这里做个简单处理
-                # 生产环境建议使用 aiofiles 读取原图 bytes 再写入
                 if not q_path_obj.parent.exists():
                     q_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
-                # 复制原图到新位置（aiofiles 不存在时降级为同步复制）
                 if aiofiles is None:
                     shutil.copyfile(file_path_obj, q_path_obj)
                 else:
                     async with aiofiles.open(file_path_obj, "rb") as src, aiofiles.open(q_path_obj, "wb") as dst:
                         await dst.write(await src.read())
-
+                
                 files_to_rollback.append(q_path_obj)
-
-                # 生成 URL
-                q_img_url = generate_api_url(f"/images/questions/{current_user.id}/{subject_en}/{q_filename}")
+                
+                q_clean_filename = q_path_obj.name
+                q_img_url = generate_api_url(f"/images/questions/{user.id}/{TARGET_SUBJECT_EN}/{q_clean_filename}")
 
                 db_question = Question(
-                    user_id=current_user.id,
+                    user_id=user.id,
                     exam_correction_id=exam_correction.id,
                     title=f"第{q.question_number}题 - {q.question_type}",
                     content=q.question_text,
-                    subject=analysis_result.subject,
+                    subject=SubjectType(TARGET_SUBJECT_EN),
                     difficulty=q.difficulty,
                     student_answer=q.student_answer,
                     correct_answer=q.correct_answer,
@@ -367,40 +349,126 @@ async def analyze_exam_image(
 
         await db.commit()
 
-        # 返回结果
-        corr_url = None
-        if corrected_image_file:
-            # 返回统一的 API 路径
-            corr_url = generate_api_url(f"/images/corrections/{exam_correction.id}/corrected")
-
         return OCRAnalysisResponse(
             success=True,
             task_id=task_id,
-            subject=analysis_result.subject.value,
+            subject=TARGET_SUBJECT_EN,
             grade=analysis_result.grade,
             total_score=analysis_result.total_score,
             max_score=analysis_result.max_score,
             accuracy_rate=analysis_result.accuracy_rate,
-            questions=[q.dict() for q in analysis_result.questions],
+            questions=jsonable_encoder(analysis_result.questions),
             overall_analysis=analysis_result.overall_analysis,
             weak_points=analysis_result.weak_points,
             improvement_suggestions=analysis_result.improvement_suggestions,
-            corrected_image_url=corr_url,
+            corrected_image_url=generate_api_url(f"/images/corrections/{exam_correction.id}/corrected") if corrected_image_file else None,
             is_duplicate=is_duplicate,
-            duplicate_message=duplicate_msg,
+            duplicate_message="检测到重复图片" if is_duplicate else None,
+            filename=filename
         )
 
     except Exception as e:
         await db.rollback()
-        logger.error(f"Analysis failed: {e}")
-        # 回滚文件：删除刚才创建的所有文件
         for path in files_to_rollback:
             if path.exists():
                 try:
                     os.remove(path)
                 except OSError:
                     pass
-        raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
+        raise e
+
+# --- API Endpoints ---
+
+@router.post("/analyze", response_model=OCRAnalysisResponse)
+async def analyze_exam_image(
+    file: UploadFile = File(...),
+    subject: str = Form("chemistry"), 
+    grade: str = Form(""),
+    hint: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """单张化学试卷分析"""
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(status_code=400, detail=f"不支持的文件类型。支持: {ALLOWED_MIME_TYPES}")
+
+    content = await file.read()
+    
+    try:
+        return await _process_single_image(
+            db=db,
+            user=current_user,
+            file_content=content,
+            filename=file.filename,
+            mime_type=file.content_type,
+            user_selected_subject=subject,
+            grade=grade,
+            hint=hint
+        )
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        status = 503 if "socks" in str(e).lower() else (400 if "学科校验失败" in str(e) else 500)
+        raise HTTPException(status_code=status, detail=str(e))
+
+@router.post("/batch-analyze")
+async def batch_analyze_images(
+    files: List[UploadFile] = File(...),
+    subject: str = Form("chemistry"),
+    grade: str = Form(""),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """批量化学试卷分析"""
+    if len(files) > 10:
+        raise HTTPException(status_code=400, detail="单次最多支持10张图片")
+
+    results = []
+    file_payloads = []
+    for file in files:
+        if file.content_type in ALLOWED_MIME_TYPES:
+            content = await file.read()
+            file_payloads.append({
+                "content": content,
+                "filename": file.filename,
+                "mime_type": file.content_type
+            })
+        else:
+            results.append({
+                "filename": file.filename,
+                "success": False,
+                "error": "Unsupported file type"
+            })
+
+    for payload in file_payloads:
+        try:
+            res = await _process_single_image(
+                db=db,
+                user=current_user,
+                file_content=payload["content"],
+                filename=payload["filename"],
+                mime_type=payload["mime_type"],
+                user_selected_subject=subject,
+                grade=grade,
+                hint=None
+            )
+            res_dict = res.dict()
+            results.append(res_dict)
+        except Exception as e:
+            logger.error(f"Batch item {payload['filename']} failed: {e}")
+            results.append({
+                "filename": payload["filename"],
+                "success": False,
+                "error": str(e)
+            })
+
+    return {
+        "summary": {
+            "total": len(files),
+            "processed": len(results),
+            "success_count": sum(1 for r in results if r.get("success", False))
+        },
+        "results": results
+    }
 
 @router.get("/images/corrections/{correction_id}/{image_type}")
 async def get_correction_image(
@@ -409,44 +477,31 @@ async def get_correction_image(
     access_user_id: int = Depends(verify_image_access),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    获取批注相关图片（安全优化版）
-    """
-    # 1. 查询记录
+    """获取批注相关图片"""
     correction = await crud_exam_correction.get_exam_correction(db, correction_id, None)
     if not correction:
         raise HTTPException(status_code=404, detail="记录不存在")
 
-    # 2. 权限校验 (开发模式 access_user_id 为 -1 时跳过)
     if access_user_id != -1 and correction.user_id != access_user_id:
         raise HTTPException(status_code=403, detail="无权访问此资源")
 
-    # 3. 获取对应的图片文件记录
     image_file = correction.original_image if image_type == "original" else correction.corrected_image
     if not image_file:
         raise HTTPException(status_code=404, detail="图片未生成")
 
-    # 4. 路径解析 (核心修复)
-    # 数据库存的可能是 "user/corrections/math/xxx.jpg"
-    stored_path_str = image_file.file_path
-
-    # 清洗路径：移除可能的 ../ 或 ./ 前缀，只保留相对部分
-    # 注意：这里假设数据库里存的是相对路径。如果是绝对路径需要特殊处理。
-    clean_path = Path(stored_path_str.lstrip("./").lstrip("/"))
-    if str(clean_path).startswith("data/uploads/"):
-        # 如果存了 data/uploads 前缀，去掉它，因为 UPLOAD_ROOT 已经包含了
-        clean_path = Path(str(clean_path).replace("data/uploads/", "", 1))
-
-    full_disk_path = UPLOAD_ROOT / clean_path
+    stored_path_str = image_file.file_path.lstrip("/").lstrip("\\")
+    full_disk_path = UPLOAD_ROOT / stored_path_str
+    
+    if "data/uploads" in str(full_disk_path):
+        clean = str(full_disk_path).replace("data/uploads/data/uploads", "data/uploads")
+        full_disk_path = Path(clean)
 
     if not full_disk_path.exists():
-        logger.error(f"File missing on disk: {full_disk_path} (DB ID: {image_file.id})")
+        logger.error(f"File missing: {full_disk_path}")
         raise HTTPException(status_code=404, detail="文件丢失")
 
-    # 5. 确定 MIME 类型
     ext = full_disk_path.suffix.lower().lstrip('.')
     media_type = f"image/{ext}" if ext != 'jpg' else 'image/jpeg'
-
     return FileResponse(full_disk_path, media_type=media_type)
 
 @router.get("/images/{file_type}/{user_id}/{subject}/{filename}")
@@ -458,22 +513,15 @@ async def get_user_image(
     access_user_id: int = Depends(verify_image_access),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    通用用户图片获取接口 (兼容错题图片)
-    """
-    # 权限校验
+    """通用用户图片获取接口"""
     if access_user_id != -1 and user_id != access_user_id:
          raise HTTPException(status_code=403, detail="无权访问")
 
-    # 获取用户信息以构建目录名
     user = await crud_user.get_user(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
-    # 构建路径
     user_dir = get_user_directory_name(user.username, user.email)
-
-    # 安全检查：防止 filename 包含 ".." 进行路径遍历
     safe_filename = Path(filename).name
 
     file_path = UPLOAD_ROOT / user_dir / file_type / subject / safe_filename
@@ -482,35 +530,3 @@ async def get_user_image(
         raise HTTPException(status_code=404, detail="图片不存在")
 
     return FileResponse(file_path)
-
-@router.post("/batch-analyze")
-async def batch_analyze_images(
-    files: list[UploadFile] = File(...),
-):
-    """批量接口占位符"""
-    return {"message": "Batch analysis not implemented yet", "count": len(files)}
-
-# ============================================================
-# TODO: 学生需要实现以下API endpoints
-# ============================================================
-#
-# 请参考完整实现: backend/modules/tony/api/endpoints/ocr.py
-#
-# 实现步骤:
-# 1. 复制TONY模块对应文件的函数签名和路由装饰器
-# 2. 保留学科验证逻辑 (validate_subject)
-# 3. 实现业务逻辑（数据库查询、Agent调用等）
-# 4. 返回正确的响应数据
-#
-# 提示:
-# - 所有数据库操作使用 backend/core/crud/ 中的函数
-# - 所有Agent操作使用 backend/modules/wzm/agents/ 中的类
-# - 所有Schema使用 backend/core/schemas/ 中的定义
-# ============================================================
-
-# TODO: 在这里添加endpoint实现
-# 示例:
-# @router.get("/example")
-# async def example_endpoint():
-#     """示例端点"""
-#     return {"message": "学生TODO: 实现此endpoint"}

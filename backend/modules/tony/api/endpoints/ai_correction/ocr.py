@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.modules.tony.api.deps import get_current_user, get_current_user_id, get_optional_user_id, get_db, oauth2_scheme
+from backend.modules.tony.config import settings
 from backend.core.services.gemini_ocr_service import (
     get_gemini_ocr_service,
     SubjectType,
@@ -242,7 +243,7 @@ async def analyze_exam_image(
 
     try:
         # 调用 OCR 服务
-        ocr_service = get_gemini_ocr_service()
+        ocr_service = get_gemini_ocr_service(settings)
         await ocr_service.initialize()
 
         # 解析学科类型 - 支持中文和英文

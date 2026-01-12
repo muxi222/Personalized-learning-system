@@ -1,20 +1,36 @@
 import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { imageFilesApi } from '../lib/api'
-import { ArrowLeft, Image as ImageIcon, CheckCircle, XCircle, HelpCircle, Maximize2, ArrowRight } from 'lucide-react'
+import { ArrowLeft, Image as ImageIcon, CheckCircle, XCircle, HelpCircle, Maximize2, ArrowRight, Trash2 } from 'lucide-react'
 import ImageViewer from '../components/ImageViewer'
 import clsx from 'clsx'
+import toast from 'react-hot-toast'
 
 export default function ImageQuestionGroup() {
   const { imageId } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [viewerOpen, setViewerOpen] = useState(false)
   const [viewerImage, setViewerImage] = useState({ url: '', title: '' })
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['image-questions', imageId],
     queryFn: () => imageFilesApi.getQuestions(imageId),
+  })
+
+  const deleteGroupMutation = useMutation({
+    mutationFn: () => imageFilesApi.deleteGroup(imageId),
+    onSuccess: (resp) => {
+      const { deleted_questions } = resp?.data || {}
+      toast.success(`已删除该图片下 ${deleted_questions ?? 0} 道错题`)
+      queryClient.invalidateQueries({ queryKey: ['questions'] })
+      queryClient.removeQueries({ queryKey: ['image-questions', imageId] })
+      navigate(-1)
+    },
+    onError: () => {
+      toast.error('删除失败')
+    },
   })
 
   if (isLoading) {
@@ -91,16 +107,29 @@ export default function ImageQuestionGroup() {
                 <ImageIcon className="w-5 h-5 text-primary-300" />
                 本次上传图片
               </h1>
-              <button
-                className="btn-secondary flex items-center gap-2 text-sm"
-                onClick={() => {
-                  setViewerImage({ url: image_url, title: '上传图片' })
-                  setViewerOpen(true)
-                }}
-              >
-                <Maximize2 className="w-4 h-4" />
-                放大查看
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  className="btn-secondary flex items-center gap-2 text-sm"
+                  onClick={() => {
+                    setViewerImage({ url: image_url, title: '上传图片' })
+                    setViewerOpen(true)
+                  }}
+                >
+                  <Maximize2 className="w-4 h-4" />
+                  放大查看
+                </button>
+                <button
+                  className="bg-red-500/20 hover:bg-red-500/30 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 flex items-center gap-2"
+                  disabled={deleteGroupMutation.isPending}
+                  onClick={() => {
+                    if (!confirm('确定要删除这张图片下的所有错题吗？此操作不可恢复。')) return
+                    deleteGroupMutation.mutate()
+                  }}
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deleteGroupMutation.isPending ? '删除中...' : '删除本图错题'}
+                </button>
+              </div>
             </div>
 
             <div
