@@ -7,12 +7,16 @@ Calls `training/core/fine_tuning/train_dpo.py` with Tony config.
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 from pathlib import Path
 import sys
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Tony DPO runner (wrapper)")
+    _args, passthru = parser.parse_known_args()
+
     p = Path(__file__).resolve()
     while p.name != "training" and p.parent != p:
         p = p.parent
@@ -22,6 +26,8 @@ def main():
     cfg = repo_root / "training" / "modules" / "tony" / "fine_tuning" / "configs" / "dpo_qwen3_14b_lora.json"
 
     cmd = [sys.executable, str(trainer), "--config", str(cfg)]
+    if passthru:
+        cmd += passthru
     print(" ".join(cmd))
     raise SystemExit(subprocess.call(cmd))
 

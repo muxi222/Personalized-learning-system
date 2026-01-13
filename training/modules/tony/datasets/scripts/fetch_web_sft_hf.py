@@ -33,6 +33,31 @@ sys.path.insert(0, str(_repo_root))
 
 from training.core.datasets.io import write_jsonl, safe_text
 
+AGIEVAL_GAOKAO_DATASETS: List[Tuple[str, str]] = [
+    ("hails/agieval-gaokao-english", "english"),
+    ("hails/agieval-gaokao-chemistry", "chemistry"),
+    ("hails/agieval-gaokao-chinese", "chinese"),
+    ("hails/agieval-gaokao-mathqa", "math"),
+    ("hails/agieval-gaokao-history", "history"),
+    ("hails/agieval-gaokao-geography", "geography"),
+]
+
+AGIEVAL_GAOKAO_DATASET_TO_SUBJECT: Dict[str, str] = {k: v for k, v in AGIEVAL_GAOKAO_DATASETS}
+
+
+def _cap_init(max_items: Optional[int]) -> Optional[int]:
+    return int(max_items) if max_items is not None else None
+
+
+def _cap_stop(remaining: Optional[int]) -> bool:
+    return remaining is not None and remaining <= 0
+
+
+def _cap_take_one(remaining: Optional[int]) -> Optional[int]:
+    if remaining is None:
+        return None
+    return remaining - 1
+
 
 def _require_datasets():
     try:
@@ -212,9 +237,18 @@ def _extract_choices(ex: Dict[str, Any]) -> List[str]:
     # - {"choices": {"A": "...", ...}}
     for k in ["options", "choices", "option", "candidates"]:
         v = ex.get(k)
-        if isinstance(v, list):
+        if isinstance(v, (list, tuple)):
             out = [safe_text(x) for x in v if safe_text(x)]
             return out[:4]
+        # Some datasets may return array-like / column-like containers (numpy/pyarrow/datasets format).
+        # Best-effort: treat any non-string iterable as a list of options.
+        if v is not None and not isinstance(v, (str, bytes, dict)) and hasattr(v, "__iter__"):
+            try:
+                out = [safe_text(x) for x in list(v) if safe_text(x)]
+                if out:
+                    return out[:4]
+            except Exception:
+                pass
         if isinstance(v, dict):
             # Prefer ordered A-D keys if present
             if all(x in v for x in ["A", "B"]):
@@ -240,6 +274,15 @@ def _extract_choices(ex: Dict[str, Any]) -> List[str]:
 def _extract_answer_letter(ex: Dict[str, Any]) -> str:
     for k in ["answer", "gold", "label", "target", "correct", "correct_answer"]:
         v = ex.get(k)
+        # Some datasets store labels as a singleton list / array / column, e.g. gold=[0]
+        if isinstance(v, (list, tuple)) and len(v) >= 1:
+            v = v[0]
+        elif v is not None and not isinstance(v, (str, bytes, dict)) and hasattr(v, "__iter__"):
+            try:
+                it = iter(v)
+                v = next(it)
+            except Exception:
+                pass
         if isinstance(v, int) and 0 <= v <= 3:
             return _letter(v)
         s = safe_text(v).strip().upper()
@@ -262,7 +305,7 @@ def _extract_answer_letter(ex: Dict[str, Any]) -> str:
 
 def iter_mmlu_rows(
     *,
-    max_items: int,
+    max_items: Optional[int],
     seed: int,
     include_subjects: Optional[List[str]],
 ) -> Iterator[Tuple[str, Dict[str, Any]]]:
@@ -277,9 +320,9 @@ def iter_mmlu_rows(
     # Use test split; it exists for most configs and keeps consistent schema
     split = "test"
 
-    remaining = max_items
+    remaining = _cap_init(max_items)
     for cfg in configs:
-        if remaining <= 0:
+        if _cap_stop(remaining):
             break
         subject_norm = normalize_subject(cfg)
         if include_subjects and subject_norm not in include_subjects:
@@ -287,7 +330,7 @@ def iter_mmlu_rows(
 
         ds = _hf_load_dataset(dataset_name, cfg, split)
         for ex in ds:
-            if remaining <= 0:
+            if _cap_stop(remaining):
                 break
             q = safe_text(ex.get("question"))
             choices = ex.get("choices") or []
@@ -319,13 +362,13 @@ def iter_mmlu_rows(
                     "subject": subject_norm,
                 },
             }
-            remaining -= 1
+            remaining = _cap_take_one(remaining)
             yield subject_norm, row
 
 
 def iter_ceval_rows(
     *,
-    max_items: int,
+    max_items: Optional[int],
     seed: int,
     include_subjects: Optional[List[str]],
 ) -> Iterator[Tuple[str, Dict[str, Any]]]:
@@ -344,9 +387,9 @@ def iter_ceval_rows(
     dataset_name, configs = _try_get_configs(candidate_names)
     split = "val"
 
-    remaining = max_items
+    remaining = _cap_init(max_items)
     for cfg in configs:
-        if remaining <= 0:
+        if _cap_stop(remaining):
             break
         subject_norm = normalize_subject(cfg)
         if include_subjects and subject_norm not in include_subjects:
@@ -356,7 +399,7 @@ def iter_ceval_rows(
         # keep dataset_name consistent for meta
         dataset_name = used_name
         for ex in ds:
-            if remaining <= 0:
+            if _cap_stop(remaining):
                 break
 
             q = safe_text(ex.get("question"))
@@ -404,13 +447,13 @@ def iter_ceval_rows(
                     "subject": subject_norm,
                 },
             }
-            remaining -= 1
+            remaining = _cap_take_one(remaining)
             yield subject_norm, row
 
 
 def iter_race_rows(
     *,
-    max_items: int,
+    max_items: Optional[int],
     seed: int,
     include_subjects: Optional[List[str]],
 ) -> Iterator[Tuple[str, Dict[str, Any]]]:
@@ -427,15 +470,15 @@ def iter_race_rows(
     candidate_names = ["race", "ehovy/race"]
     dataset_name = candidate_names[0]
     split = "train"
-    remaining = max_items
+    remaining = _cap_init(max_items)
 
     for cfg in ["middle", "high"]:
-        if remaining <= 0:
+        if _cap_stop(remaining):
             break
         used_name, ds = _try_load_dataset(candidate_names, cfg, split)
         dataset_name = used_name
         for ex in ds:
-            if remaining <= 0:
+            if _cap_stop(remaining):
                 break
             article = safe_text(ex.get("article"), max_len=2500).strip()
             q = safe_text(ex.get("question"), max_len=800).strip()
@@ -484,13 +527,13 @@ def iter_race_rows(
                     "subject": subject_norm,
                 },
             }
-            remaining -= 1
+            remaining = _cap_take_one(remaining)
             yield subject_norm, row
 
 
 def iter_gaokao_bench_rows(
     *,
-    max_items: int,
+    max_items: Optional[int],
     seed: int,
     include_subjects: Optional[List[str]],
 ) -> Iterator[Tuple[str, Dict[str, Any]]]:
@@ -507,9 +550,9 @@ def iter_gaokao_bench_rows(
     # many configs are test-only
     split_candidates = ["train", "validation", "val", "test"]
 
-    remaining = max_items
+    remaining = _cap_init(max_items)
     for cfg in configs:
-        if remaining <= 0:
+        if _cap_stop(remaining):
             break
         subject_norm = normalize_subject(cfg)
         if include_subjects and subject_norm not in include_subjects:
@@ -518,7 +561,7 @@ def iter_gaokao_bench_rows(
         used_name, ds, split = _try_load_dataset_splits(candidate_names, cfg, split_candidates)
         dataset_name = used_name
         for ex in ds:
-            if remaining <= 0:
+            if _cap_stop(remaining):
                 break
             if not isinstance(ex, dict):
                 continue
@@ -544,71 +587,90 @@ def iter_gaokao_bench_rows(
                     "subject": subject_norm,
                 },
             }
-            remaining -= 1
+            remaining = _cap_take_one(remaining)
             yield subject_norm, row
 
 
-def iter_agieval_gaokao_chinese_rows(
+def iter_agieval_gaokao_rows(
     *,
-    max_items: int,
+    max_items: Optional[int],
     seed: int,
     include_subjects: Optional[List[str]],
+    dataset_name: Optional[str] = None,
 ) -> Iterator[Tuple[str, Dict[str, Any]]]:
     """
-    Pulls from hails/agieval-gaokao-chinese.
+    Pulls from hails AGIEval Gaokao datasets (per subject).
 
     Expected schema (per user):
     - query: question text
     - choices: list of options
     - gold: correct answer label (A/B/C/D or 0-3)
 
-    Subject is forced to `chinese` (gaokao-chinese).
+    Subject is forced by dataset_name -> subject mapping.
     """
     rng = random.Random(seed)
-    subject_norm = "chinese"
-    if include_subjects and subject_norm not in include_subjects:
-        return
-
-    candidate_names = ["hails/agieval-gaokao-chinese"]
     split_candidates = ["train", "validation", "val", "test"]
-    dataset_name, ds, split = _try_load_dataset_no_config_splits(candidate_names, split_candidates)
 
-    remaining = max_items
-    for ex in ds:
-        if remaining <= 0:
-            break
-        if not isinstance(ex, dict):
+    target_datasets: List[str]
+    if safe_text(dataset_name):
+        target_datasets = [safe_text(dataset_name)]
+    else:
+        target_datasets = [name for name, _subj in AGIEVAL_GAOKAO_DATASETS]
+
+    remaining = _cap_init(max_items)
+    for ds_name in target_datasets:
+        forced_subject = AGIEVAL_GAOKAO_DATASET_TO_SUBJECT.get(ds_name)
+        if not forced_subject:
+            raise ValueError(
+                f"Unknown AGIEval gaokao dataset: {ds_name}. Expected one of: {list(AGIEVAL_GAOKAO_DATASET_TO_SUBJECT)}"
+            )
+        subject_norm = normalize_subject(forced_subject)
+        if include_subjects and subject_norm not in include_subjects:
             continue
 
-        q = safe_text(ex.get("query")) or _extract_question(ex)
-        choices_raw = ex.get("choices")
-        if isinstance(choices_raw, list):
-            choices = [safe_text(x) for x in choices_raw if safe_text(x)][:4]
-        else:
-            choices = _extract_choices(ex)
-        ans = _extract_answer_letter({"gold": ex.get("gold"), "answer": ex.get("answer"), "label": ex.get("label")})
+        _used_name, ds, split = _try_load_dataset_no_config_splits([ds_name], split_candidates)
+        for ex in ds:
+            if _cap_stop(remaining):
+                break
+            if not isinstance(ex, dict):
+                continue
 
-        if not q or len(choices) < 2 or not ans:
-            continue
+            q = safe_text(ex.get("query")) or _extract_question(ex)
+            choices_raw = ex.get("choices")
+            if isinstance(choices_raw, list):
+                choices = [safe_text(x) for x in choices_raw if safe_text(x)][:4]
+            else:
+                choices = _extract_choices(ex)
+            ans = _extract_answer_letter(
+                {
+                    "gold": ex.get("gold"),
+                    "answer": ex.get("answer"),
+                    "label": ex.get("label"),
+                    "correct_answer": ex.get("correct_answer"),
+                }
+            )
 
-        wrong_pool = [c for c in ["A", "B", "C", "D"] if c != ans]
-        student = rng.choice(wrong_pool) if wrong_pool else None
+            if not q or len(choices) < 2 or not ans:
+                continue
 
-        row = {
-            "subject": subject_norm,
-            "instruction": "请解答下列高考语文选择题：给出正确选项，并用 1-3 句话给出复习方向（不要编造具体教材页码）。",
-            "input": _format_mcq_input(subject_norm, q, choices, student),
-            "output": _format_mcq_output(ans),
-            "meta": {
-                "source": "hf",
-                "dataset": dataset_name,
-                "config": None,
-                "split": split,
+            wrong_pool = [c for c in ["A", "B", "C", "D"] if c != ans]
+            student = rng.choice(wrong_pool) if wrong_pool else None
+
+            row = {
                 "subject": subject_norm,
-            },
-        }
-        remaining -= 1
-        yield subject_norm, row
+                "instruction": "请解答下列选择题：给出正确选项，并用 1-3 句话给出复习方向（不要编造具体教材页码）。",
+                "input": _format_mcq_input(subject_norm, q, choices, student),
+                "output": _format_mcq_output(ans),
+                "meta": {
+                    "source": "hf",
+                    "dataset": ds_name,
+                    "config": None,
+                    "split": split,
+                    "subject": subject_norm,
+                },
+            }
+            remaining = _cap_take_one(remaining)
+            yield subject_norm, row
 
 
 def _dedupe(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -628,14 +690,14 @@ def main() -> None:
     parser.add_argument(
         "--provider",
         default="hf-mmlu",
-        choices=["hf-mmlu", "hf-ceval", "hf-race", "hf-gaokao-bench", "hf-agieval-gaokao-chinese"],
         help=(
-            "Which web provider to use. "
-            "hf-mmlu: cais/mmlu (general academic). "
-            "hf-ceval: C-Eval Chinese exam style (closer to K12/gaokao-like multiple-choice). "
-            "hf-race: RACE English exams (K12 reading comprehension). "
-            "hf-gaokao-bench: RUCAIBox/gaokao-bench (Gaokao cross-subject MCQ benchmark). "
-            "hf-agieval-gaokao-chinese: hails/agieval-gaokao-chinese (Gaokao Chinese MCQ: query+choices+gold)."
+            "Which web provider to use. Supported values:\n"
+            "- hf-mmlu: cais/mmlu (general academic)\n"
+            "- hf-ceval: C-Eval Chinese exam style\n"
+            "- hf-race: RACE English exams\n"
+            "- hf-gaokao-bench: RUCAIBox/gaokao-bench\n"
+            "- hf-agieval-gaokao-chinese: (legacy alias) fetch ALL hails/agieval-gaokao-* subjects\n"
+            "- Or pass a raw HuggingFace dataset id, e.g. hails/agieval-gaokao-history"
         ),
     )
     parser.add_argument(
@@ -644,7 +706,12 @@ def main() -> None:
         help="Base output dir. Writes to <output-dir>/<subject>/train_web.jsonl",
     )
     parser.add_argument("--min-total", type=int, default=10000, help="Minimum rows to fetch (best effort).")
-    parser.add_argument("--max-total", type=int, default=50000, help="Maximum rows to fetch (hard cap).")
+    parser.add_argument(
+        "--max-total",
+        type=int,
+        default=None,
+        help="Optional maximum rows to format (hard cap). If omitted, format ALL rows.",
+    )
     parser.add_argument(
         "--all-proxy",
         default="",
@@ -673,11 +740,13 @@ def main() -> None:
         for k in ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"]:
             os.environ.pop(k, None)
 
-    max_total = int(args.max_total)
-    if max_total <= 0:
-        raise ValueError("--max-total must be > 0")
-    if max_total > 50000:
-        raise ValueError("--max-total must be <= 50000 (requested cap)")
+    max_total: Optional[int]
+    if args.max_total is None:
+        max_total = None
+    else:
+        max_total = int(args.max_total)
+        if max_total <= 0:
+            raise ValueError("--max-total must be > 0")
 
     include_subjects = [normalize_subject(x) for x in args.subjects] if args.subjects else None
 
@@ -701,8 +770,16 @@ def main() -> None:
             ):
                 rows_by_subject.setdefault(subj, []).append(row)
         elif args.provider == "hf-agieval-gaokao-chinese":
-            for subj, row in iter_agieval_gaokao_chinese_rows(
-                max_items=max_total, seed=int(args.seed), include_subjects=include_subjects
+            # Legacy alias (kept for compatibility): fetch the full AGIEval gaokao suite.
+            for subj, row in iter_agieval_gaokao_rows(max_items=max_total, seed=int(args.seed), include_subjects=include_subjects):
+                rows_by_subject.setdefault(subj, []).append(row)
+        elif safe_text(args.provider).strip() in AGIEVAL_GAOKAO_DATASET_TO_SUBJECT:
+            # New style: provider is the raw HF dataset id, e.g. hails/agieval-gaokao-history
+            for subj, row in iter_agieval_gaokao_rows(
+                max_items=max_total,
+                seed=int(args.seed),
+                include_subjects=include_subjects,
+                dataset_name=safe_text(args.provider).strip(),
             ):
                 rows_by_subject.setdefault(subj, []).append(row)
         else:  # pragma: no cover

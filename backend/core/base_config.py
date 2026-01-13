@@ -122,6 +122,12 @@ class BaseAppSettings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT: int = 120  # seconds
 
+    # ============ MCP (Model Context Protocol) ============
+    # Phase 1: retrieval-mcp (Tony first)
+    MCP_RETRIEVAL_ENABLED: bool = False
+    # Streamable HTTP endpoint, e.g. http://127.0.0.1:7010/mcp
+    MCP_RETRIEVAL_URL: Optional[str] = None
+
     # ============ Task Queue (Celery) (共享Broker,模块独立队列) ============
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"

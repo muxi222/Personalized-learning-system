@@ -41,6 +41,11 @@ class SimilarQuestionResponse(BaseModel):
     guidance_text: str = Field(..., description="引导文本")
     similar_questions: List[SimilarQuestionItem] = []
 
+class SimilarQuestionAcceptRequest(BaseModel):
+    """用户对推荐题目的接受/点击等行为"""
+    recommended_question_id: int = Field(..., description="被接受/点击的推荐题目ID")
+    action: str = Field("open", description="行为类型，如 open/answer/like")
+
 class LearningPlanRequest(BaseModel):
     """学习计划请求"""
     learning_goal: Optional[str] = Field(None, description="学习目标")
@@ -113,11 +118,60 @@ async def get_similar_questions(
             knowledge_points=q.get("knowledge_points", []),
         ))
 
+    # Telemetry: recommendation shown (for acceptance rate / retrieval usefulness)
+    try:
+        from backend.core.services.metrics_service import get_metrics_service
+        await get_metrics_service().log_event(
+            event_type="reco",
+            event_name="similar_questions.shown",
+            ok=True,
+            user_id=user_id,
+            module="tony",
+            subject=(question.subject.value if getattr(question, "subject", None) else None),
+            question_id=request.question_id,
+            payload={
+                "top_k": request.top_k,
+                "recommended_ids": [q.id for q in similar_questions],
+            },
+        )
+    except Exception:
+        pass
+
     return SimilarQuestionResponse(
         question_id=request.question_id,
         guidance_text=result.get("guidance_text", ""),
         similar_questions=similar_questions,
     )
+
+
+@router.post("/similar-questions/{question_id}/accept")
+async def accept_similar_question(
+    question_id: int,
+    body: SimilarQuestionAcceptRequest,
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    记录用户对“举一反三”推荐题的接受/点击行为（用于评估：推荐题接受率）。
+
+    前端可在用户点击某道推荐题、或查看答案/开始练习时调用此接口。
+    """
+    try:
+        from backend.core.services.metrics_service import get_metrics_service
+        await get_metrics_service().log_event(
+            event_type="reco",
+            event_name="similar_questions.accept",
+            ok=True,
+            user_id=user_id,
+            module="tony",
+            question_id=question_id,
+            payload={
+                "recommended_question_id": int(body.recommended_question_id),
+                "action": body.action,
+            },
+        )
+    except Exception:
+        pass
+    return {"success": True}
 
 @router.get("/learning-plan", response_model=LearningPlanResponse)
 async def get_learning_plan(

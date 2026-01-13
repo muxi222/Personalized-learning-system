@@ -18,6 +18,102 @@ Shared infrastructure:
 - Upload storage: `data/uploads/<user>/...`
 - Redis: Celery broker/results + caching
 
+### MCP layer (Model Context Protocol) — tool servers
+
+This repo introduces an MCP tool layer to make “retrieval / ops / training-loop” callable in a structured way by agents.
+
+**Phase 1 (implemented, Tony first)**:
+- `backend/mcp_servers/tony/retrieval_server.py` (Streamable HTTP, default `http://127.0.0.1:7010/mcp`)
+- Backend agents call it via `backend/core/mcp/retrieval_client.py`
+- Feature flag (per backend process):
+  - `MCP_RETRIEVAL_ENABLED=true`
+  - `MCP_RETRIEVAL_URL=http://127.0.0.1:7010/mcp`
+
+**Tool-to-code mapping**:
+- `search_questions(query_text, user_id, subject?, knowledge_points?, tags?, include_graphrag?, ...)`
+  - Hybrid retrieval: `backend/core/services/hybrid_search_service.py`
+  - Optional Graph expansion (feature-gated): `backend/core/services/graphrag_service.py`
+    - `find_questions_by_knowledge_points(...)`
+    - `find_questions_by_tags(...)`
+- `get_questions(question_ids, user_id)` → SQL `Question` lookup (via `crud_question.get_question`)
+- `get_task(task_id)` → SQL `AgentTask` lookup (Phase 2 starter; for ops workflows)
+
+**LangGraph integration point (Tony)**:
+- `backend/modules/tony/agents/learning/similar_question_agent.py`
+  - Node `vector_retrieval` calls MCP when enabled; otherwise falls back to legacy local retrieval.
+
+### MCP end-to-end call chain (bilingual)
+
+**English (end-to-end)**
+- When a user requests “similar questions / guidance”, Tony’s LangGraph agent calls retrieval tools via MCP.
+- The MCP server encapsulates hybrid retrieval (FAISS+BM25), optional GraphRAG expansion (knowledge points + tags), and DB fetch for question details.
+
+**中文（端到端链路）**
+- 用户触发“举一反三/学习引导”后，Tony 的 LangGraph agent 会通过 MCP 调用检索工具。
+- MCP server 将混合检索（FAISS+BM25）、GraphRAG 扩展（知识点 + tags）与题目详情查询（DB）封装成结构化工具，降低 prompt 复杂度并提升可解释性与可维护性。
+
+#### Sequence diagram (MCP retrieval path)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as User (Browser)
+  participant FE as Frontend (React)
+  participant API as TONY API (FastAPI)
+  participant AG as SimilarQuestionAgent (LangGraph)
+  participant MC as RetrievalMcpClient
+  participant MS as retrieval-mcp Server (streamable-http :7010)
+  participant HS as HybridSearchService (FAISS+BM25)
+  participant GR as GraphRAGService (graph.json)
+  participant DB as SQLite (questions/agent_tasks)
+
+  U->>FE: click "举一反三"
+  FE->>API: POST /api/v1/learning/similar-questions
+  API->>AG: run graph nodes
+  AG->>MC: search_questions(query_text, knowledge_points, tags, include_graphrag)
+  MC->>MS: MCP call_tool search_questions
+  MS->>HS: hybrid_search / bm25_search
+  alt GRAPHRAG_ENABLED && include_graphrag
+    MS->>GR: expand by knowledge_points + tags
+  end
+  MS-->>MC: candidate ids + scores
+  AG->>MC: get_questions(ids)
+  MC->>MS: MCP call_tool get_questions
+  MS->>DB: fetch Question rows (scoped by user_id)
+  MS-->>MC: question details
+  AG-->>API: guidance_text + recommended_questions
+  API-->>FE: JSON response
+  FE-->>U: render guidance + list
+```
+
+#### Component diagram (MCP deployment shape)
+
+```mermaid
+flowchart LR
+  subgraph Backend["Backend runtime"]
+    TAPI[TONY FastAPI :6005]
+    TAGENT[TONY Celery agents]
+  end
+
+  subgraph MCP["MCP servers"]
+    RMCP[tony retrieval-mcp :7010]
+  end
+
+  subgraph Data["Artifacts under data/"]
+    SQLITE[(data/sqlite/app.db)]
+    FAISS[(data/faiss/tony)]
+    BM25[(data/bm25/tony)]
+    GRAPH[(data/training/tony/graphrag/graph.json)]
+  end
+
+  TAPI -->|MCP_RETRIEVAL_URL| RMCP
+  TAGENT -->|MCP_RETRIEVAL_URL| RMCP
+  RMCP --> SQLITE
+  RMCP --> FAISS
+  RMCP --> BM25
+  RMCP -->|GRAPHRAG_ENABLED| GRAPH
+```
+
 ### Runtime architecture diagram (services)
 
 ```mermaid

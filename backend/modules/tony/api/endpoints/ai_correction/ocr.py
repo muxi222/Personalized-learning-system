@@ -194,6 +194,26 @@ async def analyze_exam_image(
     task_id = str(uuid.uuid4())
     logger.info(f"[ocr/analyze] task_id={task_id} user_id={current_user.id} prepared")
 
+    # Telemetry: journey start (exam upload -> analysis -> practice)
+    try:
+        from backend.core.services.metrics_service import get_metrics_service
+        await get_metrics_service().log_event(
+            event_type="journey",
+            event_name="ocr.analyze.start",
+            ok=True,
+            user_id=current_user.id,
+            module="tony",
+            subject=subject_en,
+            task_id=task_id,
+            payload={
+                "filename": file.filename,
+                "content_type": file.content_type,
+                "is_duplicate": bool(is_duplicate),
+            },
+        )
+    except Exception:
+        pass
+
     # 获取或创建原始图片记录
     from backend.core.db.models import ImageFileTypeEnum
 
@@ -519,6 +539,27 @@ async def analyze_exam_image(
             f"created_wrong_questions={len(wrong_question_ids)} duration_ms={total_ms}"
         )
 
+        # Telemetry: journey step done (used for total duration metric)
+        try:
+            from backend.core.services.metrics_service import get_metrics_service
+            await get_metrics_service().log_event(
+                event_type="journey",
+                event_name="ocr.analyze.done",
+                ok=True,
+                duration_ms=float(total_ms),
+                user_id=current_user.id,
+                module="tony",
+                subject=subject_en,
+                task_id=task_id,
+                exam_correction_id=exam_correction.id,
+                payload={
+                    "wrong_questions": len(wrong_question_ids),
+                    "accuracy_rate": float(result.accuracy_rate or 0.0),
+                },
+            )
+        except Exception:
+            pass
+
         logger.info(
             f"Saved exam correction {exam_correction.id} for user {current_user.id}, "
             f"created {len(wrong_question_ids)} wrong question records"
@@ -559,6 +600,21 @@ async def analyze_exam_image(
 
     except Exception as e:
         logger.error(f"OCR analysis failed: {e}")
+        try:
+            from backend.core.services.metrics_service import get_metrics_service
+            await get_metrics_service().log_event(
+                event_type="journey",
+                event_name="ocr.analyze.failed",
+                ok=False,
+                duration_ms=float((time.perf_counter() - t0) * 1000.0),
+                user_id=current_user.id,
+                module="tony",
+                subject=subject_en,
+                task_id=task_id,
+                payload={"error": str(e)},
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
 
     finally:

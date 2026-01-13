@@ -7,6 +7,7 @@ QLoRA微调脚本
 import os
 import json
 import argparse
+import inspect
 from pathlib import Path
 from typing import Optional
 
@@ -157,7 +158,8 @@ def train(config: dict):
         format_func = lambda x: format_alpaca_prompt(x, tokenizer)
 
     # Training arguments
-    training_args = TrainingArguments(
+    ta_sig = inspect.signature(TrainingArguments.__init__)
+    training_args_kwargs = dict(
         output_dir=config["output_dir"],
         num_train_epochs=config["num_epochs"],
         per_device_train_batch_size=config["batch_size"],
@@ -168,7 +170,6 @@ def train(config: dict):
         lr_scheduler_type="cosine",
         logging_steps=10,
         save_strategy="epoch",
-        evaluation_strategy="no",
         bf16=True,
         tf32=True,
         max_grad_norm=0.3,
@@ -176,6 +177,11 @@ def train(config: dict):
         report_to="tensorboard",
         optim="paged_adamw_32bit",
     )
+    if "eval_strategy" in ta_sig.parameters:
+        training_args_kwargs["eval_strategy"] = "no"
+    else:
+        training_args_kwargs["evaluation_strategy"] = "no"
+    training_args = TrainingArguments(**training_args_kwargs)
 
     # Create trainer
     trainer = SFTTrainer(

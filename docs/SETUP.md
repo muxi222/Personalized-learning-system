@@ -3,8 +3,8 @@
 ### 前置要求
 
 - **Conda**: Anaconda 或 Miniconda
-- **Python**: 3.10+
-- **Node.js**: 16+ (用于前端)
+- **Python**: 3.10+（推荐 3.11）
+- **Node.js**: 18+ (用于前端)
 - **Redis**: 用于任务队列（Celery broker/result backend）
 
 ### 快速开始
@@ -13,7 +13,7 @@
 
 ```bash
 # 创建环境
-conda create -n 312_edu python=3.10 -y
+conda create -n 312_edu python=3.11 -y
 
 # 激活环境
 conda activate 312_edu
@@ -42,6 +42,7 @@ vim .env
 可选：
 - `OPENAI_API_KEY` / `OPENAI_API_BASE` / `OPENAI_MODEL`: 用于对接 OpenAI-compatible 推理服务（如 vLLM）
 - `GRAPHRAG_ENABLED=true`: 启用 GraphRAG（读取 `data/training/<module>/graphrag/graph.json`）
+- `MCP_RETRIEVAL_ENABLED=true` + `MCP_RETRIEVAL_URL=http://127.0.0.1:7010/mcp`: 启用 MCP 工具层（Phase 1: tony retrieval-mcp）
 
 #### 3) 启动服务（在线服务）
 
@@ -56,6 +57,16 @@ vim .env
 # 状态/停止
 ./deploy/scripts/start.sh status
 ./deploy/scripts/start.sh stop_all
+```
+
+#### 3.1) （可选）启动 MCP 服务（Phase 1：tony retrieval-mcp）
+
+MCP server 独立于 API/Agent/Frontend 进程，可单独启动/停止：
+
+```bash
+./deploy/scripts/start_mcp.sh tony_retrieval up
+./deploy/scripts/start_mcp.sh tony_retrieval status
+./deploy/scripts/start_mcp.sh tony_retrieval down
 ```
 
 #### 4) 初始化数据目录
@@ -123,13 +134,13 @@ mkdir -p data/uploads data/faiss data/bm25 data/sqlite logs
 ```
 learning_assistant/
 ├── backend/              # 后端代码
-│   ├── app/             # FastAPI 应用
-│   ├── main.py          # 应用入口
-│   └── tests/           # 测试代码
+│   ├── core/            # 共享核心层（db/models/services/crud/schemas）
+│   └── modules/         # 模块化应用层（default/rpj/xmx/wzy/wzm/tony）
 ├── frontend/            # 前端代码
 ├── scripts/             # 工具脚本
 ├── deploy/              # 部署相关
 │   └── scripts/         # 启动脚本
+├── training/            # 离线流水线（GraphRAG / 数据集 / 微调 / serving）
 ├── data/                # 数据目录
 ├── requirements.txt     # Python 依赖
 └── pyproject.toml       # 项目配置
@@ -213,12 +224,11 @@ mypy backend/
 ## Docker 部署（可选）
 
 ```bash
-# 使用 Docker Compose 启动
-cd deploy/scripts
-./start.sh docker
+# 启动多模块 Docker Compose（redis + all module apis + agents + frontend）
+./deploy/scripts/start-docker.sh all
 
-# 停止服务
-./start.sh stop-docker
+# 停止
+./deploy/scripts/start-docker.sh down
 ```
 
 ## 更新依赖

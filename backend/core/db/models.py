@@ -277,3 +277,32 @@ class KnowledgePoint(Base):
 
     # Self-referential relationship for prerequisite knowledge
     parent = relationship("KnowledgePoint", remote_side=[id], backref="children")
+
+
+class MetricEvent(Base):
+    """Telemetry events for evaluation and observability."""
+
+    __tablename__ = "metric_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    module = Column(String(50), nullable=True, index=True)
+    subject = Column(String(20), nullable=True, index=True)
+
+    event_type = Column(String(50), nullable=False, index=True)
+    event_name = Column(String(100), nullable=False, index=True)
+
+    ok = Column(Boolean, default=True, index=True)
+    duration_ms = Column(Float, nullable=True)
+
+    task_id = Column(String(64), nullable=True, index=True)
+    question_id = Column(Integer, ForeignKey("questions.id"), nullable=True, index=True)
+    exam_correction_id = Column(Integer, ForeignKey("exam_corrections.id"), nullable=True, index=True)
+
+    payload = Column(JSON, default=dict)
+
+    user = relationship("User", backref="metric_events")
+    question = relationship("Question", backref="metric_events")
+    exam_correction = relationship("ExamCorrection", backref="metric_events")

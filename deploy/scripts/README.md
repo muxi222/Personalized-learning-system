@@ -5,6 +5,7 @@
 ### 1) 在线服务启动脚本（API/Agent/Frontend/Docker）
 
 - `start.sh` / `start_module.sh`：本地（conda）启动
+- `start_mcp.sh`：本地（conda）启动 MCP servers（Phase 1: tony retrieval-mcp）
 - `start-docker.sh` / `docker-up.sh`：Docker 多模块启动
 
 ### 2) 离线流水线脚本（知识库 / 数据集 / 微调 / 模型服务化）

@@ -116,6 +116,7 @@ async def load_original_question(state: SimilarQuestionState) -> Dict[str, Any]:
                 "student_answer": question.student_answer,
                 "correct_answer": question.correct_answer,
                 "knowledge_points": question.knowledge_points or [],
+                "tags": question.tags or [],
                 "error_analysis": question.error_analysis,
             }
 
@@ -159,69 +160,115 @@ async def vector_retrieval(state: SimilarQuestionState) -> Dict[str, Any]:
         }
 
     try:
-        # 初始化服务
-        embedding_service = get_embedding_service()
-        vector_store = get_vector_store_service()
-        await vector_store.initialize()
-
-        # 生成查询向量
+        # Build query text (consistent across MCP / local retrieval)
         query_text = original_question.get("content", "")
         knowledge_points = original_question.get("knowledge_points", [])
+        tags = original_question.get("tags", []) or []
         if knowledge_points:
             query_text = f"{query_text}\n知识点: {', '.join(knowledge_points)}"
 
-        query_embedding = await embedding_service.embed_text(query_text)
+        # Prefer MCP retrieval when enabled (Phase 1 rollout).
+        if getattr(settings, "MCP_RETRIEVAL_ENABLED", False):
+            from backend.core.mcp.retrieval_client import RetrievalMcpClient
 
-        if not query_embedding:
-            return {
-                "errors": ["生成查询向量失败"],
-                "current_step": "vector_retrieval",
-                "progress": 40.0,
-            }
+            url = getattr(settings, "MCP_RETRIEVAL_URL", None) or "http://127.0.0.1:7010/mcp"
+            client = RetrievalMcpClient(url=url)
 
-        # 向量检索 (多检索一些，排除自身后取top_k)
-        results = await vector_store.search_similar(
-            query_embedding=query_embedding,
-            n_results=top_k + 5,
-            where={"user_id": user_id} if user_id else None,
-        )
+            data = await client.search_questions(
+                query_text=query_text,
+                user_id=user_id,
+                subject=state.get("subject") or original_question.get("subject") or None,
+                knowledge_points=list(knowledge_points or []),
+                tags=list(tags or []),
+                top_k=top_k + 5,  # request more to allow self-exclusion
+                exclude_question_ids=[int(question_id)] if question_id else [],
+                include_graphrag=bool(getattr(settings, "GRAPHRAG_ENABLED", False)),
+                graphrag_k=max(10, top_k * 2),
+                telemetry={
+                    "module": "tony",
+                    "subject": state.get("subject") or original_question.get("subject"),
+                    "user_id": user_id,
+                    "question_id": question_id,
+                    "payload": {"top_k": top_k},
+                },
+            )
 
-        # 过滤掉原题自身
-        filtered_results = [
-            r for r in results
-            if int(r["id"]) != question_id
-        ][:top_k]
+            results = data.get("results") if isinstance(data, dict) else []
+            filtered_results = [
+                r for r in (results or [])
+                if int(r.get("question_id", -1)) != int(question_id)
+            ][:top_k]
 
-        retrieved_ids = [int(r["id"]) for r in filtered_results]
-        similarity_scores = [r.get("score", 0) for r in filtered_results]
+            retrieved_ids = [int(r.get("question_id")) for r in filtered_results if r.get("question_id") is not None]
+            similarity_scores = [float(r.get("score", 0.0) or 0.0) for r in filtered_results]
+        else:
+            # Local retrieval (legacy): embedding + VectorStoreService (FAISS-only search_similar)
+            embedding_service = get_embedding_service()
+            vector_store = get_vector_store_service()
+            await vector_store.initialize()
 
-        # Optional GraphRAG expansion (feature-gated; no behavior change by default)
-        try:
-            if getattr(settings, "GRAPHRAG_ENABLED", False):
-                from backend.core.services.graphrag_service import get_graphrag_service
+            query_embedding = await embedding_service.embed_text(query_text)
+            if not query_embedding:
+                return {
+                    "errors": ["生成查询向量失败"],
+                    "current_step": "vector_retrieval",
+                    "progress": 40.0,
+                }
 
-                graphrag = get_graphrag_service()
-                await graphrag.initialize(graph_path=settings.module_graphrag_graph_path)
+            results = await vector_store.search_similar(
+                query_embedding=query_embedding,
+                n_results=top_k + 5,
+                where={"user_id": user_id} if user_id else None,
+            )
+            filtered_results = [
+                r for r in results
+                if int(r["id"]) != question_id
+            ][:top_k]
+            retrieved_ids = [int(r["id"]) for r in filtered_results]
+            similarity_scores = [r.get("score", 0) for r in filtered_results]
 
-                subject = state.get("subject") or original_question.get("subject") or "other"
-                kps = state.get("knowledge_points") or original_question.get("knowledge_points") or []
-                exclude = set(retrieved_ids + ([question_id] if question_id else []))
-                extra_ids = graphrag.find_questions_by_knowledge_points(
-                    subject=subject,
-                    knowledge_points=list(kps),
-                    top_k=max(10, top_k * 2),
-                    exclude_question_ids=exclude,
-                )
+        # GraphRAG expansion is handled inside MCP tool when MCP is enabled.
+        # For legacy/local retrieval, keep the existing GraphRAG expansion.
+        if not getattr(settings, "MCP_RETRIEVAL_ENABLED", False):
+            try:
+                if getattr(settings, "GRAPHRAG_ENABLED", False):
+                    from backend.core.services.graphrag_service import get_graphrag_service
 
-                # Keep vector results first; append graph-expanded candidates.
-                for eid in extra_ids:
-                    if eid not in exclude:
-                        retrieved_ids.append(eid)
-                        similarity_scores.append(0.0)  # unknown score; downstream can ignore
-                        exclude.add(eid)
-        except Exception as _e:
-            # Never fail the main flow due to optional GraphRAG enhancement.
-            logger.debug(f"[vector_retrieval] GraphRAG expansion skipped: {_e}")
+                    graphrag = get_graphrag_service()
+                    await graphrag.initialize(graph_path=settings.module_graphrag_graph_path)
+
+                    subject = state.get("subject") or original_question.get("subject") or "other"
+                    kps = state.get("knowledge_points") or original_question.get("knowledge_points") or []
+                    tgs = original_question.get("tags") or []
+                    exclude = set(retrieved_ids + ([question_id] if question_id else []))
+                    extra_ids: List[int] = []
+                    if kps:
+                        extra_ids.extend(
+                            graphrag.find_questions_by_knowledge_points(
+                                subject=subject,
+                                knowledge_points=list(kps),
+                                top_k=max(10, top_k * 2),
+                                exclude_question_ids=exclude,
+                            )
+                        )
+                    if tgs:
+                        extra_ids.extend(
+                            graphrag.find_questions_by_tags(
+                                tags=list(tgs),
+                                top_k=max(10, top_k * 2),
+                                exclude_question_ids=exclude,
+                            )
+                        )
+
+                    # Keep vector results first; append graph-expanded candidates.
+                    for eid in extra_ids:
+                        if eid not in exclude:
+                            retrieved_ids.append(eid)
+                            similarity_scores.append(0.0)  # unknown score; downstream can ignore
+                            exclude.add(eid)
+            except Exception as _e:
+                # Never fail the main flow due to optional GraphRAG enhancement.
+                logger.debug(f"[vector_retrieval] GraphRAG expansion skipped: {_e}")
 
         logger.info(f"[vector_retrieval] Found {len(retrieved_ids)} similar questions")
 
@@ -262,19 +309,38 @@ async def fetch_question_details(state: SimilarQuestionState) -> Dict[str, Any]:
 
     try:
         questions = []
-        async with async_session_maker() as session:
-            for q_id in retrieved_ids:
-                question = await get_question(session, q_id, user_id)
-                if question:
-                    questions.append({
-                        "id": question.id,
-                        "content": question.content,
-                        "subject": question.subject.value if question.subject else "other",
-                        "difficulty": question.difficulty.value if question.difficulty else "medium",
-                        "correct_answer": question.correct_answer,
-                        "knowledge_points": question.knowledge_points or [],
-                        "chapter": question.chapter,
-                    })
+
+        # If MCP retrieval is enabled, prefer fetching details via MCP tool as well.
+        if getattr(settings, "MCP_RETRIEVAL_ENABLED", False):
+            from backend.core.mcp.retrieval_client import RetrievalMcpClient
+
+            url = getattr(settings, "MCP_RETRIEVAL_URL", None) or "http://127.0.0.1:7010/mcp"
+            client = RetrievalMcpClient(url=url)
+            questions = await client.get_questions(
+                question_ids=[int(x) for x in retrieved_ids],
+                user_id=user_id,
+                telemetry={
+                    "module": "tony",
+                    "subject": state.get("subject"),
+                    "user_id": user_id,
+                    "question_id": state.get("question_id"),
+                    "payload": {"count": len(retrieved_ids)},
+                },
+            )
+        else:
+            async with async_session_maker() as session:
+                for q_id in retrieved_ids:
+                    question = await get_question(session, q_id, user_id)
+                    if question:
+                        questions.append({
+                            "id": question.id,
+                            "content": question.content,
+                            "subject": question.subject.value if question.subject else "other",
+                            "difficulty": question.difficulty.value if question.difficulty else "medium",
+                            "correct_answer": question.correct_answer,
+                            "knowledge_points": question.knowledge_points or [],
+                            "chapter": question.chapter,
+                        })
 
         logger.info(f"[fetch_details] Fetched {len(questions)} questions")
 

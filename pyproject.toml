@@ -37,6 +37,8 @@ dependencies = [
     "langchain-community>=0.0.20",
     "openai>=1.10.0",
     "anthropic>=0.18.0",
+    # MCP (Model Context Protocol) - tool/resource servers + clients
+    "mcp>=1.25.0",
     # Embedding
     "sentence-transformers>=2.3.0",
     "numpy>=1.26.0",
@@ -65,12 +67,14 @@ dev = [
 ]
 fine-tuning = [
     "torch>=2.1.0",
-    "transformers>=4.37.0",
+    "transformers==4.37.2",
     "datasets>=2.16.0",
     "peft>=0.8.0",
     "trl>=0.7.10",
     "bitsandbytes>=0.42.0",
     "accelerate>=0.26.0",
+    # HuggingFace Hub (explicit): used for resumable snapshot downloads
+    "huggingface-hub>=0.20.3,<1.0",
 ]
 
 [project.scripts]

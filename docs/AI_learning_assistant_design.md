@@ -67,10 +67,10 @@ flowchart LR
 data/uploads/
 └── {username_email}/
     ├── corrections/<subject>/
-    │   ├── {uuid}.jpg                # 原始试卷
-    │   └── {uuid}_corrected.png      # 批改后试卷
+    │   ├── {file_hash[:32]}.<ext>    # 原始试卷（按内容 hash 命名，便于去重/复用）
+    │   └── {file_hash[:32]}.png      # 批改后试卷（按内容 hash 命名）
     └── questions/<subject>/
-        └── {uuid}_q{num}.jpg         # 错题截图（由批改自动生成或录入产生）
+        └── {task_id}_q{num}.<ext>    # 当前实现：按上传 task_id 命名（可演进为“裁剪+hash”）
 ```
 
 ### 4.2 结构化数据模型（概念级）
@@ -136,11 +136,134 @@ data/uploads/
 - **检索层**：FAISS（向量）+ BM25（关键词）混合召回，落盘到 `data/faiss/<module>/` 与 `data/bm25/<module>/`
 - **生成层**：将原题、错因、相似题上下文喂给 LLM 生成讲解与练习建议
 
+#### 5.3.1 原理：为什么要 Hybrid（向量 + 关键词）
+
+教育场景的“相似题”检索往往同时需要：
+
+- **语义相似**：题干改写、同一知识点不同表述、同一题型不同材料（向量更强）
+- **关键词匹配**：专有名词/年代/地名/术语、固定搭配（BM25 更稳）
+
+因此采用 **混合召回**（Hybrid Retrieval）：
+
+- **FAISS**：用 embedding 找语义相近的候选（Top-N）
+- **BM25**：用倒排 + TF-IDF/BM25 找关键词相近的候选（Top-N）
+- **融合排序**：按权重融合两路分数（可在配置/调用参数中调整）
+
+> 这保证系统在“材料题/史实细节/关键词题”与“概念题/同义改写题”上都有稳定召回。
+
+#### 5.3.2 方案设计：索引构建、融合与在线调用
+
+**索引构建（离线）**
+
+- 输入语料：模块内题库（通常来自 `Question`、公开题库 ETL、教材/课标结构化内容等）
+- 产物落盘：
+  - 向量索引：`data/faiss/<module>/`
+  - BM25 索引：`data/bm25/<module>/`
+- 推荐入口（Tony first）：
+
+```bash
+./deploy/scripts/pipeline.sh kb --module tony --build-index --embedding-backend hash
+./deploy/scripts/pipeline.sh embed-index --module tony --embedding-backend hash
+```
+
+> `hash` embedding 仅用于离线流程验证；真实效果建议 `sentence-transformers`（需本地可用 HF cache）。
+
+**在线调用（RAG 生成前的“证据构建”）**
+
+典型链路：
+
+1) 由“原题/错因/知识点/标签”等形成检索 query  
+2) 调用混合检索获得候选题 id 列表（可带 `exclude_question_ids` 避免返回原题/已做过的题）
+3) 批量拉取候选题详情（题干/答案/解析/标签/知识点/图片）
+4) 把候选题作为“证据上下文”喂给 LLM 生成讲解与训练建议
+
+在工程实现上，这一流程既可走 **本地 service**（直接调用 `HybridSearchService`），也可走 **工具化调用**（见 5.5 MCP 工具层中的 `search_questions/get_questions`）。
+
 ### 5.4 学习建议与复习（GraphRAG 可选增强）
 
 - **GraphRAG**：`data/training/<module>/graphrag/graph.json`（轻量文件图谱）
 - 运行时开关：`GRAPHRAG_ENABLED=true`
 - Tony 已在 learning/guidance 与 similar-question retrieval 中对 GraphRAG 做了 feature-gated 集成
+
+#### 5.4.1 原理：GraphRAG 在教育场景解决什么问题
+
+纯向量/关键词检索主要基于“文本相似”，但在教育场景常见的需求是：
+
+- **按知识点扩展**：同一知识点下题型多样、表述差异大，纯相似检索易漏召回
+- **按先修/关联关系扩展**：某错因来自前置概念薄弱（需要跨概念扩展练习）
+- **按标签扩展**：题型标签、能力维度标签（如“时间轴/因果分析/材料解读”）更贴近教学设计
+
+GraphRAG 通过“可解释的关系图”把候选集从“相似文本”扩展为“相似概念/关系邻域”，并保留可追溯的扩展路径（便于解释与调试）。
+
+#### 5.4.2 方案设计：图谱构建、扩展检索与开关
+
+**图谱构建（离线）**
+
+- 产物：`data/training/<module>/graphrag/graph.json`
+- 构建入口（Tony first）：
+
+```bash
+./deploy/scripts/pipeline.sh kb --module tony
+```
+
+**扩展检索（在线/工具化均可）**
+
+以“相似题推荐”为例：
+
+- Base：先做 Hybrid 检索得到一批 base candidates
+- Expand（可选）：在 `GRAPHRAG_ENABLED=true` 时，基于以下信号扩展候选：
+  - `knowledge_points`：按知识点邻域扩展
+  - `tags`：按标签邻域扩展（例如题型/能力维度）
+- Merge：将扩展候选与 base candidates 去重合并，再排序取 Top-K 返回
+
+**工程开关**
+
+- `GRAPHRAG_ENABLED=true`：启用 GraphRAG 扩展（默认关闭，确保线上可控）
+
+> 当启用 MCP 检索（5.5）时，GraphRAG 扩展可下放到 MCP server 端统一实现（工具 schema 已支持 `knowledge_points/tags/include_graphrag`）。
+
+### 5.5 MCP 工具层（Model Context Protocol，Phase 1：Tony retrieval-mcp）
+
+为统一“检索/证据/图谱扩展/题目详情获取”等工具能力，本项目引入 MCP（Model Context Protocol）作为 agent 的工具调用层（Tony 先落地）。
+
+**服务端（MCP Server）**
+- 代码：`backend/mcp_servers/tony/retrieval_server.py`
+- 默认地址：`http://127.0.0.1:7010/mcp`
+- 核心工具：
+  - `search_questions(query_text, user_id, subject?, knowledge_points?, tags?, include_graphrag?, ...)`
+    - 混合检索：FAISS + BM25
+    - GraphRAG 扩展（可选）：按 knowledge_points / tags 扩展候选题
+  - `get_questions(question_ids, user_id)`：批量拉取题目详情（用于 RAG 生成上下文）
+  - `get_task(task_id)`：任务快照（Phase 2 ops-mcp 的 starter）
+
+**客户端（MCP Client）**
+- 代码：`backend/core/mcp/retrieval_client.py`
+- Tony 接入点：`backend/modules/tony/agents/learning/similar_question_agent.py`
+  - `vector_retrieval` 节点在 `MCP_RETRIEVAL_ENABLED=true` 时优先走 MCP；否则使用原本地检索路径
+
+**开关与启动**
+
+```bash
+# 启动 MCP server（独立于 API/Agent/Frontend）
+./deploy/scripts/start_mcp.sh tony_retrieval up
+
+# 在后端进程中启用 MCP 调用
+export MCP_RETRIEVAL_ENABLED=true
+export MCP_RETRIEVAL_URL=http://127.0.0.1:7010/mcp
+
+# 如需图谱扩展
+export GRAPHRAG_ENABLED=true
+```
+
+### 5.6 评估与可观测性（telemetry-first）
+
+为保证“提升可量化”，本项目引入通用事件表 `metric_events`：
+- 代码：`backend/core/db/models.py`（`MetricEvent`）
+- 写入：`backend/core/services/metrics_service.py`（best-effort，不影响主流程）
+
+Tony 的评估脚本：
+- `training/modules/tony/eval/metrics_from_db.py`：工具成功率/延迟、推荐接受率、反馈正向占比、任务失败率、旅程耗时、D1/D7 留存（关键事件口径）
+- `training/modules/tony/eval/retrieval_hit_rate.py`：hit@k（人工标注或弱监督）
 
 ## 6. 技术选型（开发/运维维度的理由）
 
@@ -179,6 +302,108 @@ data/uploads/
 - **用户数据**：批改记录（ExamCorrection）、错题（Question）、反馈（Feedback）
 - **公开题库/教材**：按学科 ETL、去重、结构化
 - **合成数据**：用强模型生成“讲解/错因/复习建议”样本（需严格过滤与抽检）
+
+### 7.4 SFT（监督微调）原理、方案与使用
+
+#### 7.4.1 原理（训练目标）
+
+SFT 的目标是让基座模型在教育场景具备更强的一致性与可控性：
+
+- 输出风格：耐心、鼓励、结构化（先结论→再依据/步骤→练习建议与复盘要点）
+- 任务偏好：先定位薄弱点，再给可执行建议
+- 表达习惯：面向初高中、避免过度学术化
+
+#### 7.4.2 数据格式与构建
+
+本项目 SFT 使用 JSONL（每行一个样本），核心字段为：
+
+```json
+{"instruction": "...", "input": "...", "output": "..."}
+```
+
+- `instruction`：任务指令（如“请讲解这道题并给出练习建议”）
+- `input`：题干/材料/学生答案/错因等上下文（可空）
+- `output`：期望模型输出（讲解/步骤/建议）
+
+#### 7.4.3 工程设计：配置、产物与训练命令
+
+**配置**
+
+- Tony SFT config：`training/modules/tony/fine_tuning/configs/sft_qwen3_14b_lora.json`
+- 关键参数：
+  - `model_name`：基座模型（推荐 `OpenPipe/Qwen3-14B-Instruct`）
+  - `system_prompt`：模块/学科 persona（决定输出风格与边界）
+  - LoRA/QLoRA 参数：`lora_r/lora_alpha/lora_dropout/...`
+
+**产物**
+
+- LoRA/QLoRA adapter：`data/training/<module>/checkpoints/sft_lora/<subject>/`
+- tokenizer 同目录保存（用于推理一致性）
+
+**训练命令**
+
+```bash
+./deploy/scripts/pipeline.sh train-sft --module tony --subject history
+```
+
+可选参数：
+
+- `--hf-max-workers 32`：提高/降低 HuggingFace 下载并发（网络抖动时建议降到 4/2/1）
+- `--hf-revision <commit|tag|main>`：固定基座模型版本（默认 `main`；强烈建议生产复现时 pin 到 commit）
+
+#### 7.4.4 基座模型下载（断点续传 + 固定 revision）
+
+为避免大模型反复下载与“断线后重下”，离线流水线将 HF 缓存固定到 repo 内：
+
+- `HF_HOME=<repo>/data/.cache/huggingface`
+- `HF_HUB_CACHE=$HF_HOME/hub`
+- 额外稳定目录：`HF_MODEL_LOCAL_DIR=<repo>/data/models/hf`
+
+训练脚本会：
+
+1) 按 `revision`（默认 main，可通过 `--hf-revision` 指定 commit）预下载模型文件到本地目录  
+2) 打印“已存在文件数/缺失文件数”（可直观看到是否在续传）  
+3) 下载完成后以 `local_files_only=True` 从本地目录启动训练，避免训练过程中再触发网络下载
+
+> 只有当 upstream `main` 更新导致 `refs/main` 指向新 commit 时，`snapshots/<sha>` 才会变化；pin 到 commit 可确保完全可复现。
+
+### 7.5 DPO（偏好优化）原理、方案与使用
+
+#### 7.5.1 原理（训练目标）
+
+DPO 的目标是利用偏好数据把模型输出进一步对齐到“用户更喜欢的答案”：
+
+- 相同 prompt 下，模型学习更倾向于 `chosen`、远离 `rejected`
+- 在教育场景中，偏好通常体现为：更清晰、步骤更对、建议更可执行、语气更像老师
+
+#### 7.5.2 数据格式与来源
+
+本项目 DPO 数据采用 TRL 兼容 JSONL：
+
+```json
+{"prompt": "...", "chosen": "...", "rejected": "..."}
+```
+
+数据来源建议优先级：
+
+1) **真实用户反馈**（`Feedback`）：用户选择更好的回答/对比回答  
+2) **弱监督/规则生成**：基于 rubric 自动构造 preference pair（需抽检）  
+3) **RLAIF（后续迭代）**：用强模型作为 judge 生成偏好（需严控偏差）
+
+#### 7.5.3 工程设计：配置、产物与训练命令
+
+- Tony DPO config：`training/modules/tony/fine_tuning/configs/dpo_qwen3_14b_lora.json`
+- 训练命令：
+
+```bash
+./deploy/scripts/pipeline.sh train-dpo --module tony
+```
+
+产物（LoRA adapter）：
+
+- `data/training/<module>/checkpoints/dpo_lora/...`（以 config 输出目录为准）
+
+> DPO 通常在完成 SFT 后进行；也可在小规模偏好数据上做快速增量验证。
 
 ## 8. 离线流水线与脚本（按模块）
 

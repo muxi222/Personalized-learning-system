@@ -294,11 +294,24 @@ async def submit_learning_feedback(
 
     用于改进推荐算法
     """
-    # 记录反馈用于后续优化
-    logger.info(
-        f"User {current_user.id} feedback: "
-        f"recommendation={recommendation_id}, helpful={helpful}, comment={comment}"
-    )
+    # Telemetry: feedback rate + positive ratio (can also be used as weak DPO signal source)
+    try:
+        from backend.core.services.metrics_service import get_metrics_service
+        await get_metrics_service().log_event(
+            event_type="feedback",
+            event_name="learning.feedback",
+            ok=True,
+            user_id=current_user.id,
+            module="tony",
+            payload={
+                "recommendation_id": recommendation_id,
+                "helpful": bool(helpful),
+                "comment": comment,
+            },
+        )
+    except Exception:
+        # Never break UX because telemetry failed.
+        logger.debug("metrics log failed for learning feedback", exc_info=True)
 
     return {
         "success": True,

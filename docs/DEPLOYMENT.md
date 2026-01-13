@@ -15,6 +15,13 @@ Online services (API/Agent/Frontend):
 ./deploy/scripts/start.sh status
 ```
 
+Optional MCP service (Phase 1: Tony retrieval-mcp):
+
+```bash
+./deploy/scripts/start_mcp.sh tony_retrieval up
+./deploy/scripts/start_mcp.sh tony_retrieval status
+```
+
 What `start.sh all` does (high level):
 - Ensures required directories under `data/` and `logs/`
 - Starts Redis if `redis-server` is available (for Celery queues)
@@ -160,6 +167,46 @@ Build Tony graph (and optionally index) via:
 
 ```bash
 ./deploy/scripts/pipeline.sh kb --module tony --build-index --embedding-backend hash
+```
+
+### MCP services (Phase 1: retrieval-mcp)
+
+This project can run a separate MCP server for retrieval to provide a structured tool API for agents:
+- Tony retrieval MCP server:
+  - module: `tony`
+  - port: `7010`
+  - endpoint: `http://127.0.0.1:7010/mcp`
+  - code: `backend/mcp_servers/tony/retrieval_server.py`
+  - tools: `search_questions` (hybrid + optional GraphRAG by knowledge_points/tags), `get_questions`, `get_task`, `health`
+
+#### Start/stop script (recommended)
+
+Use the dedicated script:
+
+```bash
+# Start
+./deploy/scripts/start_mcp.sh tony_retrieval up
+
+# Status
+./deploy/scripts/start_mcp.sh tony_retrieval status
+
+# Stop
+./deploy/scripts/start_mcp.sh tony_retrieval down
+```
+
+#### Enable MCP usage in backend processes
+
+MCP is feature-gated by environment variables in the backend (API and Agent workers):
+
+```bash
+export MCP_RETRIEVAL_ENABLED=true
+export MCP_RETRIEVAL_URL=http://127.0.0.1:7010/mcp
+```
+
+Graph expansion is still gated independently:
+
+```bash
+export GRAPHRAG_ENABLED=true
 ```
 
 ### Dataset preparation (Tony)

@@ -33,6 +33,10 @@ langchain-community>=0.0.20
 openai>=1.10.0
 anthropic>=0.18.0
 
+# ============= MCP (Model Context Protocol) =============
+# Used for tool/resource servers (retrieval/ops/training-loop) and Python clients.
+mcp>=1.25.0
+
 # ============= 图像处理 =============
 Pillow>=10.2.0
 
@@ -69,7 +73,7 @@ ipdb>=0.13.13
 # 注意: 如需 GPU 支持，请根据 CUDA 版本安装对应的 PyTorch
 # 参考: https://pytorch.org/get-started/locally/
 torch>=2.1.0
-transformers>=4.37.0
+transformers==4.37.2
 datasets>=2.16.0
 peft>=0.8.0
 trl>=0.7.10
@@ -79,3 +83,7 @@ tensorboard>=2.15.0
 wandb>=0.16.0
 pandas>=2.1.0
 scikit-learn>=1.4.0
+
+# HuggingFace Hub (explicit): used for resumable snapshot downloads.
+# Keep compatible with transformers 4.37~4.39 which require huggingface-hub < 1.0.
+huggingface-hub>=0.20.3,<1.0

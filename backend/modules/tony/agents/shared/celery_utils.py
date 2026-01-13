@@ -44,6 +44,20 @@ async def update_task_status(task_id: str, status: str, progress: float, current
         )
         await session.commit()
 
+    # Telemetry: task status update (for SSE/task failure rate & retry analysis)
+    try:
+        from backend.core.services.metrics_service import get_metrics_service
+        await get_metrics_service().log_event(
+            event_type="task",
+            event_name="task.status_update",
+            ok=True,
+            module="tony",
+            task_id=task_id,
+            payload={"status": status, "progress": float(progress), "current_step": current_step},
+        )
+    except Exception:
+        pass
+
 
 async def mark_task_failed(task_id: str, error_message: str):
     """Mark task failed in DB."""
@@ -53,5 +67,18 @@ async def mark_task_failed(task_id: str, error_message: str):
     async with async_session_maker() as session:
         await fail_task(session, task_id, error_message)
         await session.commit()
+
+    try:
+        from backend.core.services.metrics_service import get_metrics_service
+        await get_metrics_service().log_event(
+            event_type="task",
+            event_name="task.failed",
+            ok=False,
+            module="tony",
+            task_id=task_id,
+            payload={"error": error_message},
+        )
+    except Exception:
+        pass
 
 

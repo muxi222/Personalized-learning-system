@@ -18,7 +18,7 @@ AI批注历史系统是学习小书童的核心功能之一，支持用户上传
 ```
 用户上传试卷图片
     ↓
-保存到 corrections/{subject}/ 目录
+保存到 data/uploads/<user>/corrections/<subject>/ 目录（用户隔离）
     ↓
 Gemini 2.5 Flash OCR识别
     ↓
@@ -32,7 +32,7 @@ AI分析：题目、答案、知识点、错因
     ↓
 扫描错题 → 自动创建Question记录
     ↓
-错题图片保存到 questions/{subject}/ 目录
+错题图片保存到 data/uploads/<user>/questions/<subject>/ 目录（用户隔离）
     ↓
 返回分析结果给前端
 ```
@@ -46,7 +46,7 @@ AI分析：题目、答案、知识点、错因
 2. 为 `is_correct=false` 的题目创建 `Question` 记录
 3. 设置来源标记：`source = QuestionSourceEnum.AI_CORRECTION`
 4. 关联批注记录：`exam_correction_id`
-5. 复制图片到错题专用目录：`questions/{subject}/`
+5. 复制图片到错题专用目录：`data/uploads/<user>/questions/<subject>/`
 6. 提取知识点作为标签
 
 **数据示例**：
@@ -74,8 +74,8 @@ data/uploads/
 ├── {username_email}/        # 用户专属目录
 │   ├── corrections/         # AI批注图片
 │   │   ├── math/           # 数学试卷
-│   │   │   ├── {uuid}.jpg  # 原始试卷
-│   │   │   └── {uuid}_corrected.png  # 批改后试卷
+│   │   │   ├── {file_hash[:32]}.jpg  # 原始试卷（按内容 hash 命名，便于去重/复用）
+│   │   │   └── {file_hash[:32]}.png  # 批改后试卷（按内容 hash 命名）
 │   │   ├── english/        # 英语试卷
 │   │   ├── physics/        # 物理试卷
 │   │   ├── chemistry/      # 化学试卷
@@ -84,7 +84,7 @@ data/uploads/
 │   │
 │   └── questions/          # 错题图片
 │       ├── math/           # 数学错题
-│       │   └── {uuid}_q{num}.jpg
+│       │   └── {task_id}_q{num}.jpg  # 当前实现：复用本次上传 task_id 生成文件名（后续可升级为“裁剪+hash”）
 │       ├── english/        # 英语错题
 │       ├── physics/        # 物理错题
 │       └── ...
@@ -125,9 +125,9 @@ class ExamCorrection(Base):
     grade: str               # 年级
     exam_title: str          # 试卷标题
     
-    # 文件路径
-    original_image_path: str      # 原始图片
-    corrected_image_path: str     # 批改后图片
+    # 图片引用（通过 ImageFile 表统一管理，支持去重/复用/权限校验）
+    original_image_id: int        # 原始图片 image_files.id
+    corrected_image_id: int       # 批改后图片 image_files.id（可为空）
     
     # 统计数据
     total_score: float           # 总得分
@@ -294,14 +294,16 @@ hint: "月考试卷"
 
 **处理流程**：
 ```python
-1. 保存图片 → corrections/math/{uuid}.jpg
-2. OCR识别 + AI分析
-3. 生成批改图片 → corrections/math/{uuid}_corrected.png
-4. 创建 ExamCorrection 记录
-5. 遍历题目，答错的创建 Question 记录
-   - 复制图片 → questions/math/{uuid}_q{num}.jpg
+1. 读取图片并计算 hash（用于去重）
+2. 保存/复用原图 → data/uploads/<user>/corrections/<subject>/{hash[:32]}.<ext>
+3. OCR识别 + AI分析（Gemini 2.5 Flash）
+4. 生成批改图片 → data/uploads/<user>/corrections/<subject>/{hash[:32]}.png
+5. 写入 ImageFile（original/corrected）并创建 ExamCorrection（记录 image_id 引用）
+6. 遍历题目，答错的创建 Question 记录
+   - 当前实现：复制整张试卷为错题图片（后续可优化为裁剪）
+   - 保存 → data/uploads/<user>/questions/<subject>/{task_id}_q{num}.<ext>
    - 标记来源：AI_CORRECTION
-6. 返回分析结果
+7. 返回分析结果（含 correction_id 与图片 URL）
 ```
 
 ---
@@ -508,7 +510,7 @@ const imageFileUrl = `/api/default/v1/image-files/${imageId}/content?token=${tok
 
 ```mermaid
 graph TD
-    A[用户上传试卷] --> B[保存到 corrections/subject/]
+    A[用户上传试卷] --> B[保存到 data/uploads/<user>/corrections/<subject>/]
     B --> C[Gemini OCR识别]
     C --> D[AI批改分析]
     D --> E[创建 ExamCorrection 记录]
@@ -524,6 +526,9 @@ graph TD
     L --> N[错题本页面]
 ```
 
+> 说明：当前实现中实际落盘路径为 `data/uploads/<user>/corrections/<subject>/...` 与 `data/uploads/<user>/questions/<subject>/...`。
+> 图片元信息统一写入 `ImageFile`（去重、引用计数、权限校验），批改记录 `ExamCorrection` 通过 `original_image_id/corrected_image_id` 引用图片。
+
 ---
 
 ## 10. 安全性考虑（概要）
@@ -536,7 +541,7 @@ graph TD
 ### 10.2 文件安全
 - ✅ 文件类型验证（仅图片）
 - ✅ 文件大小限制（建议 <10MB）
-- ✅ 文件名 UUID 化，防止路径遍历
+- ✅ 文件名规范化（原图/批改图按内容 hash 命名；错题图按 task_id 命名），并由后端做路径拼接与校验，防止路径遍历
 - ✅ 按用户隔离存储（uploads/<user>/...）
 
 ### 10.3 数据隐私
@@ -643,19 +648,13 @@ graph TD
 
 ## 14. 部署说明
 
-### 14.1 数据库迁移
+### 14.1 数据库表创建/演进（Repo Reality）
 
-**创建表**：
-```sql
--- ExamCorrection 表已在 models.py 中定义
--- 运行 alembic migration 创建
+本仓库默认使用 SQLite（`data/sqlite/app.db`）并在启动时自动创建表：
+- `backend/core/db/session.py` → `init_db()` → `Base.metadata.create_all(...)`
+- 同时包含轻量级 SQLite “best-effort migrations”（为旧库补列/修复 PK），避免教学项目引入复杂 Alembic 运维
 
-# 生成迁移文件
-alembic revision --autogenerate -m "Add exam corrections and question source tracking"
-
-# 应用迁移
-alembic upgrade head
-```
+如在生产使用 PostgreSQL 并需要严谨迁移，可再引入 Alembic（本仓库文档不强制要求）。
 
 ### 14.2 目录初始化
 
@@ -666,7 +665,13 @@ mkdir -p data/{sqlite,faiss,bm25,uploads,redis} logs
 
 ### 14.3 环境变量
 
-无需新增环境变量，使用现有配置。
+无需为“批改历史”新增环境变量；图片与数据库都落在 `data/` 下。
+
+如启用 GraphRAG：
+
+```bash
+export GRAPHRAG_ENABLED=true
+```
 
 ---
 

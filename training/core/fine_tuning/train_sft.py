@@ -13,7 +13,9 @@ Expected dataset JSONL format (one JSON object per line):
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +29,12 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer
+
+
+from training.core.fine_tuning.hf_download import (
+    prefetch_model_snapshot,
+    resolve_preferred_model_dir,
+)
 
 
 DEFAULT_CONFIG = {
@@ -63,6 +71,9 @@ DEFAULT_CONFIG = {
     "bnb_4bit_compute_dtype": "bfloat16",
     "bnb_4bit_quant_type": "nf4",
     "use_nested_quant": False,
+    # HF download
+    "hf_max_workers": 32,
+    "hf_revision": "main",
 }
 
 
@@ -78,6 +89,37 @@ def load_config(config_path: Optional[str] = None) -> dict:
 def setup_model_and_tokenizer(config: dict):
     print(f"📦 Loading base model: {config['model_name']}")
 
+    # Prefer a local cached snapshot if present to avoid any hub network requests.
+    model_ref: str | Path = str(config["model_name"])
+    revision = str(config.get("hf_revision") or "main")
+    preferred = resolve_preferred_model_dir(str(config["model_name"]), revision=revision)
+    if preferred is None:
+        # If snapshot is missing/incomplete, try to prefetch (resume + parallel workers)
+        # so training doesn't fail halfway through model/tokenizer download.
+        prefetch_workers = int(config.get("hf_max_workers") or 8)
+        etag_timeout = float(os.environ.get("HF_HUB_ETAG_TIMEOUT") or 60)
+        prefetch_model_snapshot(
+            str(config["model_name"]),
+            max_workers=prefetch_workers,
+            etag_timeout=etag_timeout,
+            revision=revision,
+        )
+        preferred = resolve_preferred_model_dir(str(config["model_name"]), revision=revision)
+        if preferred is None and "/" in str(config["model_name"]):
+            raise RuntimeError(
+                "Model snapshot is still incomplete after resumable prefetch attempts.\n"
+                f"- model: {config['model_name']}\n"
+                f"- HF_HOME: {os.environ.get('HF_HOME')}\n"
+                f"- HF_HUB_CACHE: {os.environ.get('HF_HUB_CACHE')}\n\n"
+                "Suggestions:\n"
+                "- Retry with fewer workers (often more stable): add `--hf-max-workers 4` (or 2/1)\n"
+                "- If huggingface.co is unstable/blocked, set a mirror endpoint via env `HF_ENDPOINT` and retry\n"
+                "- Ensure the cache has no lingering `.incomplete` blobs once download finishes\n"
+            )
+    if preferred is not None:
+        print(f"📦 Using local model dir: {preferred}")
+        model_ref = preferred
+
     compute_dtype = getattr(torch, str(config["bnb_4bit_compute_dtype"]))
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=bool(config["use_4bit"]),
@@ -87,17 +129,19 @@ def setup_model_and_tokenizer(config: dict):
     )
 
     model = AutoModelForCausalLM.from_pretrained(
-        config["model_name"],
+        model_ref,
         quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
+        local_files_only=bool(preferred is not None),
     )
     model.config.use_cache = False
     model.config.pretraining_tp = 1
 
     tokenizer = AutoTokenizer.from_pretrained(
-        config["model_name"],
+        model_ref,
         trust_remote_code=True,
+        local_files_only=bool(preferred is not None),
     )
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -161,35 +205,80 @@ def train(config: dict):
     dataset = load_dataset("json", data_files={"train": config["dataset_path"]})["train"]
     print(f"📊 Dataset size: {len(dataset)}")
 
-    training_args = TrainingArguments(
-        output_dir=config["output_dir"],
-        num_train_epochs=int(config["num_epochs"]),
-        per_device_train_batch_size=int(config["batch_size"]),
-        gradient_accumulation_steps=int(config["gradient_accumulation_steps"]),
-        learning_rate=float(config["learning_rate"]),
-        weight_decay=float(config["weight_decay"]),
-        warmup_ratio=float(config["warmup_ratio"]),
-        lr_scheduler_type="cosine",
-        logging_steps=10,
-        save_strategy="epoch",
-        evaluation_strategy="no",
-        bf16=True,
-        tf32=True,
-        max_grad_norm=0.3,
-        group_by_length=True,
-        report_to="tensorboard",
-        optim="paged_adamw_32bit",
-    )
+    # TRL >= 0.26 uses SFTConfig (which already uses eval_strategy) + processing_class.
+    # Fall back to transformers.TrainingArguments for older TRL.
+    max_steps = int(config.get("max_steps") or -1)
+    sft_sig = inspect.signature(SFTTrainer.__init__)
+    if "processing_class" in sft_sig.parameters:
+        from trl.trainer.sft_config import SFTConfig  # local import to keep compatibility
 
-    trainer = SFTTrainer(
+        training_args = SFTConfig(
+            output_dir=str(config["output_dir"]),
+            num_train_epochs=float(config["num_epochs"]),
+            per_device_train_batch_size=int(config["batch_size"]),
+            gradient_accumulation_steps=int(config["gradient_accumulation_steps"]),
+            learning_rate=float(config["learning_rate"]),
+            weight_decay=float(config["weight_decay"]),
+            warmup_ratio=float(config["warmup_ratio"]),
+            lr_scheduler_type="cosine",
+            logging_steps=10,
+            save_strategy="epoch",
+            eval_strategy="no",
+            bf16=True,
+            tf32=True,
+            max_grad_norm=0.3,
+            group_by_length=True,
+            report_to="tensorboard",
+            optim="paged_adamw_32bit",
+            max_length=int(config["max_seq_length"]),
+            packing=False,
+            max_steps=max_steps,
+        )
+    else:  # pragma: no cover
+        # transformers compatibility:
+        # - older versions use `evaluation_strategy`
+        # - newer versions (e.g. 4.57+) renamed it to `eval_strategy`
+        ta_sig = inspect.signature(TrainingArguments.__init__)
+        training_args_kwargs = dict(
+            output_dir=config["output_dir"],
+            num_train_epochs=int(config["num_epochs"]),
+            per_device_train_batch_size=int(config["batch_size"]),
+            gradient_accumulation_steps=int(config["gradient_accumulation_steps"]),
+            learning_rate=float(config["learning_rate"]),
+            weight_decay=float(config["weight_decay"]),
+            warmup_ratio=float(config["warmup_ratio"]),
+            lr_scheduler_type="cosine",
+            logging_steps=10,
+            save_strategy="epoch",
+            bf16=True,
+            tf32=True,
+            max_grad_norm=0.3,
+            group_by_length=True,
+            report_to="tensorboard",
+            optim="paged_adamw_32bit",
+        )
+        if max_steps and max_steps > 0:
+            training_args_kwargs["max_steps"] = max_steps
+        if "eval_strategy" in ta_sig.parameters:
+            training_args_kwargs["eval_strategy"] = "no"
+        else:
+            training_args_kwargs["evaluation_strategy"] = "no"
+        training_args = TrainingArguments(**training_args_kwargs)
+
+    # TRL compatibility:
+    # - older versions accepted `tokenizer=...`
+    # - newer versions (trl>=0.26) use `processing_class=...` and removed tokenizer/max_seq_length/packing.
+    sft_kwargs = dict(
         model=model,
         args=training_args,
         train_dataset=dataset,
-        tokenizer=tokenizer,
         formatting_func=lambda x: format_sft_example(x, config),
-        max_seq_length=int(config["max_seq_length"]),
-        packing=False,
     )
+    if "processing_class" in sft_sig.parameters:
+        sft_kwargs["processing_class"] = tokenizer
+    else:  # pragma: no cover
+        sft_kwargs["tokenizer"] = tokenizer
+    trainer = SFTTrainer(**sft_kwargs)
 
     print("🚀 Starting SFT training ...")
     trainer.train()
@@ -243,6 +332,9 @@ def main():
     parser.add_argument("--lr", type=float, help="Learning rate (override)")
     parser.add_argument("--merge", action="store_true", help="Merge LoRA weights after training")
     parser.add_argument("--merge-output", help="Merged model output directory")
+    parser.add_argument("--max-steps", type=int, help="Optional max_steps override (for smoke runs)")
+    parser.add_argument("--hf-max-workers", type=int, help="Max parallel download workers for HF snapshot_download (default: 32)")
+    parser.add_argument("--hf-revision", help="HF model revision (default: main). Use commit hash/tag to pin snapshots.")
 
     args = parser.parse_args()
     config = load_config(args.config)
@@ -259,6 +351,12 @@ def main():
         config["batch_size"] = args.batch_size
     if args.lr is not None:
         config["learning_rate"] = args.lr
+    if args.max_steps is not None:
+        config["max_steps"] = int(args.max_steps)
+    if args.hf_max_workers is not None:
+        config["hf_max_workers"] = int(args.hf_max_workers)
+    if args.hf_revision:
+        config["hf_revision"] = str(args.hf_revision)
 
     print("=" * 60)
     print("🎓 SFT Fine-tuning (core)")
