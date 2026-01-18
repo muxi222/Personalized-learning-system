@@ -123,6 +123,23 @@ async def init_db() -> None:
             await _sqlite_ensure_question_image_and_correctness_columns(conn)
             await _sqlite_ensure_question_legacy_columns(conn)
             await _sqlite_ensure_agent_tasks_pk(conn)
+            await _sqlite_ensure_agent_tasks_user_id(conn)
+
+
+async def _sqlite_ensure_agent_tasks_user_id(conn) -> None:
+    """
+    SQLite only: ensure agent_tasks.user_id exists for per-user task limiting.
+    """
+    try:
+        rows = (await conn.execute(text("PRAGMA table_info(agent_tasks)"))).fetchall()
+        existing = {r[1] for r in rows}  # (cid, name, type, notnull, dflt_value, pk)
+        if "user_id" not in existing:
+            logger.warning("[sqlite_migrate] adding column agent_tasks.user_id")
+            await conn.execute(text("ALTER TABLE agent_tasks ADD COLUMN user_id INTEGER"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_tasks_user_id ON agent_tasks(user_id)"))
+    except Exception:
+        logger.exception("[sqlite_migrate] ensure agent_tasks.user_id failed")
+        return
 
 
 async def _sqlite_ensure_question_order_columns(conn) -> None:
@@ -223,6 +240,7 @@ async def _sqlite_ensure_agent_tasks_pk(conn) -> None:
 CREATE TABLE IF NOT EXISTS agent_tasks_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id VARCHAR(36) UNIQUE NOT NULL,
+  user_id INTEGER,
   question_id INTEGER,
   status VARCHAR(20) DEFAULT 'pending',
   progress FLOAT DEFAULT 0.0,
@@ -239,6 +257,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks_new (
 
         desired_cols = [
             "task_id",
+            "user_id",
             "question_id",
             "status",
             "progress",
@@ -264,6 +283,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks_new (
         # Recreate indexes (best-effort)
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_tasks_task_id ON agent_tasks(task_id)"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_tasks_user_id ON agent_tasks(user_id)"))
 
         await conn.execute(text("PRAGMA foreign_keys=ON"))
     except Exception:

@@ -23,7 +23,7 @@ oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_PREFIX}/users/login",
     auto_error=False,  # Don't auto-error, handle manually for better messages
 )
-
+  
 async def get_current_user_id(
     token: Optional[str] = Depends(oauth2_scheme),
 ) -> int:

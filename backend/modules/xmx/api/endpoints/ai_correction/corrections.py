@@ -1,5 +1,5 @@
 """
-批改历史API (XMX模块 - 完整实现版本)
+批改历史API (XMX模块 - 学生实现版)
 """
 
 import logging
@@ -10,17 +10,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.db.session import get_db
-from backend.modules.xmx.api.deps import get_current_user_id
+# --- 核心依赖与配置 ---
+from backend.modules.xmx.api.deps import get_current_user, get_db
 from backend.modules.xmx.config import settings
+from backend.core.db.models import User, SubjectEnum
+
+# --- 核心 CRUD 操作 ---
 from backend.core.crud.crud_exam_correction import (
     get_exam_correction,
     get_exam_corrections,
     get_correction_statistics,
     delete_exam_correction,
 )
-# 注意：确保 SubjectEnum 在 core.db.models 中定义
-from backend.core.db.models import SubjectEnum
 
 logger = logging.getLogger(__name__)
 
@@ -29,28 +30,31 @@ router = APIRouter()
 # ============ Helper Functions ============
 
 def validate_subject(subject: str) -> None:
-    """验证学科是否属于XMX模块"""
+    """
+    验证学科是否属于 XMX 模块支持的范围
+    """
     if subject not in settings.SUBJECTS:
         raise HTTPException(
             status_code=400,
             detail=f"Subject '{subject}' is not supported by XMX module. "
                    f"Supported subjects: {settings.SUBJECTS}"
         )
-
+logger.debug(f"Validated subject: {object}")
 def image_to_url(correction_id: int, image_type: str) -> str:
     """
-    生成图片URL路径。
-    注意：HOST 如果是 0.0.0.0 需要转为 localhost 或实际 IP 供前端访问。
+    生成图片URL路径
     """
+    # 处理 host 为 0.0.0.0 的情况
     host = settings.HOST if settings.HOST not in ['0.0.0.0', ''] else 'localhost'
     port = settings.PORT
-    # 路径匹配 OCR 模块定义的图片流接口
-    return f"http://{host}:{port}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
+    
+    # 构建 XMX 模块的专用图片路径
+    return f"http://{host}:{port}/api/xmx/v1/ocr/images/corrections/{correction_id}/{image_type}"
 
-# ============ Response Models ============
+# ============ Response Models (与 Tony 模块保持一致) ============
 
 class CorrectionResponse(BaseModel):
-    """批注记录响应模型"""
+    """批注记录详情响应"""
     id: int
     user_id: int
     subject: str
@@ -71,14 +75,14 @@ class CorrectionResponse(BaseModel):
     created_at: datetime
 
 class CorrectionListResponse(BaseModel):
-    """批注记录列表响应模型"""
+    """列表分页响应"""
     total: int
     page: int
     page_size: int
     items: List[CorrectionResponse]
 
 class CorrectionStatisticsResponse(BaseModel):
-    """批注统计数据响应模型"""
+    """统计数据响应"""
     period: str
     start_date: str
     end_date: str
@@ -101,24 +105,21 @@ async def list_corrections(
     start_date: Optional[datetime] = Query(None, description="开始日期"),
     end_date: Optional[datetime] = Query(None, description="结束日期"),
     db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    获取用户的 AI 批注记录列表
-    支持分页、XMX 学科过滤及时间范围查询
+    获取 AI 批注记录列表
     """
-    logger.info(f"list_corrections: user_id={current_user_id}, subject={subject}")
-    
-    # 学科校验
+    # 1. 学科验证 (XMX 特有逻辑)
     if subject:
         validate_subject(subject)
 
     skip = (page - 1) * page_size
     
-    # 调用核心 CRUD 获取数据
+    # 2. 数据库查询
     corrections, total = await get_exam_corrections(
         db,
-        user_id=current_user_id,
+        user_id=current_user.id,
         skip=skip,
         limit=page_size,
         subject=subject,
@@ -126,48 +127,47 @@ async def list_corrections(
         end_date=end_date,
     )
 
-    # 封装模型并转换 URL
-    items = [
-        CorrectionResponse(
-            id=c.id,
-            user_id=c.user_id,
-            subject=c.subject.value if hasattr(c.subject, 'value') else str(c.subject),
-            grade=c.grade,
-            exam_title=c.exam_title,
-            original_image_url=image_to_url(c.id, "original"),
-            corrected_image_url=image_to_url(c.id, "corrected") if c.corrected_image else None,
-            total_score=c.total_score,
-            max_score=c.max_score,
-            accuracy_rate=c.accuracy_rate,
-            question_count=c.question_count,
-            correct_count=c.correct_count,
-            wrong_count=c.wrong_count,
-            overall_analysis=c.overall_analysis,
-            weak_points=c.weak_points,
-            improvement_suggestions=c.improvement_suggestions,
-            created_at=c.created_at,
-        ) for c in corrections
-    ]
-
+    # 3. 数据封装与 URL 转换
     return CorrectionListResponse(
         total=total,
         page=page,
         page_size=page_size,
-        items=items
+        items=[
+            CorrectionResponse(
+                id=c.id,
+                user_id=c.user_id,
+                subject=c.subject.value if hasattr(c.subject, 'value') else str(c.subject),
+                grade=c.grade,
+                exam_title=c.exam_title,
+                original_image_url=image_to_url(c.id, "original"),
+                corrected_image_url=image_to_url(c.id, "corrected") if c.corrected_image else None,
+                total_score=c.total_score,
+                max_score=c.max_score,
+                accuracy_rate=c.accuracy_rate,
+                question_count=c.question_count,
+                correct_count=c.correct_count,
+                wrong_count=c.wrong_count,
+                overall_analysis=c.overall_analysis,
+                weak_points=c.weak_points,
+                improvement_suggestions=c.improvement_suggestions,
+                created_at=c.created_at,
+            ) for c in corrections
+        ]
     )
 
 @router.get("/{correction_id}", response_model=CorrectionResponse)
 async def get_correction(
     correction_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    获取单个批改记录的详细数据（包含题目 JSON 详情）
+    获取单个批注记录详情
     """
-    correction = await get_exam_correction(db, correction_id, current_user_id)
+    correction = await get_exam_correction(db, correction_id, current_user.id)
+    
     if not correction:
-        raise HTTPException(status_code=404, detail="批注记录不存在或无权访问")
+        raise HTTPException(status_code=404, detail="Correction not found or access denied")
 
     return CorrectionResponse(
         id=correction.id,
@@ -186,7 +186,7 @@ async def get_correction(
         overall_analysis=correction.overall_analysis,
         weak_points=correction.weak_points,
         improvement_suggestions=correction.improvement_suggestions,
-        questions_detail=correction.questions_detail,
+        questions_detail=correction.questions_detail, # 详情页包含题目列表
         created_at=correction.created_at,
     )
 
@@ -194,14 +194,14 @@ async def get_correction(
 async def delete_correction(
     correction_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    删除指定的批改记录
+    删除批注记录
     """
-    success = await delete_exam_correction(db, correction_id, current_user_id)
+    success = await delete_exam_correction(db, correction_id, current_user.id)
     if not success:
-        raise HTTPException(status_code=404, detail="记录不存在或无法删除")
+        raise HTTPException(status_code=404, detail="Correction not found")
     
     await db.commit()
     return None
@@ -211,17 +211,30 @@ async def get_statistics(
     period: str = Path(
         ...,
         regex="^(week|month|quarter|year)$",
-        description="统计周期"
+        description="统计周期：week=周, month=月, quarter=季度, year=年"
     ),
     db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     """
     获取学习统计报告
-    用于前端渲染正确率曲线、学科分布饼图等
     """
-    stats = await get_correction_statistics(db, current_user_id, period)
+    stats = await get_correction_statistics(db, current_user.id, period)
+    
+    # 如果没有统计数据，返回空对象而不是报错，方便前端处理
     if not stats:
-        raise HTTPException(status_code=404, detail="无法获取统计数据")
+        return CorrectionStatisticsResponse(
+            period=period,
+            start_date="",
+            end_date="",
+            total_corrections=0,
+            total_questions=0,
+            total_correct=0,
+            total_wrong=0,
+            avg_accuracy=0.0,
+            avg_score=0.0,
+            subject_stats={},
+            time_series=[]
+        )
         
     return CorrectionStatisticsResponse(**stats)

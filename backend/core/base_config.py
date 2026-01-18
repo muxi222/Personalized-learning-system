@@ -65,6 +65,25 @@ class BaseAppSettings(BaseSettings):
     DATABASE_POOL_SIZE: int = 5
     DATABASE_MAX_OVERFLOW: int = 10
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: str):
+        """
+        Ensure async driver is used for SQLite.
+
+        If users accidentally configure `sqlite:///...` (sync driver) while the app uses
+        SQLAlchemy AsyncEngine/AsyncSession, it can trigger runtime errors like:
+        "greenlet_spawn has not been called; can't call await_only() here".
+        """
+        if not isinstance(v, str):
+            return v
+        s = v.strip()
+        if s.startswith("sqlite:///") and not s.startswith("sqlite+aiosqlite:///"):
+            return "sqlite+aiosqlite:///" + s[len("sqlite:///") :]
+        if s.startswith("sqlite:///:memory:") and not s.startswith("sqlite+aiosqlite:///:memory:"):
+            return "sqlite+aiosqlite:///:memory:"
+        return s
+
     # ============ Redis (共享 - 使用Key前缀隔离) ============
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_PREFIX: str = "learning_assistant:"

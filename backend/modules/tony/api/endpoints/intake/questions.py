@@ -13,7 +13,7 @@ from typing import Optional, List, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.db.session import get_db
+from backend.core.db.session import get_db, async_session_maker
 from backend.core.crud import crud_question, crud_task, crud_user, crud_image_file
 from backend.core.schemas.question import (
     QuestionCreate,
@@ -130,7 +130,7 @@ async def create_question(
     task_id = str(uuid.uuid4())
 
     # Create task record
-    await crud_task.create_task(db, task_id)
+    await crud_task.create_task(db, task_id, user_id=user_id)
     await db.commit()
 
     # Start background processing
@@ -228,7 +228,13 @@ async def create_question_intake_ocr(
 
     try:
         # 创建任务记录
-        await crud_task.create_task(db, task_id)
+        # Backend-side concurrency limit: no more than 3 active image intakes per user
+        if input_type == "image":
+            active = await crud_task.count_active_intake_image_tasks_for_user(db, user_id)
+            if active >= 3:
+                raise HTTPException(status_code=429, detail="同时录入中的错题图片不能超过3张，请等待当前任务处理完成后再上传")
+
+        await crud_task.create_task(db, task_id, user_id=user_id)
         await crud_task.update_task_status(
             db,
             task_id,
@@ -539,7 +545,8 @@ async def create_question_with_image_old(
     try:
 
         # 创建任务记录
-        await crud_task.create_task(db, task_id)
+        await crud_task.create_task(db, task_id, user_id=user_id)
+        await crud_task.create_task(db, task_id, user_id=user_id)
         await db.commit()
 
         # 异步处理OCR和分析
@@ -938,7 +945,7 @@ async def reanalyze_question(
 
     # Create new task
     task_id = str(uuid.uuid4())
-    await crud_task.create_task(db, task_id, question_id)
+    await crud_task.create_task(db, task_id, user_id=user_id, question_id=question_id)
     await db.commit()
 
     # Start background reanalysis using new agent

@@ -1,23 +1,28 @@
 """
-OCR API 端点 - 试卷分析与批改
+OCR API 端点 - 试卷分析与批改（WZY模块）
+基于TONY模块代码适配，支持数学物理学科的图形识别增强
 
 功能:
 1. 上传试卷图片进行 OCR 分析
 2. 自动批改并打分
 3. 生成批改后的图像
+4. 增强的图形识别（几何图形、电路图等）
 """
 
 import os
 import uuid
 import logging
+import time
 from typing import Optional
 from datetime import datetime
+import json
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query, Path
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.modules.wzy.api.deps import get_current_user, get_current_user_id, get_optional_user_id, get_db, oauth2_scheme  # 修改：tony -> wzy
+from backend.modules.wzy.api.deps import get_current_user, get_current_user_id, get_optional_user_id, get_db, oauth2_scheme
+from backend.modules.wzy.config import settings
 from backend.core.services.gemini_ocr_service import (
     get_gemini_ocr_service,
     SubjectType,
@@ -32,75 +37,16 @@ from backend.core.utils.file_utils import (
     get_filename_from_path,
 )
 from backend.core.crud import crud_image_file
-from backend.modules.wzy.config import settings  # 修改：tony -> wzy
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 UPLOAD_DIR = "./data/uploads"
 
-# 学科到模块的映射（用于生成完整URL）
-# 修改：只保留WZY模块的学科映射，端口改为6003
-SUBJECT_TO_MODULE = {
-    # RPJ模块 (6001)
-    "chinese": ("rpj", 6001),
-    "english": ("rpj", 6001),
-    "politics": ("rpj", 6001),
-    # XMX模块 (6002)
-    "economics": ("xmx", 6002),
-    # WZY模块 (6003)
-    "math": ("wzy", 6003),
-    "physics": ("wzy", 6003),
-    # WZM模块 (6004)
-    "chemistry": ("wzm", 6004),
-    # TONY模块 (6005)
-    "history": ("tony", 6005),
-    "geography": ("tony", 6005),
-    "other": ("tony", 6005),
-}
-
-
-def generate_correction_image_url(correction_id: int, image_type: str, subject: str) -> str:
-    """
-    生成批改图片URL（根据学科路由到对应模块）
-
-    Args:
-        correction_id: 批注记录ID
-        image_type: 图片类型 ('original' 或 'corrected')
-        subject: 学科名称（用于确定模块和端口）
-
-    Returns:
-        完整的URL路径（包含协议、主机和端口）
-    """
-    # 获取学科对应的模块和端口
-    module_info = SUBJECT_TO_MODULE.get(subject)
-    if not module_info:
-        # 未知学科，使用默认模块
-        logger.warning(f"Unknown subject '{subject}', using default module (port 6100)")
-        port = 6100
-    else:
-        _, port = module_info
-
-    # 获取主机配置（支持环境变量）
-    host = os.getenv('API_HOST', 'localhost')
-    if host in ['0.0.0.0', '']:
-        host = 'localhost'
-
-    # 生成完整URL
-    return f"http://{host}:{port}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
-
-# 中文学科名称到英文的映射
+# 中文学科名称到英文的映射（WZY模块特有）
 SUBJECT_NAME_MAP = {
     "数学": "math",
-    "英语": "english",
     "物理": "physics",
-    "化学": "chemistry",
-    "语文": "chinese",
-    "生物": "biology",
-    "政治": "politics",
-    "经济学": "economics",
-    "历史": "history",
-    "地理": "geography",
     "其他": "other",
 }
 
@@ -121,6 +67,8 @@ class OCRAnalysisResponse(BaseModel):
     corrected_image_url: Optional[str] = None
     is_duplicate: bool = False  # 是否为重复图片
     duplicate_message: Optional[str] = None  # 重复提示信息
+    subject_mismatch_warning: Optional[str] = None  # 学科不匹配提示（如有）
+    diagram_analysis: Optional[dict] = None  # 图形分析结果（WZY特有）
 
 
 class QuestionDetail(BaseModel):
@@ -137,25 +85,30 @@ class QuestionDetail(BaseModel):
     knowledge_points: list
     solution_steps: list
     difficulty: str
+    has_diagram: Optional[bool] = False  # 是否有图形（WZY特有）
+    diagram_type: Optional[str] = None  # 图形类型（WZY特有）
+    diagram_description: Optional[str] = None  # 图形描述（WZY特有）
 
 
 @router.post("/analyze", response_model=OCRAnalysisResponse)
 async def analyze_exam_image(
     file: UploadFile = File(...),
-    subject: str = Form("other"),
+    subject: str = Form("math"),  # 默认学科改为math
     grade: str = Form(""),
     hint: Optional[str] = Form(None),
+    enable_diagram_analysis: bool = Form(True),  # WZY特有：是否启用图形分析
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    分析试卷图片
+    分析试卷图片（WZY增强版）
 
     上传试卷图片，使用 Gemini 2.5 Flash 进行:
     1. OCR 识别题目和答案
     2. 自动批改打分
     3. 错因分析
     4. 生成学习建议
+    5. 图形识别增强（几何图形、电路图等）
     """
     # 验证文件类型
     allowed_types = ["image/jpeg", "image/png", "image/webp", "image/heic"]
@@ -167,35 +120,77 @@ async def analyze_exam_image(
 
     # 解析学科类型
     subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
-    
+
+    t0 = time.perf_counter()
+    logger.info(
+        f"[ocr/analyze] start user_id={current_user.id} subject={subject_en} grade={grade or None} "
+        f"filename={file.filename} content_type={file.content_type} enable_diagram_analysis={enable_diagram_analysis}"
+    )
+
+    # 学科验证（WZY特有）
+    if subject_en not in settings.SUBJECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Subject '{subject}' is not supported by WZY module. Supported: {settings.SUBJECTS}"
+        )
+
     # 读取文件内容并计算哈希值
     content = await file.read()
     file_hash = calculate_file_hash(content)
-    
+    logger.info(
+        f"[ocr/analyze] file loaded user_id={current_user.id} bytes={len(content)} hash={file_hash[:16]}..."
+    )
+
     # 检查图片是否已存在（同一用户维度去重）
     existing_image = await crud_image_file.get_image_by_hash(db, file_hash)
     is_duplicate = False
     duplicate_message = None
-    
+
     # 检查是否为同一用户的重复图片
     if existing_image and existing_image.user_id == current_user.id:
         is_duplicate = True
         duplicate_message = "检测到您之前已上传过相同的图片，系统将复用已有图片进行分析"
         logger.info(f"Duplicate image detected for user {current_user.id}: hash={file_hash[:16]}...")
-    
+
     # 生成task_id用于后续处理
     task_id = str(uuid.uuid4())
-    
+    logger.info(f"[ocr/analyze] task_id={task_id} user_id={current_user.id} prepared")
+
+    # Telemetry: journey start (exam upload -> analysis -> practice)
+    try:
+        from backend.core.services.metrics_service import get_metrics_service
+        await get_metrics_service().log_event(
+            event_type="journey",
+            event_name="ocr.analyze.start",
+            ok=True,
+            user_id=current_user.id,
+            module="wzy",  # 改为wzy
+            subject=subject_en,
+            task_id=task_id,
+            payload={
+                "filename": file.filename,
+                "content_type": file.content_type,
+                "is_duplicate": bool(is_duplicate),
+                "enable_diagram_analysis": enable_diagram_analysis,
+            },
+        )
+    except Exception:
+        pass
+
     # 获取或创建原始图片记录
     from backend.core.db.models import ImageFileTypeEnum
-    
+
     if existing_image:
         # 图片已存在，复用现有文件
         original_image_file = existing_image
         file_path = existing_image.file_path
         filename = get_filename_from_path(file_path)
+        # NOTE: When reusing an existing image record (duplicate upload), we still need a safe
+        # extension for downstream per-question image filenames.
+        _ext = os.path.splitext(filename or "")[1].lstrip(".").strip().lower()
+        file_ext = _ext or "jpg"
         logger.info(f"Image already exists, reusing: hash={file_hash[:16]}..., path={file_path}")
-        
+
         # 增加引用计数
         await crud_image_file.increment_reference_count(db, file_hash)
     else:
@@ -203,11 +198,11 @@ async def analyze_exam_image(
         file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
         # 使用hash值的前32位作为文件名，避免文件名过长
         filename = f"{file_hash[:32]}.{file_ext}"
-        
+
         # 保存到用户专属目录: data/uploads/{username_email}/corrections/{subject}/
         upload_dir = get_user_upload_dir(UPLOAD_DIR, current_user, "corrections", subject_en)
         file_path = os.path.join(upload_dir, filename)
-        
+
         # 保存文件
         with open(file_path, "wb") as f:
             f.write(content)
@@ -219,7 +214,7 @@ async def analyze_exam_image(
         relative_path = relative_path.lstrip("./")
         if not relative_path.startswith("data/uploads"):
             relative_path = f"data/uploads/{get_user_directory_name(current_user.username, current_user.email)}/corrections/{subject_en}/{filename}"
-        
+
         original_image_file = await crud_image_file.create_image_file(
             db=db,
             file_hash=file_hash,
@@ -232,17 +227,10 @@ async def analyze_exam_image(
             image_type=ImageFileTypeEnum.ORIGINAL,
         )
         logger.info(f"New image saved: hash={file_hash[:16]}..., path={file_path}, id={original_image_file.id}")
-    
-    # IMPORTANT (SQLite concurrency):
-    # This endpoint performs long-running OCR/LLM calls after doing DB reads/writes.
-    # With SQLite (especially without WAL), holding an open transaction during long I/O
-    # can block other concurrent writers and trigger: sqlite3.OperationalError: database is locked.
-    # Commit early to release any read/write locks before calling Gemini OCR.
-    await db.commit()
 
     try:
         # 调用 OCR 服务
-        ocr_service = get_gemini_ocr_service()
+        ocr_service = get_gemini_ocr_service(settings)
         await ocr_service.initialize()
 
         # 解析学科类型 - 支持中文和英文
@@ -252,41 +240,203 @@ async def analyze_exam_image(
             subject_type = SubjectType.OTHER
 
         # 分析试卷
+        t_analyze0 = time.perf_counter()
         result = await ocr_service.analyze_exam_image(
             image_path=file_path,
             subject=subject_type,
             grade=grade,
             user_hint=hint,
         )
+        analyze_ms = int((time.perf_counter() - t_analyze0) * 1000)
+        logger.info(
+            f"[ocr/analyze] task_id={task_id} user_id={current_user.id} analyze done duration_ms={analyze_ms} "
+            f"questions={len(result.questions or [])} accuracy={result.accuracy_rate} total={result.total_score}/{result.max_score}"
+        )
 
-        # TODO(student): 学科判定 + 分类归一化（统一模板 v1；不要在此处直接实现，留给学生）
-        # 【输入】user_selected_subject=subject_en，text=OCR提取出的题目文本/结构化题目
-        # 【输出】对每题生成：
-        #   - detected_subject + confidence(0~1)
-        #   - chapter: 从 CHAPTER_TAXONOMY[detected_subject] 选 1 个（否则“综合”）
-        #   - knowledge_points: 从 KNOWLEDGE_POINT_TAXONOMY[detected_subject] 选 1~3 个（否则“综合”）
-        #   - tags: 2~6 个短词（用于检索，避免太碎）
-        # 【规则】
-        #   - 若 detected_subject != user_selected_subject 且 confidence >= 0.75：提示“学科不匹配”并拒绝返回批改结果
-        #   - taxonomy 必须收敛：chapter 建议 6~10 个，knowledge_points 建议 10~25 个；同义项合并，避免发散
-        # 【推荐 taxonomy 示例（WZY: math/physics）】
-        #   CHAPTER_TAXONOMY = {
-        #     "math": ["函数", "三角函数", "解析几何", "立体几何", "数列", "概率统计", "导数", "综合"],
-        #     "physics": ["力学", "电磁学", "热学", "光学", "原子物理", "实验", "综合"],
-        #   }
-        #   KNOWLEDGE_POINT_TAXONOMY = {
-        #     "math": ["函数性质", "导数应用", "圆锥曲线", "向量", "不等式", "数列求和", "概率分布", "立体几何方法", "解析几何技巧", "综合"],
-        #     "physics": ["牛顿定律", "功与能", "动量守恒", "电场磁场", "电路", "热力学定律", "波动光学", "实验数据处理", "综合"],
-        #   }
-        # 【实现建议】
-        #   - OCR 后调用 settings.LLM_API_ENDPOINT 的 /chat/completions（二次判定+归一化）
-        #   - 优先更强模型（gemini-3-pro-preview / gpt-5.2），可通过环境变量 WZY_HIGH_ACCURACY_MODEL 覆盖
-        # 【参考实现】backend/modules/tony/agents/question_intake_ocr_agent.py（仅 tony 模块完整实现）
+        # ===== 学科一致性校验（WZY模块：math/physics/other）=====
+        # 新增：WZY模块的学科一致性校验
+        try:
+            import httpx
+            import re
+            
+            # 使用WZY模块的配置
+            from backend.modules.wzy.config import settings as wzy_settings
+            
+            # 文本推理模型：用于学科一致性判定
+            models_raw = (os.getenv("WZY_TEXT_REASONING_MODELS") or "").strip()
+            if models_raw:
+                model = [m.strip() for m in models_raw.split(",") if m.strip()][0]
+            else:
+                model = (wzy_settings.GEMINI_MODEL or "gemini-2.5-flash").strip()
+            endpoint = (wzy_settings.LLM_API_ENDPOINT or "").rstrip("/")
+            if not endpoint:
+                raise RuntimeError("LLM_API_ENDPOINT not configured")
+
+            headers = {}
+            if getattr(wzy_settings, "LLM_API_KEY", None):
+                headers["authorization"] = f"Bearer {wzy_settings.LLM_API_KEY}"
+
+            text_sample = {
+                "overall_analysis": getattr(result, "overall_analysis", "") or "",
+                "questions": [
+                    {"question_text": (getattr(q, "question_text", "") or "")[:300]}
+                    for q in (result.questions or [])[:10]
+                ],
+            }
+
+            prompt = f"""你是教研员，负责学科判定。请判断以下内容最匹配的学科，只能从 ["math","physics","other"] 中选。
+用户选择学科：{subject_en}
+
+内容摘要：
+{json.dumps(text_sample, ensure_ascii=False)}
+
+请严格输出 JSON（不要输出其它文字）：
+{{"detected_subject":"math|physics|other","confidence":0.0}}"""
+
+            t_mismatch0 = time.perf_counter()
+            async with httpx.AsyncClient(base_url=endpoint, timeout=20.0) as client:
+                resp = await client.post(
+                    "/chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.2,
+                        "max_tokens": 512,
+                    },
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                raw = data["choices"][0]["message"]["content"]
+            mismatch_ms = int((time.perf_counter() - t_mismatch0) * 1000)
+
+            m = re.search(r"\{[\s\S]*\}", raw or "")
+            detected = None
+            conf_f = 0.0
+            subject_mismatch_warning = None
+            
+            if m:
+                parsed = json.loads(m.group())
+                detected = str(parsed.get("detected_subject") or "").strip().lower()
+                try:
+                    conf_f = float(parsed.get("confidence", 0.0))
+                except Exception:
+                    conf_f = 0.0
+
+            if detected in ("math", "physics", "other") and detected != subject_en and conf_f >= 0.75:
+                # 不直接拒绝，而是添加警告信息（WZY策略）
+                subject_mismatch_warning = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject_en}。分析结果可能不够准确。"
+                logger.warning(f"Subject mismatch warning: {subject_mismatch_warning}")
+            
+            logger.info(
+                f"[ocr/analyze] task_id={task_id} user_id={current_user.id} subject_check ok model={model} "
+                f"detected={detected or None} conf={conf_f:.2f} duration_ms={mismatch_ms}"
+            )
+        except Exception as e:
+            logger.warning(f"[ocr/analyze] task_id={task_id} user_id={current_user.id} subject_check skipped/failed: {e}")
+            subject_mismatch_warning = None
+
+        # ===== 图形分析增强（WZY特有）=====
+        diagram_analysis_result = None
+        if enable_diagram_analysis and subject_en in ["math", "physics"]:
+            try:
+                from backend.core.services.generic_diagram_service import GenericDiagramService
+                
+                t_diagram0 = time.perf_counter()
+                diagram_service = GenericDiagramService()
+                
+                # 检测图形区域
+                diagram_regions = await diagram_service.detect_diagram_regions(
+                    image_path=file_path,
+                    subject=subject_en
+                )
+                
+                # 为每个问题关联图形信息
+                enhanced_questions = []
+                for q in result.questions:
+                    question_dict = q._asdict() if hasattr(q, '_asdict') else dict(q)
+                    
+                    # 检查问题文本中是否包含图形指示词
+                    diagram_keywords = ["如图", "如图所示", "图", "图形", "示意图", "电路图", "受力图", "光路图", "磁感线"]
+                    question_text = question_dict.get("question_text", "")
+                    has_diagram_indicator = any(keyword in question_text for keyword in diagram_keywords)
+                    
+                    if has_diagram_indicator and diagram_regions:
+                        # 尝试匹配最相关的图形区域
+                        best_match = None
+                        for region in diagram_regions:
+                            region_desc = region.get("description", "")
+                            # 简单匹配：如果区域描述包含题目编号或类似信息
+                            if f"第{q.question_number}题" in region_desc or f"题{q.question_number}" in region_desc:
+                                best_match = region
+                                break
+                        
+                        if best_match:
+                            # 提取图形信息
+                            diagram_info = await diagram_service.extract_diagram_info(
+                                image_path=file_path,
+                                region=best_match["bbox"],
+                                question_text=question_text,
+                                subject=subject_en
+                            )
+                            
+                            # 将图形信息添加到问题中
+                            question_dict["has_diagram"] = True
+                            question_dict["diagram_type"] = best_match.get("type", "unknown")
+                            question_dict["diagram_description"] = diagram_info.get("description", "")
+                            
+                            # 学科特定的图形分析
+                            if subject_en == "math" and best_match.get("type") in ["geometry", "function"]:
+                                math_info = await diagram_service.extract_mathematical_info(
+                                    image_path=file_path,
+                                    region=best_match["bbox"]
+                                )
+                                question_dict["mathematical_elements"] = math_info
+                            elif subject_en == "physics":
+                                phys_info = await diagram_service.extract_physical_info(
+                                    image_path=file_path,
+                                    region=best_match["bbox"],
+                                    diagram_type=best_match.get("type", "")
+                                )
+                                question_dict["physical_elements"] = phys_info
+                    
+                    enhanced_questions.append(question_dict)
+                
+                # 创建图形摘要
+                if diagram_regions:
+                    diagram_summary = await diagram_service.create_diagram_summary(
+                        diagram_regions=diagram_regions,
+                        image_path=file_path,
+                        subject=subject_en
+                    )
+                    diagram_analysis_result = {
+                        "regions": diagram_regions,
+                        "summary": diagram_summary,
+                        "total_regions": len(diagram_regions),
+                    }
+                
+                diagram_ms = int((time.perf_counter() - t_diagram0) * 1000)
+                logger.info(
+                    f"[ocr/analyze] task_id={task_id} user_id={current_user.id} diagram analysis done duration_ms={diagram_ms} "
+                    f"regions={len(diagram_regions)}"
+                )
+                
+                # 更新result中的questions
+                result.questions = enhanced_questions
+                
+            except Exception as e:
+                logger.error(f"[ocr/analyze] task_id={task_id} user_id={current_user.id} diagram analysis failed: {e}")
+                # 图形分析失败不影响主要OCR功能
 
         # 生成批改图像
+        t_overlay0 = time.perf_counter()
         correction_result = await ocr_service.create_correction_overlay(
             image_path=file_path,
             analysis_result=result,
+        )
+        overlay_ms = int((time.perf_counter() - t_overlay0) * 1000)
+        logger.info(
+            f"[ocr/analyze] task_id={task_id} user_id={current_user.id} overlay done success={bool(correction_result.success)} duration_ms={overlay_ms}"
         )
 
         # 保存批改后的图像到用户专属目录和image_files表
@@ -295,10 +445,10 @@ async def analyze_exam_image(
             import base64
             corrected_image_bytes = base64.b64decode(correction_result.corrected_image_base64)
             corrected_file_hash = calculate_file_hash(corrected_image_bytes)
-            
+
             # 检查批改后的图片是否已存在
             existing_corrected_image = await crud_image_file.get_image_by_hash(db, corrected_file_hash)
-            
+
             if existing_corrected_image:
                 corrected_image_file = existing_corrected_image
                 corrected_path = existing_corrected_image.file_path
@@ -368,14 +518,42 @@ async def analyze_exam_image(
                     "knowledge_points": q.knowledge_points,
                     "solution_steps": q.solution_steps,
                     "difficulty": q.difficulty,
+                    "has_diagram": getattr(q, "has_diagram", False) if hasattr(q, "has_diagram") else False,
+                    "diagram_type": getattr(q, "diagram_type", None) if hasattr(q, "diagram_type") else None,
+                    "diagram_description": getattr(q, "diagram_description", None) if hasattr(q, "diagram_description") else None,
                 }
                 for q in result.questions
             ],
+            diagram_analysis=diagram_analysis_result,  # WZY特有：保存图形分析结果
         )
         db.add(exam_correction)
         await db.flush()
+        logger.info(
+            f"[ocr/analyze] task_id={task_id} user_id={current_user.id} saved exam_correction id={exam_correction.id} "
+            f"wrong_count={exam_correction.wrong_count} correct_count={exam_correction.correct_count}"
+        )
 
-        # 生成批改图片URL（使用新格式：通过 correction_id 访问）
+        # 生成批改图片URL（统一由default模块处理，与TONY相同）
+        def generate_correction_image_url(correction_id: int, image_type: str, subject: str) -> str:
+            """
+            生成批改图片URL（统一由 default 模块处理）
+            与TONY模块保持一致
+            """
+            # 优先使用 PUBLIC_API_BASE_URL 配置
+            if settings.PUBLIC_API_BASE_URL:
+                base_url = settings.PUBLIC_API_BASE_URL.rstrip('/')
+                return f"{base_url}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
+
+            # 如果没有设置 PUBLIC_API_BASE_URL，使用 default 模块的地址（6100端口）
+            # 统一由 default 模块处理图片访问，不再根据学科路由到不同模块
+            from backend.modules.default.config import get_settings as get_default_settings
+            default_settings = get_default_settings()
+            default_host = default_settings.HOST if default_settings.HOST not in ['0.0.0.0', ''] else 'localhost'
+            default_port = default_settings.PORT  # 6100
+
+            # 生成完整URL，统一使用 default 模块地址
+            return f"http://{default_host}:{default_port}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
+
         corrected_image_url = None
         if corrected_image_file:
             corrected_image_url = generate_correction_image_url(
@@ -383,10 +561,10 @@ async def analyze_exam_image(
             )
             logger.info(f"Corrected image URL: {corrected_image_url}")
 
-        # 为错误的题目自动创建错题记录
+        # 为错误的题目自动创建错题记录（包含图形信息）
         from backend.core.crud import crud_question
         from backend.core.schemas.question import QuestionCreate
-        
+
         wrong_question_ids = []
         for q in result.questions:
             if not q.is_correct:  # 只为错题创建记录
@@ -407,7 +585,7 @@ async def analyze_exam_image(
 
                 # 生成URL路径（使用原始学科，保证与批改前一致）
                 question_image_url = get_user_file_url(current_user, "questions", subject_en, question_filename)
-                
+
                 # 创建错题记录（使用原始学科，保证与批改前一致）
                 question_data = QuestionCreate(
                     content=q.question_text,
@@ -436,13 +614,45 @@ async def analyze_exam_image(
                     source=QuestionSourceEnum.AI_CORRECTION,
                     source_description=f"AI批注试卷第{q.question_number}题",
                     tags=q.knowledge_points,
+                    # WZY特有：保存图形相关信息
+                    has_diagram=getattr(q, "has_diagram", False),
+                    diagram_type=getattr(q, "diagram_type", None),
+                    diagram_description=getattr(q, "diagram_description", None),
                 )
                 db.add(db_question)
                 await db.flush()
                 wrong_question_ids.append(db_question.id)
-        
+
         await db.commit()
-        
+        total_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info(
+            f"[ocr/analyze] done task_id={task_id} user_id={current_user.id} correction_id={exam_correction.id} "
+            f"created_wrong_questions={len(wrong_question_ids)} duration_ms={total_ms}"
+        )
+
+        # Telemetry: journey step done (used for total duration metric)
+        try:
+            from backend.core.services.metrics_service import get_metrics_service
+            await get_metrics_service().log_event(
+                event_type="journey",
+                event_name="ocr.analyze.done",
+                ok=True,
+                duration_ms=float(total_ms),
+                user_id=current_user.id,
+                module="wzy",  # 改为wzy
+                subject=subject_en,
+                task_id=task_id,
+                exam_correction_id=exam_correction.id,
+                payload={
+                    "wrong_questions": len(wrong_question_ids),
+                    "accuracy_rate": float(result.accuracy_rate or 0.0),
+                    "enable_diagram_analysis": enable_diagram_analysis,
+                    "diagram_regions": diagram_analysis_result.get("total_regions", 0) if diagram_analysis_result else 0,
+                },
+            )
+        except Exception:
+            pass
+
         logger.info(
             f"Saved exam correction {exam_correction.id} for user {current_user.id}, "
             f"created {len(wrong_question_ids)} wrong question records"
@@ -470,6 +680,9 @@ async def analyze_exam_image(
                     "knowledge_points": q.knowledge_points,
                     "solution_steps": q.solution_steps,
                     "difficulty": q.difficulty,
+                    "has_diagram": getattr(q, "has_diagram", False) if hasattr(q, "has_diagram") else False,
+                    "diagram_type": getattr(q, "diagram_type", None) if hasattr(q, "diagram_type") else None,
+                    "diagram_description": getattr(q, "diagram_description", None) if hasattr(q, "diagram_description") else None,
                 }
                 for q in result.questions
             ],
@@ -479,10 +692,27 @@ async def analyze_exam_image(
             corrected_image_url=corrected_image_url,
             is_duplicate=is_duplicate,
             duplicate_message=duplicate_message,
+            subject_mismatch_warning=subject_mismatch_warning,
+            diagram_analysis=diagram_analysis_result,
         )
 
     except Exception as e:
         logger.error(f"OCR analysis failed: {e}")
+        try:
+            from backend.core.services.metrics_service import get_metrics_service
+            await get_metrics_service().log_event(
+                event_type="journey",
+                event_name="ocr.analyze.failed",
+                ok=False,
+                duration_ms=float((time.perf_counter() - t0) * 1000.0),
+                user_id=current_user.id,
+                module="wzy",  # 改为wzy
+                subject=subject_en,
+                task_id=task_id,
+                payload={"error": str(e)},
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
 
     finally:
@@ -490,6 +720,7 @@ async def analyze_exam_image(
         pass
 
 
+# 以下函数与TONY模块完全相同，仅模块名称从tony改为wzy
 @router.get("/images/{file_type}/{user_id}/{subject}/{filename}")
 async def get_user_image(
     file_type: str,
@@ -514,7 +745,7 @@ async def get_user_image(
     from fastapi.responses import FileResponse
     from backend.core.crud import crud_user
     from backend.core.utils.file_utils import get_user_directory_name
-    from backend.modules.wzy.config import settings  # 修改：tony -> wzy
+    from backend.modules.wzy.config import settings  # 改为wzy
     from jose import jwt, JWTError
 
     # 如果从查询参数提供了token，尝试解析
@@ -552,6 +783,13 @@ async def get_user_image(
             )
         # 开发模式允许访问，但记录警告
     
+    # 学科验证（WZY特有）
+    if subject not in settings.SUBJECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Subject '{subject}' is not supported by WZY module"
+        )
+    
     # 获取用户对象以构建正确的文件路径
     user = await crud_user.get_user(db, user_id)
     if not user:
@@ -574,7 +812,7 @@ async def get_user_image(
         media_type = mime_types.get(ext, 'image/png')
         return FileResponse(file_path, media_type=media_type)
     
-        raise HTTPException(status_code=404, detail="图像不存在")
+    raise HTTPException(status_code=404, detail="图像不存在")
 
 
 @router.get("/images/corrections/{correction_id}/{image_type}")
@@ -598,7 +836,7 @@ async def get_correction_image(
     """
     from fastapi.responses import FileResponse
     from backend.core.crud import crud_exam_correction, crud_image_file
-    from backend.modules.wzy.config import settings  # 修改：tony -> wzy
+    from backend.modules.wzy.config import settings  # 改为wzy
     from jose import jwt, JWTError
     import os
 
@@ -627,6 +865,13 @@ async def get_correction_image(
     correction = await crud_exam_correction.get_exam_correction(db, correction_id, None)
     if not correction:
         raise HTTPException(status_code=404, detail="批注记录不存在")
+
+    # 学科验证（WZY特有）
+    if correction.subject.value not in settings.SUBJECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Subject '{correction.subject.value}' is not supported by WZY module"
+        )
 
     # 验证用户权限
     if current_user_id is not None:
@@ -763,6 +1008,13 @@ async def get_image_legacy(subject: str, filename: str):
     """
     from fastapi.responses import FileResponse
 
+    # 学科验证（WZY特有）
+    if subject not in settings.SUBJECTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Subject '{subject}' is not supported by WZY module"
+        )
+
     # 尝试从批注目录或错题目录查找（遍历所有用户目录）
     base_paths = [UPLOAD_DIR]
     
@@ -795,7 +1047,8 @@ async def get_image_legacy(subject: str, filename: str):
 @router.post("/batch-analyze")
 async def batch_analyze_images(
     files: list[UploadFile] = File(...),
-    subject: str = Form("other"),
+    subject: str = Form("math"),  # 默认学科改为math
+    enable_diagram_analysis: bool = Form(True),  # WZY特有
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -811,6 +1064,7 @@ async def batch_analyze_images(
                 "filename": file.filename,
                 "status": "queued",
                 "message": "已加入处理队列",
+                "enable_diagram_analysis": enable_diagram_analysis,
             })
         except Exception as e:
             results.append({

@@ -99,6 +99,7 @@ class User(Base):
     questions = relationship("Question", back_populates="user")
     feedbacks = relationship("Feedback", back_populates="user")
     exam_corrections = relationship("ExamCorrection", back_populates="user")
+    agent_tasks = relationship("AgentTask", back_populates="user")
 
 class Question(Base):
     """错题模型 - 根据设计文档4.1节"""
@@ -172,6 +173,9 @@ class AgentTask(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(String(36), unique=True, index=True, nullable=False)  # UUID
+    # NOTE: We store user_id for per-user concurrency limits and observability.
+    # Keep nullable=True for backward compatibility with legacy sqlite DBs.
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     question_id = Column(Integer, ForeignKey("questions.id"), nullable=True)
 
     # 任务状态
@@ -189,6 +193,7 @@ class AgentTask(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     # Relationships
+    user = relationship("User", back_populates="agent_tasks")
     question = relationship("Question", back_populates="tasks")
 
 class Feedback(Base):

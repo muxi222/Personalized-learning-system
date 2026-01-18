@@ -11,6 +11,7 @@ import ExamUpload from './pages/ExamUpload'
 import CorrectionHistory from './pages/CorrectionHistory'
 import CorrectionDetail from './pages/CorrectionDetail'
 import LearningAdvisor from './pages/LearningAdvisor'
+import TaskDetail from './pages/TaskDetail'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import PageErrorBoundary from './components/PageErrorBoundary'
@@ -43,6 +44,7 @@ function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="submit" element={<QuestionSubmit />} />
+        <Route path="tasks/:taskId" element={<TaskDetail />} />
         <Route path="exam-upload" element={<ExamUpload />} />
         <Route path="corrections" element={<CorrectionHistory />} />
         <Route path="corrections/:id" element={<CorrectionDetail />} />

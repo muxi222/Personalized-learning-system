@@ -4,12 +4,17 @@ Agent任务数据库操作
 """
 
 from datetime import datetime
-from typing import Optional, Any, Dict
-from sqlalchemy import select
+from typing import Optional, Any, Dict, Iterable
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.exc import OperationalError
 
 from ..db.models import AgentTask, TaskStatusEnum
+
+def _is_sqlite_locked_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "database is locked" in msg or "database locked" in msg
 
 def _deep_merge(base: Any, patch: Any) -> Any:
     """Deep-merge dicts; lists/scalars are replaced."""
@@ -54,6 +59,7 @@ def _merge_task_result(
 async def create_task(
     db: AsyncSession,
     task_id: str,
+    user_id: Optional[int] = None,
     question_id: Optional[int] = None,
 ) -> AgentTask:
     """
@@ -64,27 +70,47 @@ async def create_task(
       InvalidRequestError("Could not refresh instance ..."). We treat refresh
       as best-effort and fall back to querying by task_id.
     """
-    existing = await get_task_by_task_id(db, task_id)
-    if existing:
-        return existing
+    import asyncio
+    import logging
 
-    db_task = AgentTask(task_id=task_id, question_id=question_id, status=TaskStatusEnum.PENDING, progress=0.0)
-    db.add(db_task)
-    await db.flush()
+    # SQLite can temporarily fail writes under concurrency ("database is locked").
+    # Retry a few times with backoff to avoid surfacing 500s for transient contention.
+    for attempt in range(6):
+        try:
+            existing = await get_task_by_task_id(db, task_id)
+            if existing:
+                return existing
 
-    # Best-effort refresh; DO NOT fail request if refresh is not possible (legacy sqlite schemas).
-    try:
-        await db.refresh(db_task)
-    except InvalidRequestError:
-        import logging
-        logging.getLogger(__name__).warning("[crud_task] refresh(AgentTask) failed; will fallback to query by task_id", exc_info=True)
+            db_task = AgentTask(
+                task_id=task_id,
+                user_id=user_id,
+                question_id=question_id,
+                status=TaskStatusEnum.PENDING,
+                progress=0.0,
+            )
+            db.add(db_task)
+            await db.flush()
 
-    # Prefer querying by task_id (stable unique key) if possible
-    try:
-        task2 = await get_task_by_task_id(db, task_id)
-        return task2 or db_task
-    except Exception:
-        return db_task
+            # Best-effort refresh; DO NOT fail request if refresh is not possible (legacy sqlite schemas).
+            try:
+                await db.refresh(db_task)
+            except InvalidRequestError:
+                logging.getLogger(__name__).warning(
+                    "[crud_task] refresh(AgentTask) failed; will fallback to query by task_id", exc_info=True
+                )
+
+            # Prefer querying by task_id (stable unique key) if possible
+            try:
+                task2 = await get_task_by_task_id(db, task_id)
+                return task2 or db_task
+            except Exception:
+                return db_task
+        except OperationalError as e:
+            await db.rollback()
+            if _is_sqlite_locked_error(e) and attempt < 5:
+                await asyncio.sleep(0.15 * (2**attempt))
+                continue
+            raise
 
 async def get_task(
     db: AsyncSession,
@@ -106,6 +132,83 @@ async def get_task_by_task_id(
     result = await db.execute(query)
     return result.scalar_one_or_none()
 
+
+async def delete_task_by_task_id(
+    db: AsyncSession,
+    task_id: str,
+    *,
+    user_id: Optional[int] = None,
+) -> bool:
+    """
+    Hard-delete a task row by task_id.
+
+    Security:
+    - If user_id is provided, only delete tasks that belong to that user.
+    """
+    import asyncio
+
+    for attempt in range(6):
+        try:
+            q = delete(AgentTask).where(AgentTask.task_id == task_id)
+            if user_id is not None:
+                q = q.where(AgentTask.user_id == user_id)
+            res = await db.execute(q)
+            await db.flush()
+            return bool(res.rowcount and res.rowcount > 0)
+        except OperationalError as e:
+            await db.rollback()
+            if _is_sqlite_locked_error(e) and attempt < 5:
+                await asyncio.sleep(0.15 * (2**attempt))
+                continue
+            raise
+
+
+async def list_active_tasks_for_user(
+    db: AsyncSession,
+    user_id: int,
+    statuses: Iterable[TaskStatusEnum] = (TaskStatusEnum.PENDING, TaskStatusEnum.PROCESSING),
+    limit: int = 50,
+) -> list[AgentTask]:
+    """
+    List active tasks for a user. Used for per-user intake concurrency limits.
+    """
+    statuses_list = list(statuses)
+    query = (
+        select(AgentTask)
+        .where(AgentTask.user_id == user_id)
+        .where(AgentTask.status.in_(statuses_list))
+        .order_by(AgentTask.created_at.desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+def _task_result_get_input_type(task: AgentTask) -> Optional[str]:
+    try:
+        r = task.result if isinstance(task.result, dict) else {}
+        return (
+            r.get("stages", {})
+            .get("queued", {})
+            .get("request", {})
+            .get("input_type")
+        )
+    except Exception:
+        return None
+
+
+async def count_active_intake_image_tasks_for_user(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    limit: int = 50,
+) -> int:
+    """
+    Count active intake OCR image tasks for a user (best-effort; filters by stored task.result).
+    """
+    tasks = await list_active_tasks_for_user(db, user_id, limit=limit)
+    return sum(1 for t in tasks if (_task_result_get_input_type(t) == "image"))
+
 async def update_task_status(
     db: AsyncSession,
     task_id: str,
@@ -118,36 +221,46 @@ async def update_task_status(
     error_message: Optional[str] = None,
 ) -> Optional[AgentTask]:
     """更新任务状态"""
-    task = await get_task_by_task_id(db, task_id)
-    if not task:
-        return None
+    import asyncio
 
-    task.status = status
+    for attempt in range(6):
+        try:
+            task = await get_task_by_task_id(db, task_id)
+            if not task:
+                return None
 
-    if progress is not None:
-        task.progress = progress
-    if current_step is not None:
-        task.current_step = current_step
-    if result is not None:
-        task.result = result
-    if result_patch is not None:
-        task.result = _merge_task_result(task.result, stage=result_stage, patch=result_patch)
-    if error_message is not None:
-        task.error_message = error_message
+            task.status = status
 
-    # Update timestamps
-    if status == TaskStatusEnum.PROCESSING and task.started_at is None:
-        task.started_at = datetime.utcnow()
-    elif status in (TaskStatusEnum.COMPLETED, TaskStatusEnum.FAILED):
-        task.completed_at = datetime.utcnow()
+            if progress is not None:
+                task.progress = progress
+            if current_step is not None:
+                task.current_step = current_step
+            if result is not None:
+                task.result = result
+            if result_patch is not None:
+                task.result = _merge_task_result(task.result, stage=result_stage, patch=result_patch)
+            if error_message is not None:
+                task.error_message = error_message
 
-    await db.flush()
-    try:
-        await db.refresh(task)
-    except InvalidRequestError:
-        # Best-effort: caller usually doesn't need a fully refreshed instance
-        pass
-    return task
+            # Update timestamps
+            if status == TaskStatusEnum.PROCESSING and task.started_at is None:
+                task.started_at = datetime.utcnow()
+            elif status in (TaskStatusEnum.COMPLETED, TaskStatusEnum.FAILED):
+                task.completed_at = datetime.utcnow()
+
+            await db.flush()
+            try:
+                await db.refresh(task)
+            except InvalidRequestError:
+                # Best-effort: caller usually doesn't need a fully refreshed instance
+                pass
+            return task
+        except OperationalError as e:
+            await db.rollback()
+            if _is_sqlite_locked_error(e) and attempt < 5:
+                await asyncio.sleep(0.15 * (2**attempt))
+                continue
+            raise
 
 async def update_task_progress(
     db: AsyncSession,

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.db.session import get_db
 from backend.core.crud import crud_task
 from backend.core.schemas.task import TaskStatusResponse, TaskStatus
+from backend.modules.tony.api.deps import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ def _extract_image_id(task_result: Any) -> Optional[int]:
 async def get_task_status(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
 ):
     """
     查询任务状态
@@ -74,6 +76,8 @@ async def get_task_status(
     """
     task = await crud_task.get_task_by_task_id(db, task_id)
     if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.user_id is not None and int(task.user_id) != int(user_id):
         raise HTTPException(status_code=404, detail="Task not found")
 
     # Map database enum to schema enum
@@ -102,19 +106,27 @@ async def get_task_status(
     )
 
 @router.delete("/{task_id}", status_code=204)
-async def cancel_task(
+async def delete_or_cancel_task(
     task_id: str,
     reason: str = Query("用户已取消任务", description="取消原因（可选）"),
     db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
 ):
     """
-    取消任务（支持 pending/processing；completed/failed 为幂等 no-op）
+    DELETE /tasks/{task_id} semantics:
+    - If task is pending/processing: cancel (mark failed) (record kept for background workers).
+    - If task is completed/failed: hard-delete the task record.
     """
     task = await crud_task.get_task_by_task_id(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.user_id is not None and int(task.user_id) != int(user_id):
+        raise HTTPException(status_code=404, detail="Task not found")
 
     if task.status.value in ("completed", "failed"):
+        deleted = await crud_task.delete_task_by_task_id(db, task_id, user_id=user_id)
+        if deleted:
+            await db.commit()
         return
 
     # Mark as failed/cancelled
@@ -135,6 +147,7 @@ async def cancel_task(
 async def stream_task_status(
     task_id: str,
     db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
 ) -> StreamingResponse:
     """
     通过Server-Sent Events (SSE) 流式推送任务状态更新
@@ -162,6 +175,9 @@ async def stream_task_status(
                 # 查询任务状态
                 task = await crud_task.get_task_by_task_id(db, task_id)
                 if not task:
+                    yield f"data: {json.dumps({'error': 'Task not found'})}\n\n"
+                    break
+                if task.user_id is not None and int(task.user_id) != int(user_id):
                     yield f"data: {json.dumps({'error': 'Task not found'})}\n\n"
                     break
                 

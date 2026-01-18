@@ -95,7 +95,7 @@ def _get_gemini_prompt_provider(module_name: str):
 
         @staticmethod
         def resolve_max_tokens() -> int:
-            return int(os.getenv("OCR_MAX_TOKENS") or "8192")
+            return int(os.getenv("OCR_MAX_TOKENS") or "32768")
 
         @staticmethod
         def get_logging_config() -> Dict[str, Any]:
@@ -410,7 +410,7 @@ class GeminiOCRService:
                 ],
                 # 录入错题场景：把 temperature 调低，显著降低“胡猜/不稳定”导致的字段错配
                 "temperature": float(os.getenv("OCR_INTAKE_TEMPERATURE") or os.getenv("OCR_TEMPERATURE") or "0.1") if intake_mode else float(os.getenv("OCR_TEMPERATURE") or "0.3"),
-                "max_tokens": int(os.getenv("OCR_MAX_TOKENS") or "8192"),
+                "max_tokens": int(os.getenv("OCR_MAX_TOKENS") or "32768"),
             }
 
             # Extra debugging logs (no base64): prompt + image path.

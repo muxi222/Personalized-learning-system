@@ -222,6 +222,10 @@ async def analyze_exam_image(
         original_image_file = existing_image
         file_path = existing_image.file_path
         filename = get_filename_from_path(file_path)
+        # NOTE: When reusing an existing image record (duplicate upload), we still need a safe
+        # extension for downstream per-question image filenames.
+        _ext = os.path.splitext(filename or "")[1].lstrip(".").strip().lower()
+        file_ext = _ext or "jpg"
         logger.info(f"Image already exists, reusing: hash={file_hash[:16]}..., path={file_path}")
 
         # 增加引用计数

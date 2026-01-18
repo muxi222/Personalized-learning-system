@@ -168,16 +168,68 @@ fi
 # 当前进程的PID列表（用于Ctrl+C清理）
 CHILD_PID=""
 
+# Recursively collect descendants of a PID (best-effort; works on Linux/macOS with pgrep).
+get_descendants() {
+    local root_pid="$1"
+    local out=()
+
+    if [ -z "${root_pid}" ]; then
+        return 0
+    fi
+    if ! command -v pgrep >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local children
+    children=$(pgrep -P "${root_pid}" 2>/dev/null || true)
+    if [ -z "${children}" ]; then
+        return 0
+    fi
+
+    for c in ${children}; do
+        out+=("${c}")
+        local g
+        g=$(get_descendants "${c}" || true)
+        if [ -n "${g}" ]; then
+            out+=(${g})
+        fi
+    done
+
+    echo "${out[@]}"
+}
+
+# Kill a PID and all its descendants.
+kill_tree() {
+    local pid="$1"
+    local sig="${2:-TERM}"
+
+    if [ -z "${pid}" ]; then
+        return 0
+    fi
+
+    local desc
+    desc=$(get_descendants "${pid}" || true)
+    if [ -n "${desc}" ]; then
+        for d in ${desc}; do
+            kill "-${sig}" "${d}" 2>/dev/null || true
+        done
+    fi
+
+    kill "-${sig}" "${pid}" 2>/dev/null || true
+}
+
 # 清理函数
 cleanup() {
     local exit_code=$?
-    if [ -n "${CHILD_PID}" ] && kill -0 "${CHILD_PID}" 2>/dev/null; then
+    if [ -n "${CHILD_PID}" ]; then
         log_info "正在停止 ${MODULE} ${SERVICE_TYPE} (PID: ${CHILD_PID})..."
-        kill "${CHILD_PID}" 2>/dev/null || true
+        # Kill process tree first (conda run wrapper may not forward signals)
+        kill_tree "${CHILD_PID}" "TERM"
+        # Also try killing process group if applicable
+        kill -TERM -- "-${CHILD_PID}" 2>/dev/null || true
         sleep 1
-        if kill -0 "${CHILD_PID}" 2>/dev/null; then
-            kill -9 "${CHILD_PID}" 2>/dev/null || true
-        fi
+        kill_tree "${CHILD_PID}" "KILL"
+        kill -KILL -- "-${CHILD_PID}" 2>/dev/null || true
     fi
     rm -f "${PID_FILE}"
     exit $exit_code
@@ -226,6 +278,10 @@ if [ "$SERVICE_TYPE" = "api" ]; then
     log_module "$MODULE" "日志文件: ${LOG_FILE}"
 
 elif [ "$SERVICE_TYPE" = "agent" ]; then
+    if [ "$MODULE" = "default" ]; then
+        log_error "default 模块不提供 Agent Worker（无 celery_app），请使用: ./start.sh api_default"
+        exit 1
+    fi
     QUEUE="queue_${MODULE}"
     log_module "$MODULE" "启动 Agent Worker (队列: $QUEUE, 学科: $SUBJECTS)..."
 

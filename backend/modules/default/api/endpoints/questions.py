@@ -172,6 +172,31 @@ def build_question_image_url(question_id: int, image_index: int) -> str:
     base = (settings.PUBLIC_API_BASE_URL or "http://localhost:6100").rstrip("/")
     return f"{base}/api/v1/questions/images/{question_id}?image_index={image_index}"
 
+def _path_variants(p: str) -> list[str]:
+    """
+    Normalize legacy path formats.
+    We historically stored paths with/without leading "./", so try a few variants
+    when mapping Question.image_urls -> ImageFile.file_path.
+    """
+    s = str(p or "")
+    if not s:
+        return []
+    out = [s]
+    # strip leading ./ (one or multiple)
+    stripped = s.lstrip("./")
+    if stripped and stripped not in out:
+        out.append(stripped)
+    # add ./ prefix back (common legacy)
+    if not s.startswith("./"):
+        dot = f"./{s.lstrip('/')}"
+        if dot not in out:
+            out.append(dot)
+    return out
+
+def _looks_like_url(p: str) -> bool:
+    s = str(p or "").strip().lower()
+    return s.startswith("http://") or s.startswith("https://") or s.startswith("/api/")
+
 def normalize_question_image_urls(question_id: int, image_urls) -> list[str]:
     if not image_urls:
         return []
@@ -204,10 +229,20 @@ async def build_question_image_urls_default(
 
     out: list[str] = []
     for idx, p in enumerate(paths):
-        img = await crud_image_file.get_image_by_path(db, str(p))
+        # If stored value is already a URL (legacy), keep it rather than generating a broken file-path endpoint.
+        if _looks_like_url(p):
+            out.append(str(p))
+            continue
+
+        img = None
+        for pv in _path_variants(str(p)):
+            img = await crud_image_file.get_image_by_path(db, pv)
+            if img:
+                break
         if img and img.user_id == int(user_id):
             out.append(build_image_file_content_url(int(img.id)))
         else:
+            # Legacy fallback: this endpoint reads from question.image_urls and expects filesystem paths.
             out.append(build_question_image_url(int(getattr(qobj, "id", 0) or 0), int(idx)))
     return out
 
@@ -439,11 +474,20 @@ async def list_questions(
                     continue
                 for p in (getattr(q, "image_urls", None) or []):
                     if p:
-                        all_paths.add(str(p))
+                        # Skip URL-like values; they are not file paths stored in image_files.
+                        if _looks_like_url(p):
+                            continue
+                        for pv in _path_variants(str(p)):
+                            all_paths.add(pv)
             if all_paths:
                 stmt = select(ImageFile).where(ImageFile.user_id == int(user_id), ImageFile.file_path.in_(list(all_paths)))
                 imgs = (await db.execute(stmt)).scalars().all()
-                path_to_image_id = {str(img.file_path): int(img.id) for img in imgs if img and img.file_path}
+                path_to_image_id = {}
+                for img in imgs:
+                    if not img or not img.file_path:
+                        continue
+                    for pv in _path_variants(str(img.file_path)):
+                        path_to_image_id[pv] = int(img.id)
         except Exception:
             path_to_image_id = {}
 
@@ -461,13 +505,25 @@ async def list_questions(
                 else:
                     urls: List[str] = []
                     for idx, p in enumerate(paths):
-                        img_id = path_to_image_id.get(str(p))
+                        if _looks_like_url(p):
+                            urls.append(str(p))
+                            continue
+                        img_id = None
+                        for pv in _path_variants(str(p)):
+                            img_id = path_to_image_id.get(pv)
+                            if img_id:
+                                break
                         if img_id:
                             urls.append(build_image_file_content_url(int(img_id)))
                         else:
                             urls.append(build_question_image_url(int(q.id), int(idx)))
                     item.image_urls = urls
-                    first_img_id = path_to_image_id.get(str(paths[0])) if paths else None
+                    first_img_id = None
+                    if paths and (not _looks_like_url(paths[0])):
+                        for pv in _path_variants(str(paths[0])):
+                            first_img_id = path_to_image_id.get(pv)
+                            if first_img_id:
+                                break
                     if first_img_id and getattr(item, "source_image_id", None) is None:
                         item.source_image_id = int(first_img_id)
 
@@ -920,6 +976,7 @@ async def get_question_image(
     """
     import os
     from fastapi.responses import FileResponse
+    from fastapi.responses import RedirectResponse
     from backend.core.crud import crud_question
 
     # 获取错题记录
@@ -933,6 +990,17 @@ async def get_question_image(
         raise HTTPException(status_code=404, detail="Image not found")
 
     image_path = image_urls[image_index]
+
+    # If legacy data stored a URL instead of a filesystem path, redirect to it.
+    try:
+        s = str(image_path or "").strip()
+        if s.startswith("/api/"):
+            base = (settings.PUBLIC_API_BASE_URL or "http://localhost:6100").rstrip("/")
+            return RedirectResponse(url=f"{base}{s}", status_code=307)
+        if s.lower().startswith("http://") or s.lower().startswith("https://"):
+            return RedirectResponse(url=s, status_code=307)
+    except Exception:
+        pass
 
     # 处理路径（支持相对路径和绝对路径）
     if not os.path.isabs(image_path):

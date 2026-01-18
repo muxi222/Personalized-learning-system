@@ -27,6 +27,8 @@ NC='\033[0m' # No Color
 
 # 模块定义 (兼容 Bash 3.2)
 MODULES=("default" "rpj" "xmx" "wzy" "wzm" "tony")
+# Celery agent workers are only available for these modules (default has no celery_app).
+AGENT_MODULES=("rpj" "xmx" "wzy" "wzm" "tony")
 
 # 根据模块名获取端口号
 get_module_port() {
@@ -133,16 +135,64 @@ safe_kill_pid_file() {
     if [ -f "${pid_file}" ]; then
         local pid
         pid=$(cat "${pid_file}")
-        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
-            kill "${pid}" 2>/dev/null || true
-            sleep 1
-            # 如果进程还在运行，强制杀死
-            if kill -0 "${pid}" 2>/dev/null; then
-                kill -9 "${pid}" 2>/dev/null || true
-            fi
+        if [ -n "${pid}" ]; then
+            # Best-effort kill the whole process tree (conda run wrapper may not forward signals)
+            kill_child_pid "${pid}"
         fi
         rm -f "${pid_file}"
     fi
+}
+
+# Recursively collect descendants of a PID (best-effort; works on Linux/macOS with pgrep).
+get_descendants() {
+    local root_pid="$1"
+    local out=()
+
+    if [ -z "${root_pid}" ]; then
+        return 0
+    fi
+    if ! command -v pgrep >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local children
+    children=$(pgrep -P "${root_pid}" 2>/dev/null || true)
+    if [ -z "${children}" ]; then
+        return 0
+    fi
+
+    for c in ${children}; do
+        out+=("${c}")
+        # recurse
+        local g
+        g=$(get_descendants "${c}" || true)
+        if [ -n "${g}" ]; then
+            out+=(${g})
+        fi
+    done
+
+    echo "${out[@]}"
+}
+
+# Kill a PID and all its descendants.
+kill_tree() {
+    local pid="$1"
+    local sig="${2:-TERM}"
+
+    if [ -z "${pid}" ]; then
+        return 0
+    fi
+
+    # Descendants first (so wrappers don't orphan workers)
+    local desc
+    desc=$(get_descendants "${pid}" || true)
+    if [ -n "${desc}" ]; then
+        for d in ${desc}; do
+            kill "-${sig}" "${d}" 2>/dev/null || true
+        done
+    fi
+
+    kill "-${sig}" "${pid}" 2>/dev/null || true
 }
 
 # 仅停止“当前 terminal/当前脚本实例”启动的子进程（不影响其他 terminal）
@@ -151,19 +201,17 @@ kill_child_pid() {
     if [ -z "${pid}" ]; then
         return 0
     fi
-    if ! kill -0 "${pid}" 2>/dev/null; then
-        return 0
-    fi
 
-    # 先尝试杀进程组（通常后台 job 的 PGID==PID），可一并结束 uvicorn --reload 的子进程
+    # 先杀进程树（conda run 包装层不一定会把信号传给 celery/uvicorn）
+    kill_tree "${pid}" "TERM"
+
+    # 再尝试杀进程组（某些场景 PGID==PID，可一并结束 uvicorn --reload 的子进程）
     kill -TERM -- "-${pid}" 2>/dev/null || true
-    kill -TERM "${pid}" 2>/dev/null || true
     sleep 1
 
-    if kill -0 "${pid}" 2>/dev/null; then
-        kill -KILL -- "-${pid}" 2>/dev/null || true
-        kill -KILL "${pid}" 2>/dev/null || true
-    fi
+    # 强杀剩余进程（包括被重新父进程收养的 worker 子进程）
+    kill_tree "${pid}" "KILL"
+    kill -KILL -- "-${pid}" 2>/dev/null || true
 }
 
 cleanup_children_only() {
@@ -235,9 +283,9 @@ setup_conda() {
     conda activate 312_edu
 
     # 检查并安装依赖
-    if [ -f "${PROJECT_ROOT}/requirements.txt" ]; then
-        pip install -q -r "${PROJECT_ROOT}/requirements.txt" 2>/dev/null || true
-    fi
+    # if [ -f "${PROJECT_ROOT}/requirements.txt" ]; then
+    #     pip install -q -r "${PROJECT_ROOT}/requirements.txt" 2>/dev/null || true
+    # fi
 }
 
 # 创建数据目录
@@ -370,6 +418,10 @@ start_module_api() {
 # 启动模块 Agent Worker
 start_module_agent() {
     local module=$1
+    if [ "$module" = "default" ]; then
+        log_warn "default 模块不提供 Agent Worker（无 celery_app），跳过启动"
+        return 0
+    fi
     local queue="queue_${module}"
     local subjects=$(get_module_subjects "$module")
 
@@ -445,7 +497,7 @@ start_all_api() {
 # 启动所有模块的Agent
 start_all_agent() {
     log_info "启动所有模块 Agent Worker..."
-    for module in "${MODULES[@]}"; do
+    for module in "${AGENT_MODULES[@]}"; do
         start_module_agent "$module"
         sleep 2
     done

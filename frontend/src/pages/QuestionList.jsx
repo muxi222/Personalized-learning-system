@@ -785,8 +785,11 @@ export default function QuestionList() {
                                     type="checkbox"
                                     className="mt-1 w-5 h-5 accent-primary-500"
                                     checked={selectedQuestionIds.includes(q.id)}
-                                    onChange={() => toggleSelection(q.id)}
-                                    onClick={(e) => e.preventDefault()}
+                                    onChange={(e) => {
+                                      e.stopPropagation()
+                                      toggleSelection(q.id)
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
                                   />
                                 )}
                                 <div className="min-w-0">
