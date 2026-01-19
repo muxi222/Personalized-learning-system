@@ -6,6 +6,8 @@
 > - `docs/DEPLOYMENT.md`：部署与运维（含 `pipeline.sh`）
 > - `docs/TRAINING.md`：GraphRAG/训练流水线（Tony first）
 > - `docs/AI_CORRECTION_SYSTEM.md`：AI 批改系统**实现细节参考**（本次已将核心内容合并进本文，原文作为附录/历史参考保留）
+> - `docs/PERSONALIZATION_SYSTEM.md`：个性化/小书童（个人模型 + 检索 + Trace 落盘）实现细节
+> - `docs/AI_INTAKE_SYSTEM.md`：错题识别（intake / 录入错题）实现细节参考
 
 ## 1. 项目概述
 
@@ -357,13 +359,13 @@ SFT 的目标是让基座模型在教育场景具备更强的一致性与可控�
 
 - `HF_HOME=<repo>/data/.cache/huggingface`
 - `HF_HUB_CACHE=$HF_HOME/hub`
-- 额外稳定目录：`HF_MODEL_LOCAL_DIR=<repo>/data/models/hf`
+- （当前实现）不再使用 `HF_MODEL_LOCAL_DIR` 维护第二份模型拷贝；统一从 HF Hub cache snapshot 读取，以避免重复下载与磁盘占用。
 
 训练脚本会：
 
-1) 按 `revision`（默认 main，可通过 `--hf-revision` 指定 commit）预下载模型文件到本地目录  
+1) 按 `revision`（默认 main，可通过 `--hf-revision` 指定 commit）预下载模型文件到本地 HF cache（支持断点续传）  
 2) 打印“已存在文件数/缺失文件数”（可直观看到是否在续传）  
-3) 下载完成后以 `local_files_only=True` 从本地目录启动训练，避免训练过程中再触发网络下载
+3) 若本地 snapshot 完整则以 `local_files_only=True` 启动训练，避免训练过程中再触发网络下载
 
 > 只有当 upstream `main` 更新导致 `refs/main` 指向新 commit 时，`snapshots/<sha>` 才会变化；pin 到 commit 可确保完全可复现。
 

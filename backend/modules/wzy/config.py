@@ -1,10 +1,9 @@
 """
-WZY Module Configuration - 历史、地理、其他
+WZY Module Configuration - 数学、物理
 
 This module handles:
-- 历史 (History)
-- 地理 (Geography)
-- 其他 (Other)
+- 数学 (Maths)
+- 物理 (Physics)
 """
 
 from functools import lru_cache
@@ -12,7 +11,7 @@ from typing import List
 from backend.core.base_config import BaseAppSettings
 
 class WZYSettings(BaseAppSettings):
-    """WZY模块配置 - 历史、地理、其他"""
+    """WZY模块配置 - 数学、物理"""
 
     # 模块特定配置
     MODULE_NAME: str = "wzy"

@@ -1,7 +1,7 @@
 """
 WZY Module - Agents Package
 
-Agent implementations for WZY module (History, Geography, Other subjects)
+Agent implementations for WZY module (Maths, Physics)
 """
 
 from .intake.question_intake_agent import QuestionIntakeAgent

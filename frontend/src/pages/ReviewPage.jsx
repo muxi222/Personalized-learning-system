@@ -7,7 +7,8 @@ import {
   Clock,
   ArrowRight,
   Trophy,
-  BookOpen
+  BookOpen,
+  Sparkles
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -36,12 +37,20 @@ export default function ReviewPage() {
     <div className="animate-fade-in">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="font-display text-3xl font-bold text-white mb-2">
-          复习计划
-        </h1>
-        <p className="text-slate-400">
-          基于艾宾浩斯遗忘曲线，推荐最佳复习时间
-        </p>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="font-display text-3xl font-bold text-white mb-2">
+              复习计划
+            </h1>
+            <p className="text-slate-400">
+              基于艾宾浩斯遗忘曲线，推荐最佳复习时间
+            </p>
+          </div>
+          <Link to="/companion" className="btn-primary inline-flex items-center gap-2">
+            <Sparkles className="w-4 h-4" />
+            让小书童带我复习
+          </Link>
+        </div>
       </div>
 
       {/* Filters */}

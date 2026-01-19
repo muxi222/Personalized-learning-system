@@ -1,0 +1,4 @@
+{"id":"rpj-1","type":"freeform","prompt":"英语：请用 3 句话解释现在完成时与一般过去时的区别，并给 2 个练习题。","reference":""}
+{"id":"rpj-2","type":"freeform","prompt":"语文：请用通俗语言解释“借景抒情”，并举一个简短例子。","reference":""}
+{"id":"rpj-3","type":"mcq","prompt":"政治：下列哪项属于我国公民的基本权利？A. 依法纳税 B. 受教育 C. 服兵役 D. 遵守宪法。只输出最终选项字母。","gold":"B","reference":"B"}
+

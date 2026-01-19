@@ -1,6 +1,6 @@
 """
 WZY Module - FastAPI Application Entry Point
-历史、地理、其他模块
+数学、物理
 """
 
 import logging
@@ -62,14 +62,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     description=f"""
-    ## WZY模块 - 历史、地理、其他学科
+    ## WZY模块 - 数学、物理
 
     智能错题分析与举一反三推荐系统
 
     ### 支持学科:
-    - 📜 历史 (History)
-    - 🗺️ 地理 (Geography)
-    - 📚 其他 (Other)
+    - 数学 (Maths)
+    - 物理 (Physics)
 
     ### 主要功能:
     - 📝 错题录入与管理
@@ -154,7 +153,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
-# Health check endpoint
+# Health check endpoint   
 @app.get("/health", tags=["Health"])
 async def health_check():
     """

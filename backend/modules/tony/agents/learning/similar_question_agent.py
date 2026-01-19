@@ -366,8 +366,10 @@ async def generate_guidance(state: SimilarQuestionState) -> Dict[str, Any]:
     logger.info(f"[generate_guidance] Generating guidance text")
 
     from backend.core.services.llm_service import get_llm_service
+    from backend.core.services.personal_model_service import get_personal_model_service
 
     llm = get_llm_service()
+    personal = get_personal_model_service(settings.MODULE_NAME)
 
     original_question = state.get("original_question", {})
     retrieved_questions = state.get("retrieved_questions", [])
@@ -410,12 +412,34 @@ async def generate_guidance(state: SimilarQuestionState) -> Dict[str, Any]:
         student_profile=profile_text or "暂无学生画像",
     )
 
-    guidance_text = await llm.generate(
-        prompt=prompt,
-        system_prompt="你是学习小书童，一位温暖有耐心的教学名师。",
-        temperature=0.7,
-        max_tokens=2000,
-    )
+    system_prompt = "你是学习小书童，一位温暖有耐心的教学名师。"
+    # Generation stage: prefer user's personal fine-tuned model when enabled; fallback to shared LLM.
+    if personal.enabled:
+        trace_id = f"similar_questions:{settings.MODULE_NAME}:{int(state.get('user_id') or 0)}:{int(state.get('question_id') or 0)}:{int(time.time())}"
+        logger.info("[generate_guidance] using personal model=%s trace_id=%s", personal.default_model, trace_id)
+        guidance_text = await personal.chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=2000,
+            trace_id=trace_id,
+            trace={
+                "endpoint": "similar-questions",
+                "user_id": int(state.get("user_id") or 0),
+                "question_id": int(state.get("question_id") or 0),
+                "retrieved_question_ids": list(state.get("retrieved_question_ids") or []),
+                "retrieval": list(state.get("retrieved_questions") or []),
+            },
+        )
+    else:
+        guidance_text = await llm.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=0.7,
+            max_tokens=2000,
+        )
 
     if not guidance_text:
         guidance_text = "这里有一些相关的练习题供你巩固！加油！💪"

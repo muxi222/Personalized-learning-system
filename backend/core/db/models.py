@@ -311,3 +311,54 @@ class MetricEvent(Base):
     user = relationship("User", backref="metric_events")
     question = relationship("Question", backref="metric_events")
     exam_correction = relationship("ExamCorrection", backref="metric_events")
+
+
+# =============================================================================
+# Companion / "小书童" (Tony first)
+#
+# We keep these tables module-agnostic so other modules can adopt the same contract later.
+# For student modules (rpj/xmx/wzy/wzm), we will only provide stub endpoints and type hints.
+# =============================================================================
+
+
+class CompanionConversation(Base):
+    """
+    A user-scoped conversation thread for the personal "小书童".
+    """
+
+    __tablename__ = "companion_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    module = Column(String(50), nullable=False, index=True)  # e.g. "tony"
+    title = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    user = relationship("User", backref="companion_conversations")
+    messages = relationship(
+        "CompanionMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="CompanionMessage.created_at",
+    )
+
+
+class CompanionMessage(Base):
+    """
+    A single message inside a conversation.
+
+    role: "system" | "user" | "assistant"
+    meta: optional retrieval/telemetry/debug payload (kept small).
+    """
+
+    __tablename__ = "companion_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("companion_conversations.id"), nullable=False, index=True)
+    role = Column(String(20), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    meta = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    conversation = relationship("CompanionConversation", back_populates="messages")

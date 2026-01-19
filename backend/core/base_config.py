@@ -6,6 +6,7 @@ Base Configuration - 所有模块共享的基础配置
 
 from functools import lru_cache
 from typing import Optional, List
+import os
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -124,6 +125,64 @@ class BaseAppSettings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_API_BASE: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4-turbo-preview"
+
+    # ============ Personal Model (OpenAI-compatible, e.g. vLLM) ============
+    # Course default: local vLLM server started by:
+    #   ./deploy/scripts/pipeline.sh serve-model --module tony up --runtime vllm
+    #
+    # This "personal model" is intended to behave like a user's own "小书童" (digital twin),
+    # and is used by the companion/chat features. It is intentionally separated from the
+    # generic OPENAI_* settings to avoid breaking other upstream LLM providers.
+    PERSONAL_MODEL_ENABLED: bool = False
+    PERSONAL_MODEL_API_BASE: str = "http://127.0.0.1:8001/v1"
+    # vLLM OpenAI server usually ignores the API key, but the OpenAI client requires a non-empty value.
+    PERSONAL_MODEL_API_KEY: str = "sk-local"
+    # Exposed by vLLM when started with `--lora-modules tony-dpo=...`
+    PERSONAL_MODEL_MODEL: str = "tony-dpo"
+    PERSONAL_MODEL_TIMEOUT_SECONDS: float = 60.0
+
+    def _env_for_module(self, key: str, module: Optional[str]) -> Optional[str]:
+        """
+        Read env var with module suffix:
+          KEY_<MODULE>, e.g. PERSONAL_MODEL_API_BASE_TONY
+        """
+        if not module:
+            return None
+        m = str(module).strip().upper()
+        if not m:
+            return None
+        return os.environ.get(f"{key}_{m}")
+
+    def personal_model_enabled_for(self, module: Optional[str]) -> bool:
+        v = self._env_for_module("PERSONAL_MODEL_ENABLED", module)
+        if v is None:
+            return bool(self.PERSONAL_MODEL_ENABLED)
+        s = str(v).strip().lower()
+        return s in {"1", "true", "yes", "y", "on"}
+
+    def personal_model_api_base_for(self, module: Optional[str]) -> str:
+        v = self._env_for_module("PERSONAL_MODEL_API_BASE", module)
+        return str(v).strip() if v else str(self.PERSONAL_MODEL_API_BASE)
+
+    def personal_model_api_key_for(self, module: Optional[str]) -> str:
+        v = self._env_for_module("PERSONAL_MODEL_API_KEY", module)
+        return str(v).strip() if v else str(self.PERSONAL_MODEL_API_KEY or "sk-local")
+
+    def personal_model_model_for(self, module: Optional[str]) -> str:
+        # Backward compatible alias: PERSONAL_MODEL_MODE_<MODULE> (some docs mistakenly use MODE)
+        v = self._env_for_module("PERSONAL_MODEL_MODEL", module)
+        if not v:
+            v = self._env_for_module("PERSONAL_MODEL_MODE", module)
+        return str(v).strip() if v else str(self.PERSONAL_MODEL_MODEL)
+
+    def personal_model_timeout_for(self, module: Optional[str]) -> float:
+        v = self._env_for_module("PERSONAL_MODEL_TIMEOUT_SECONDS", module)
+        if not v:
+            return float(self.PERSONAL_MODEL_TIMEOUT_SECONDS)
+        try:
+            return float(v)
+        except Exception:
+            return float(self.PERSONAL_MODEL_TIMEOUT_SECONDS)
 
     # Anthropic
     ANTHROPIC_API_KEY: Optional[str] = None

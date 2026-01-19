@@ -4,6 +4,7 @@ Learning Guidance API Endpoints
 """
 
 import logging
+import time
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -189,6 +190,7 @@ async def get_learning_plan(
     对应设计文档7.3节 - 长期记忆与个性化
     """
     from backend.core.services.llm_service import get_llm_service
+    from backend.core.services.personal_model_service import get_personal_model_service
     from backend.modules.tony.agents.prompts import LEARNING_PLAN_PROMPT
 
     # 获取学生画像
@@ -215,7 +217,8 @@ async def get_learning_plan(
     except Exception as _e:
         logger.debug(f"GraphRAG expansion skipped in learning-plan: {_e}")
 
-    # 生成学习计划
+    # 生成学习计划：优先使用用户个人模型（小书童），否则 fallback 到默认 LLMService
+    personal = get_personal_model_service(settings.MODULE_NAME)
     llm = get_llm_service()
 
     prompt = LEARNING_PLAN_PROMPT.format(
@@ -226,12 +229,35 @@ async def get_learning_plan(
         learning_goal=learning_goal or "提高整体学习成绩",
     )
 
-    plan_text = await llm.generate(
-        prompt=prompt,
-        system_prompt="你是学习小书童，一位贴心的学习规划师。",
-        temperature=0.7,
-        max_tokens=2000,
-    )
+    system_prompt = "你是学习小书童，一位贴心的学习规划师。"
+    t0 = time.monotonic()
+    if personal.enabled:
+        logger.info("[learning_plan] using personal model=%s user_id=%s", personal.default_model, user_id)
+        trace_id = f"learning_plan:{settings.MODULE_NAME}:{int(user_id)}:{int(time.time())}"
+        plan_text = await personal.chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=2000,
+            trace_id=trace_id,
+            trace={
+                "endpoint": "learning-plan",
+                "user_id": int(user_id),
+                "recommended_review_question_ids": list(recommended_ids),
+                "profile": profile,
+            },
+        )
+    else:
+        plan_text = await llm.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=0.7,
+            max_tokens=2000,
+        )
+    dt_ms = int((time.monotonic() - t0) * 1000)
+    logger.info("[learning_plan] ok user_id=%s dt_ms=%s plan_len=%s reco_ids=%s", user_id, dt_ms, len(plan_text or ""), len(recommended_ids))
 
     return LearningPlanResponse(
         plan_text=plan_text or "暂时无法生成学习计划，请稍后再试。",

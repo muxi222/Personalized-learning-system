@@ -82,6 +82,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - COMPANION_REQUIRE_SUBJECT_MODEL=${COMPANION_REQUIRE_SUBJECT_MODEL:-true}
     command: ["uvicorn", "backend.modules.default.main:app", "--host", "0.0.0.0", "--port", "6100"]
     networks:
       - learning-network
@@ -158,6 +159,7 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - COMPANION_REQUIRE_SUBJECT_MODEL=${COMPANION_REQUIRE_SUBJECT_MODEL:-true}
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
     command: ["uvicorn", "backend.modules.rpj.main:app", "--host", "0.0.0.0", "--port", "6001"]
     networks:
@@ -236,6 +238,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - COMPANION_REQUIRE_SUBJECT_MODEL=${COMPANION_REQUIRE_SUBJECT_MODEL:-true}
     command: ["uvicorn", "backend.modules.xmx.main:app", "--host", "0.0.0.0", "--port", "6002"]
     networks:
       - learning-network
@@ -313,6 +316,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - COMPANION_REQUIRE_SUBJECT_MODEL=${COMPANION_REQUIRE_SUBJECT_MODEL:-true}
     command: ["uvicorn", "backend.modules.wzy.main:app", "--host", "0.0.0.0", "--port", "6003"]
     networks:
       - learning-network
@@ -390,6 +394,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - COMPANION_REQUIRE_SUBJECT_MODEL=${COMPANION_REQUIRE_SUBJECT_MODEL:-true}
     command: ["uvicorn", "backend.modules.wzm.main:app", "--host", "0.0.0.0", "--port", "6004"]
     networks:
       - learning-network
@@ -467,6 +472,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - COMPANION_REQUIRE_SUBJECT_MODEL=${COMPANION_REQUIRE_SUBJECT_MODEL:-true}
     command: ["uvicorn", "backend.modules.tony.main:app", "--host", "0.0.0.0", "--port", "6005"]
     networks:
       - learning-network

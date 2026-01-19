@@ -1,0 +1,4 @@
+{"id":"wzy-1","type":"freeform","prompt":"数学：请解释“一元二次方程”的判别式含义，并给 2 道由易到难的练习题（含答案）。","reference":""}
+{"id":"wzy-2","type":"freeform","prompt":"物理：请解释“牛顿第三定律”，并举一个生活例子。","reference":""}
+{"id":"wzy-3","type":"mcq","prompt":"选择题：下列哪个是勾股定理的正确表达？A. a^2=b^2+c^2 B. a=b+c C. a^2+b^2=c^2 D. a^2-b^2=c^2。只输出最终选项字母。","gold":"C","reference":"C"}
+

@@ -32,12 +32,15 @@ class LLMService:
     def _init_clients(self):
         """Initialize LLM clients"""
         # OpenAI
-        if settings.OPENAI_API_KEY:
+        # Support OpenAI-compatible servers (e.g. local vLLM):
+        # - If OPENAI_API_BASE is set but OPENAI_API_KEY is not, we still initialize the client
+        #   with a dummy key to avoid "No client available" errors.
+        if settings.OPENAI_API_KEY or settings.OPENAI_API_BASE:
             try:
                 from openai import AsyncOpenAI
 
                 self._openai_client = AsyncOpenAI(
-                    api_key=settings.OPENAI_API_KEY,
+                    api_key=settings.OPENAI_API_KEY or "sk-local",
                     base_url=settings.OPENAI_API_BASE,
                 )
                 logger.info("Initialized OpenAI client")

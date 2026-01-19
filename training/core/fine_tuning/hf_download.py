@@ -75,6 +75,71 @@ def _model_cache_root(model_id: str) -> Optional[Path]:
     return hub_dir / f"models--{org}--{repo}"
 
 
+def _snapshot_missing_shards(snapshot_dir: Path) -> list[str]:
+    """
+    Return a list of missing shard filenames for a HF snapshot directory.
+    This is purely local/offline inspection (no Hub calls).
+    """
+    snapshot_dir = Path(snapshot_dir)
+    if not snapshot_dir.exists() or not snapshot_dir.is_dir():
+        return ["<snapshot_dir_not_found>"]
+    idx = snapshot_dir / "model.safetensors.index.json"
+    if idx.exists():
+        try:
+            data = json.loads(idx.read_text(encoding="utf-8"))
+            weights = data.get("weight_map") or {}
+            shard_files = sorted({Path(v).name for v in weights.values() if isinstance(v, str) and v})
+            missing = [f for f in shard_files if not (snapshot_dir / f).exists()]
+            return missing
+        except Exception:
+            return ["<failed_to_parse_index_json>"]
+    # Non-sharded forms: treat "model.safetensors"/"pytorch_model.bin" as the minimum.
+    if (snapshot_dir / "model.safetensors").exists() or (snapshot_dir / "pytorch_model.bin").exists():
+        return []
+    return ["<weights_missing>"]
+
+
+def _describe_cache_status(model_id: str, *, revision: Optional[str]) -> str:
+    """
+    Return a short human-readable summary about the local cache state for this model.
+    Useful to reassure users about resumable downloads and to debug incomplete shards.
+    """
+    root = _model_cache_root(model_id)
+    if root is None:
+        return "cache: <not_a_hf_repo_id>"
+    parts: list[str] = [f"cache_root={root}"]
+    rev = (revision or "").strip()
+    if rev:
+        ref = root / "refs" / rev
+        if ref.exists():
+            sha = ref.read_text(encoding="utf-8").strip()
+            parts.append(f"ref[{rev}]={sha or '<empty>'}")
+            if sha:
+                snap = root / "snapshots" / sha
+                if snap.exists():
+                    missing = _snapshot_missing_shards(snap)
+                    if not missing:
+                        parts.append("snapshot=complete")
+                    else:
+                        show = ", ".join(missing[:5])
+                        more = f" (+{len(missing)-5})" if len(missing) > 5 else ""
+                        parts.append(f"snapshot=incomplete missing={show}{more}")
+                else:
+                    parts.append("snapshot_dir_missing_for_ref")
+        else:
+            parts.append(f"ref[{rev}]=<missing>")
+    # Check for incomplete blob files (common marker for interrupted downloads).
+    blobs = root / "blobs"
+    if blobs.exists():
+        try:
+            inc = sorted(p.name for p in blobs.glob("*.incomplete"))
+            if inc:
+                parts.append(f"incomplete_blobs={len(inc)}")
+        except Exception:
+            pass
+    return " | ".join(parts)
+
+
 def _match_allow_patterns(path_in_repo: str, allow_patterns: list[str]) -> bool:
     # Mirror huggingface_hub allow_patterns behavior (glob-style matching).
     p = str(path_in_repo or "")
@@ -106,6 +171,78 @@ def _count_existing_missing_files(
         existing = 0
         for f in wanted:
             if (local_dir / f).exists():
+                existing += 1
+        missing = total - existing
+        return existing, missing, total
+    except Exception:
+        return existing_local, 0, None
+
+
+def _best_effort_snapshot_dir(model_id: str, *, revision: Optional[str]) -> Optional[Path]:
+    """
+    Return a snapshot dir even if incomplete (for progress reporting).
+    Preference:
+    1) refs/<revision> -> snapshots/<sha> if present
+    2) newest snapshots/<sha> directory if any
+    """
+    model_root = _model_cache_root(model_id)
+    if model_root is None:
+        return None
+    snaps = model_root / "snapshots"
+    if not snaps.exists():
+        return None
+    rev = (revision or "").strip()
+    if rev:
+        ref = model_root / "refs" / rev
+        try:
+            if ref.exists():
+                sha = ref.read_text(encoding="utf-8").strip()
+                if sha:
+                    p = snaps / sha
+                    if p.exists() and p.is_dir():
+                        return p
+        except Exception:
+            pass
+    try:
+        cands = [p for p in snaps.iterdir() if p.is_dir()]
+        if not cands:
+            return None
+        cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return cands[0]
+    except Exception:
+        return None
+
+
+def _count_existing_missing_in_hub_snapshot(
+    *, model_id: str, allow_patterns: list[str], revision: Optional[str]
+) -> tuple[int, int, Optional[int]]:
+    """
+    Best-effort progress counter using:
+    - remote repo file listing (HfApi.list_repo_files)
+    - local hub snapshot directory (refs/<revision> preferred, otherwise newest snapshot)
+    Returns (existing, missing, total) where total may be None if remote listing fails.
+    """
+    snap = _best_effort_snapshot_dir(model_id, revision=revision)
+    # local existing count (best-effort)
+    existing_local = 0
+    if snap is not None and snap.exists():
+        try:
+            existing_local = sum(1 for p in snap.rglob("*") if p.is_file())
+        except Exception:
+            existing_local = 0
+
+    try:
+        from huggingface_hub import HfApi
+
+        api = HfApi()
+        repo_files = api.list_repo_files(repo_id=model_id, revision=revision)
+        wanted = [f for f in repo_files if _match_allow_patterns(f, allow_patterns)]
+        total = len(wanted)
+        if snap is None:
+            return 0, total, total
+        existing = 0
+        for f in wanted:
+            if (snap / f).exists():
                 existing += 1
         missing = total - existing
         return existing, missing, total
@@ -299,7 +436,28 @@ def prefetch_model_snapshot(
     for workers in _workers_schedule(max_workers):
         for _ in range(3):
             attempt += 1
+            try:
+                print(f"🧭 Cache status (before): {_describe_cache_status(model_id, revision=revision)}")
+            except Exception:
+                pass
             print(f"⬇️  Prefetching model snapshot (attempt {attempt}) workers={workers} ...")
+            # Report existing/missing counts using hub snapshot (even when HF_MODEL_LOCAL_DIR is disabled).
+            try:
+                existing, missing, total = _count_existing_missing_in_hub_snapshot(
+                    model_id=model_id, allow_patterns=allow_patterns, revision=revision
+                )
+                if total is None:
+                    print(f"📦 Prefetch status: 已存在文件数={existing}（无法获取远端清单，无法计算缺失文件数）")
+                else:
+                    print(f"📦 Prefetch status: 已存在文件数={existing} / 缺失文件数={missing}（总计={total}）")
+                    # If we already have everything, skip the download attempt entirely.
+                    if missing <= 0 and total > 0:
+                        preferred = resolve_preferred_model_dir(model_id, revision=revision)
+                        if preferred is not None:
+                            print("✅ Prefetch skipped: snapshot already complete in local cache.")
+                            return preferred
+            except Exception:
+                pass
             try:
                 # cache_dir should point to HF hub cache root (pipeline.sh sets HF_HUB_CACHE)
                 kwargs = dict(
@@ -338,6 +496,10 @@ def prefetch_model_snapshot(
 
                     preferred = resolve_preferred_model_dir(model_id, revision=revision)
                     if preferred is not None:
+                        try:
+                            print(f"🧭 Cache status (after): {_describe_cache_status(model_id, revision=revision)}")
+                        except Exception:
+                            pass
                         return Path(local_dir)
 
                     # If we can compute missing, keep trying until it reaches 0.

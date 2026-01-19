@@ -4,7 +4,7 @@ Default Module - API Router
 """
 
 from fastapi import APIRouter
-from .endpoints import corrections, users, questions, ocr, learning, image_files
+from .endpoints import corrections, users, questions, ocr, learning, image_files, companion
 from .endpoints.stats import feedback as feedback_stats
 
 api_router = APIRouter()
@@ -18,6 +18,8 @@ api_router.include_router(ocr.router, prefix="/ocr", tags=["OCR"])
 api_router.include_router(image_files.router, tags=["Image Files"])
 # 学习建议（跨学科 + 可按学科转发）
 api_router.include_router(learning.router, prefix="/learning", tags=["Learning"])
+# 小书童（跨学科入口；Tony-first，按学科转发）
+api_router.include_router(companion.router, prefix="/companion", tags=["Companion"])
 # 反馈统计（跨学科）
 api_router.include_router(feedback_stats.router, prefix="/feedback", tags=["Feedback"])
 

@@ -2,17 +2,21 @@
 # =============================================================================
 # AI Learning Assistant - 多模块启动脚本 (Linux/Mac)
 #
-# 用法:
-#   ./start.sh                    # 启动所有服务 (包括 default 模块)
-#   ./start.sh api_default        # 启动 default 模块 API (跨学科查询)
-#   ./start.sh api_rpj            # 启动 RPJ 模块 API
-#   ./start.sh agent_rpj          # 启动 RPJ 模块 Agent Worker
-#   ./start.sh api_all            # 启动所有模块 API (包括 default)
-#   ./start.sh agent_all          # 启动所有模块 Agent Worker
-#   ./start.sh stop_default       # 停止 default 模块
-#   ./start.sh stop_rpj           # 停止 RPJ 模块
-#   ./start.sh stop_all           # 停止所有服务
-#   ./start.sh status             # 显示所有模块状态
+# 入口脚本:
+# - 本脚本负责“一键启动/批量启动/停止/状态查看/前端启动”
+# - 单模块独立启动（互不影响、Ctrl+C 只停当前模块）由 `start_module.sh` 执行：
+#     ./deploy/scripts/start.sh api_<module> / agent_<module> 会自动 `exec` 到 start_module.sh
+#
+# 常用用法（完整说明见：./deploy/scripts/start.sh help）:
+#   ./deploy/scripts/start.sh                    # 启动全部服务（API + Agent + 前端）
+#   ./deploy/scripts/start.sh api_default        # 独立启动某个模块的 API（示例：default）
+#   ./deploy/scripts/start.sh agent_rpj          # 独立启动某个模块的 Agent（示例：rpj）
+#   ./deploy/scripts/start.sh api_all            # 批量启动所有模块 API（在本脚本内等待，Ctrl+C 一起停）
+#   ./deploy/scripts/start.sh agent_all          # 批量启动所有模块 Agent（在本脚本内等待，Ctrl+C 一起停）
+#   ./deploy/scripts/start.sh frontend           # 仅启动前端
+#   ./deploy/scripts/start.sh status             # 查看所有模块/共享服务状态
+#   ./deploy/scripts/start.sh stop_<module>      # 停止某个模块的 API + Agent（示例：stop_tony）
+#   ./deploy/scripts/start.sh stop_all           # 停止全部服务（含前端）
 # =============================================================================
 
 set -e
@@ -326,6 +330,20 @@ load_env() {
     fi
 }
 
+# Default feature flags (can be overridden by .env / exported env)
+ensure_default_env() {
+    # By default, companion chat will require a subject-specific LoRA:
+    # - subject=history   -> tony-sft-history
+    # - subject=chemistry -> wzm-sft-chemistry
+    # If missing, backend will block and prompt user to train that subject LoRA.
+    #
+    # Users can disable (allow fallback to PERSONAL_MODEL_MODEL_<MODULE>):
+    #   export COMPANION_REQUIRE_SUBJECT_MODEL=false
+    if [ -z "${COMPANION_REQUIRE_SUBJECT_MODEL:-}" ]; then
+        export COMPANION_REQUIRE_SUBJECT_MODEL=true
+    fi
+}
+
 # 启动 Redis (如果本地运行)
 start_redis() {
     if command -v redis-server &> /dev/null; then
@@ -391,7 +409,7 @@ start_module_api() {
 
         log_error "${module} API 端口 ${port} 已被占用！"
         log_error "占用进程: ${OCCUPYING_NAME} (PID: ${OCCUPYING_PID})"
-        log_info "请先停止占用端口的进程: ./start.sh stop_${module}"
+        log_info "请先停止占用端口的进程: ./deploy/scripts/start.sh stop_${module}"
         return 1
     fi
 
@@ -601,37 +619,84 @@ show_status() {
 
 # 显示帮助
 show_help() {
-    echo ""
-    echo "AI Learning Assistant - 多模块启动脚本"
-    echo ""
-    echo "用法: $0 [命令]"
-    echo ""
-    echo "模块命令:"
-    echo "  api_<module>     启动指定模块的 API (例: api_default, api_rpj, api_tony)"
-    echo "  agent_<module>   启动指定模块的 Agent Worker (例: agent_rpj)"
-    echo "  stop_<module>    停止指定模块 (例: stop_default, stop_rpj)"
-    echo ""
-    echo "批量命令:"
-    echo "  api_all          启动所有模块 API (包括 default)"
-    echo "  agent_all        启动所有模块 Agent Worker"
-    echo "  all              启动所有服务 (API + Agent + 前端，包括 default)"
-    echo "  stop_all         停止所有服务"
-    echo ""
-    echo "其他命令:"
-    echo "  frontend         仅启动前端服务"
-    echo "  status           显示所有模块状态"
-    echo "  help             显示此帮助"
-    echo ""
-    echo "可用模块:"
+    cat <<'EOF'
+
+AI Learning Assistant - 多模块启动脚本
+
+用法:
+  ./deploy/scripts/start.sh [命令]
+  ./deploy/scripts/start.sh help
+
+快速开始（推荐学生按这个顺序）:
+  1) 一键启动全部（最省心）:
+     ./deploy/scripts/start.sh
+     - 前端: http://localhost:8000
+     - API 文档: http://localhost:<端口>/docs（端口见下表）
+
+  2) 只启动某一个模块（互不影响，适合并行开发/调试）:
+     ./deploy/scripts/start.sh api_rpj
+     ./deploy/scripts/start.sh agent_rpj
+
+启动命令（Start）:
+  all / (空)         启动全部服务：所有模块 API + 所有模块 Agent + 前端
+  api_<module>       独立启动某模块 API（会 exec 到 start_module.sh，Ctrl+C 只停该模块）
+  agent_<module>     独立启动某模块 Agent（会 exec 到 start_module.sh，Ctrl+C 只停该模块）
+  api_all            批量启动所有模块 API（本脚本内等待模式，Ctrl+C 一起停）
+  agent_all          批量启动所有模块 Agent（本脚本内等待模式，Ctrl+C 一起停）
+  frontend           仅启动前端（本脚本内等待模式，Ctrl+C 停前端）
+
+停止命令（Stop）:
+  stop_<module>      停止某模块：API + Agent（示例：stop_tony）
+  stop_all           停止全部服务（含前端；并 best-effort 清理 uvicorn/celery 残留进程）
+
+查看状态（Status）:
+  status             显示所有模块 API/Agent、Redis、前端的运行状态
+
+帮助（Help）:
+  help | --help | -h 显示本帮助
+
+重要行为说明（非常适合学生理解）:
+  - “独立启动模式”（api_<module>/agent_<module>）:
+    - 会交给 ./deploy/scripts/start_module.sh 启动并等待
+    - Ctrl+C 只会停止当前这个模块的服务，不影响其他终端里启动的服务
+  - “批量等待模式”（all/api_all/agent_all/frontend）:
+    - 本脚本会启动多个进程并等待
+    - Ctrl+C 会停止“本次启动的子进程”，避免误杀其他终端的服务
+  - stop_<module>/stop_all:
+    - 通过 pids/*.pid 定位并停止进程；stop_all 还会尝试清理残留 celery/uvicorn
+
+日志与 PID（排错必看）:
+  - 日志目录: ./logs/
+    - API:   logs/<module>_api.log
+    - Agent: logs/<module>_agent.log
+    - 前端:  logs/frontend.log
+  - PID 目录: ./pids/
+
+常见环境变量（可写入 .env 或在启动前 export）:
+  - HOST: API 绑定地址（默认 0.0.0.0）
+  - DATABASE_URL / Redis 等：按项目 .env 约定（如存在会自动加载）
+
+提示:
+  - 依赖要求: Conda 环境名必须为 312_edu；前端需要 Node.js；Agent 需要 Redis 可用
+  - default 模块不提供 Agent Worker（无 celery_app）
+
+EOF
+
+    echo "可用模块（API 端口 / 学科）:"
     for module in "${MODULES[@]}"; do
-        local port=$(get_module_port "$module")
-        local subjects=$(get_module_subjects "$module")
-        echo "  - ${module}: 端口 ${port} (${subjects})"
+        local port
+        port=$(get_module_port "$module")
+        local subjects
+        subjects=$(get_module_subjects "$module")
+        printf "  - %-8s  port=%-5s  %s\n" "${module}" "${port}" "${subjects}"
     done
     echo ""
-    echo "注意事项:"
-    echo "  - default 模块 (端口 6100) 用于跨学科查询和图片转发"
-    echo "  - 其他模块负责各自学科的具体业务逻辑"
+    echo "支持 Agent Worker 的模块（default 除外）:"
+    echo "  - ${AGENT_MODULES[*]}"
+    echo ""
+    echo "相关脚本（可选）:"
+    echo "  - MCP 服务（Tony retrieval-mcp）: ./deploy/scripts/start_mcp.sh help"
+    echo "  - 训练/构建/Serving 管线:          ./deploy/scripts/pipeline.sh help"
     echo ""
 }
 
@@ -648,6 +713,7 @@ main() {
             check_dependencies
             setup_conda
             load_env
+            ensure_default_env
             setup_data_dirs
             start_redis
             init_database
@@ -672,6 +738,7 @@ main() {
             check_dependencies
             setup_conda
             load_env
+            ensure_default_env
             start_redis
             start_all_agent
             log_info "按 Ctrl+C 退出并停止所有 Agent Worker"
@@ -758,6 +825,7 @@ main() {
                 check_dependencies
                 setup_conda
                 load_env
+            ensure_default_env
                 setup_data_dirs
                 start_redis
                 init_database

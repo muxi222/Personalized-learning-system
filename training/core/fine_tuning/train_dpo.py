@@ -21,7 +21,7 @@ from typing import Optional
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, TrainingArguments, BitsAndBytesConfig
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
 from training.core.fine_tuning.hf_download import prefetch_model_snapshot, resolve_preferred_model_dir
@@ -144,7 +144,18 @@ def setup_model_and_tokenizer(cfg: dict):
     if preferred is not None:
         model_ref = preferred
 
-    compute_dtype = getattr(torch, cfg["bnb_4bit_compute_dtype"])
+    compute_dtype_name = str(cfg.get("bnb_4bit_compute_dtype") or "bfloat16")
+    if compute_dtype_name == "bfloat16" and hasattr(torch.cuda, "is_bf16_supported") and not torch.cuda.is_bf16_supported():
+        compute_dtype_name = "float16"
+    compute_dtype = getattr(torch, compute_dtype_name)
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available, but this DPO/ORPO recipe uses 4-bit quantization + device_map='auto'.\n"
+            "Please run on a machine with an NVIDIA GPU + CUDA, or switch to a smaller base model.\n"
+            f"- model: {cfg['model_name']}\n"
+            f"- use_4bit: {cfg.get('use_4bit')}\n"
+        )
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=cfg["use_4bit"],
         bnb_4bit_quant_type=cfg["bnb_4bit_quant_type"],
@@ -152,13 +163,66 @@ def setup_model_and_tokenizer(cfg: dict):
         bnb_4bit_use_double_quant=cfg["use_nested_quant"],
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_ref,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-        local_files_only=bool(preferred is not None),
-    )
+    def _load_model(device_map="auto", **extra_kwargs):
+        return AutoModelForCausalLM.from_pretrained(
+            model_ref,
+            quantization_config=bnb_config,
+            device_map=device_map,
+            trust_remote_code=True,
+            local_files_only=bool(preferred is not None),
+            **extra_kwargs,
+        )
+
+    try:
+        model = _load_model()
+    except ValueError as e:
+        msg = str(e) or ""
+        if "dispatched on the cpu or the disk" in msg.lower():
+            offload_dir = Path(os.environ.get("SFT_OFFLOAD_DIR") or "./data/offload").resolve()
+            offload_dir.mkdir(parents=True, exist_ok=True)
+            print("⚠️  GPU VRAM seems insufficient for the quantized model with device_map='auto'.")
+            print("⚠️  Retrying with CPU offload enabled + custom device_map (may be slower).")
+            print(f"⚠️  Offload dir: {offload_dir}")
+            try:
+                from accelerate import infer_auto_device_map, init_empty_weights
+            except Exception as ie:
+                raise RuntimeError(
+                    "GPU VRAM is currently not enough to load the quantized model while keeping all modules on GPU.\n"
+                    "This often happens when a vLLM server is already running and occupies most VRAM.\n\n"
+                    "Fix options:\n"
+                    "1) Stop the running model server, then retry training.\n"
+                    "2) Or train on a different GPU by setting CUDA_VISIBLE_DEVICES.\n"
+                    "3) Or install accelerate and retry to enable safe CPU offload:\n"
+                    "   pip install -U accelerate\n\n"
+                    f"original_error={repr(e)}\n"
+                    f"accelerate_import_error={repr(ie)}\n"
+                ) from e
+
+            free_b, _total_b = torch.cuda.mem_get_info()
+            free_gib = max(1, int((free_b / (1024**3)) - 2))
+            max_memory = {0: f"{free_gib}GiB", "cpu": "128GiB"}
+
+            cfg_obj = AutoConfig.from_pretrained(
+                model_ref,
+                trust_remote_code=True,
+                local_files_only=bool(preferred is not None),
+            )
+            with init_empty_weights():
+                empty_model = AutoModelForCausalLM.from_config(cfg_obj, trust_remote_code=True)
+            no_split = getattr(empty_model, "_no_split_modules", None) or []
+            device_map = infer_auto_device_map(
+                empty_model,
+                max_memory=max_memory,
+                no_split_module_classes=no_split,
+            )
+            model = _load_model(
+                device_map=device_map,
+                max_memory=max_memory,
+                llm_int8_enable_fp32_cpu_offload=True,
+                offload_folder=str(offload_dir),
+            )
+        else:
+            raise
     model.config.use_cache = False
 
     tokenizer = AutoTokenizer.from_pretrained(

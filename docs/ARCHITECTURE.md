@@ -193,6 +193,21 @@ flowchart TB
   Serve --> Agents
 ```
 
+### Personal model (“小书童”) integration
+
+When enabled, some Tony endpoints will call the user’s **personal fine-tuned model** (served by vLLM, OpenAI-compatible):
+- Service wrapper: `backend/core/services/personal_model_service.py`
+- Per-module env vars: `PERSONAL_MODEL_ENABLED_<MODULE>`, `PERSONAL_MODEL_API_BASE_<MODULE>`, `PERSONAL_MODEL_MODEL_<MODULE>`
+- Tony-first business usage:
+  - companion chat: `backend/modules/tony/api/endpoints/companion/chat.py`
+  - learning-plan: `backend/modules/tony/api/endpoints/learning/guidance.py`
+  - similar-questions generation: `backend/modules/tony/agents/learning/similar_question_agent.py`
+
+Trace logging (prompt/retrieval/output to jsonl; default ON):
+- `./logs/trace_personal_model_<module>.jsonl`
+- Disable: `export PERSONAL_MODEL_TRACE_ENABLED=false`
+- Docs: `docs/PERSONALIZATION_SYSTEM.md`
+
 ### Source layout (important folders)
 
 - `backend/core/`: shared schemas/services/crud/db

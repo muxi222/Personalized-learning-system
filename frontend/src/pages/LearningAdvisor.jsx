@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import {
   Brain,
   Target,
@@ -143,6 +144,14 @@ export default function LearningAdvisor() {
               <option key={key} value={key}>{name}</option>
             ))}
           </select>
+
+          <Link
+            to="/companion"
+            className="btn-primary inline-flex items-center gap-2"
+          >
+            <Sparkles className="w-4 h-4" />
+            问小书童
+          </Link>
         </div>
       </div>
 

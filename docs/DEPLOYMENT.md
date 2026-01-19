@@ -50,8 +50,19 @@ Recommended end-to-end (Tony) flow:
 # 4) Preference optimization (DPO) — optional, requires preference pairs
 ./deploy/scripts/pipeline.sh train-dpo --module tony
 
-# 5) Serve model (vLLM docker compose)
+# 5) Serve model (vLLM, OpenAI-compatible; per-module and all)
 ./deploy/scripts/pipeline.sh serve-model --module tony up
+./deploy/scripts/pipeline.sh serve-model --module all up
+```
+
+Note (vLLM / transformers>=4.44):
+- If the model tokenizer does not define a `chat_template`, `/v1/chat/completions` will return 400.
+- Fix: inject a ChatML template at vLLM startup and restart the service:
+
+```bash
+./deploy/scripts/pipeline.sh serve-model --module tony down
+export VLLM_CHAT_TEMPLATE_TONY=./deploy/vllm/chat_templates/template_chatml.jinja
+./deploy/scripts/pipeline.sh serve-model --module tony up --runtime vllm
 ```
 
 ### Ports & modules
@@ -263,19 +274,116 @@ Outputs (default):
 Operational notes:
 - DPO requires preference pairs; if your preference dataset is empty, DPO training will not be meaningful.
 
-### Model serving (vLLM, Tony)
+### Model serving (vLLM, per-module)
 
-Start a local OpenAI-compatible endpoint using docker compose:
+Paths convention:
+- Base model cache (HuggingFace Hub, shared): `/home/dataset-assist-0/data/work/.cache/huggingface/hub/`
+- Fine-tuning outputs (per-module, in repo): `./data/training/<module>/checkpoints/`
+
+Start a local OpenAI-compatible endpoint using local vLLM (default):
 
 ```bash
 ./deploy/scripts/pipeline.sh serve-model --module tony up
 ```
+
+Prefetch / resume base model download into the unified classroom HF cache (recommended on first run):
+
+```bash
+./deploy/scripts/pipeline.sh fetch-model --module tony
+```
+
+Unified HF cache path (used by training + `fetch-model` + `serve-model`):
+- `/home/dataset-assist-0/data/work/.cache/huggingface/hub/`
 
 Stop / logs:
 
 ```bash
 ./deploy/scripts/pipeline.sh serve-model --module tony down
 ./deploy/scripts/pipeline.sh serve-model --module tony logs
+```
+
+### Model endpoint evaluation (OpenAI-compatible)
+
+Once the model server is running, evaluate the served model via OpenAI-compatible requests:
+
+```bash
+./deploy/scripts/pipeline.sh eval-model --module tony
+./deploy/scripts/pipeline.sh eval-model --module all
+```
+
+Reports:
+- `data/training/<module>/eval/model_eval_report.json`
+- (Tony) `data/training/tony/eval/retrieval_eval_report.json` (retrieval precision/recall/hit@k; merged into model report)
+
+Verify:
+
+```bash
+curl http://127.0.0.1:8001/v1/models
+```
+
+Note: some OpenAI-compatible servers (vLLM + transformers>=4.44) may reject `/v1/chat/completions` if the tokenizer has no `chat_template`.
+Our evaluator will automatically fall back to `/v1/completions` in that case, so `eval-model` still works without changing your vLLM launch flags.
+
+Default ports:
+- tony: `8001`
+- rpj: `8002`
+- xmx: `8003`
+- wzy: `8004`
+- wzm: `8005`
+
+Override per-module port:
+
+```bash
+export VLLM_PORT_TONY=8001
+```
+
+LoRA auto-discovery (by convention):
+- `data/training/<module>/checkpoints/dpo_lora/`  -> `<module>-dpo`
+- `data/training/<module>/checkpoints/sft_lora/<subject>/` -> `<module>-sft-<subject>`
+
+#### Backend integration: personal model (“小书童”)
+
+Companion uses module-scoped env vars:
+
+```bash
+export PERSONAL_MODEL_ENABLED_TONY=true
+export PERSONAL_MODEL_API_BASE_TONY=http://127.0.0.1:8001/v1
+export PERSONAL_MODEL_MODEL_TONY=tony-dpo
+```
+
+Other modules follow the same pattern (example):
+
+```bash
+export PERSONAL_MODEL_ENABLED_RPJ=true
+export PERSONAL_MODEL_API_BASE_RPJ=http://127.0.0.1:8002/v1
+export PERSONAL_MODEL_MODEL_RPJ=rpj-dpo
+```
+
+Subject-specific LoRA routing (recommended; default ON):
+- Backend will prefer `<module>-sft-<subject>` when subject is selected in the UI (e.g. `tony-sft-history`).
+- If the subject LoRA is missing, requests are blocked when this flag is enabled:
+
+```bash
+export COMPANION_REQUIRE_SUBJECT_MODEL=true
+```
+
+To allow fallback during development:
+
+```bash
+export COMPANION_REQUIRE_SUBJECT_MODEL=false
+```
+
+#### End-to-end closed-loop (Tony)
+
+With all switches enabled, Tony supports a closed loop:
+- **小书童对话**: DB memory + Hybrid retrieval (FAISS+BM25) + optional GraphRAG → personal model (vLLM LoRA).
+- **学习建议/学习计划**: DB review set + optional GraphRAG → personal model (preferred) / shared LLM fallback.
+- **举一反三**: MCP retrieval (or local vector store fallback) + optional GraphRAG → personal model (preferred) / shared LLM fallback.
+
+Debug logging:
+
+```bash
+export PERSONAL_MODEL_LOG_VERBOSE=true
 ```
 
 Then point backend LLM settings to it (example):

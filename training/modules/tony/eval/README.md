@@ -50,6 +50,22 @@ python training/modules/tony/eval/metrics_from_db.py --db ./data/sqlite/app.db
 python training/modules/tony/eval/retrieval_hit_rate.py --db ./data/sqlite/app.db --k 5 --max-questions 200
 ```
 
+### Model serving eval (OpenAI-compatible, e.g. vLLM)
+
+This repo also provides a lightweight **model endpoint** evaluation that many teams use in practice:
+- send a curated prompt set to `/v1/chat/completions`
+- compute basic automatic metrics (MCQ accuracy / char-F1)
+- optionally use a rubric judge model (LLM-as-a-judge) to score tutoring quality
+
+Run (requires `./deploy/scripts/pipeline.sh serve-model --module tony up` already running):
+
+```bash
+./deploy/scripts/pipeline.sh eval-model --module tony
+```
+
+The report is written to:
+- `data/training/tony/eval/model_eval_report.json`
+
 ### Manual labels format (optional)
 Create a file like `data/training/tony/eval/retrieval_labels.jsonl`:
 

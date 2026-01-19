@@ -1,0 +1,4 @@
+{"id":"wzm-1","type":"freeform","prompt":"化学：解释“酸碱中和反应”的本质，并给 2 个生活中的例子。","reference":""}
+{"id":"wzm-2","type":"freeform","prompt":"请用表格总结常见离子（Na+、Cl-、H+、OH-）的检验方法与现象。","reference":""}
+{"id":"wzm-3","type":"mcq","prompt":"选择题：下列哪种物质属于酸？A. NaOH B. HCl C. NaCl D. H2O。只输出最终选项字母。","gold":"B","reference":"B"}
+

@@ -23,11 +23,32 @@ import torch
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
+    AutoConfig,
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+# Dependency compatibility guard (keep the error actionable).
+#
+# Qwen3 models require a recent transformers that recognizes model_type="qwen3".
+# Verified working set in this repo's Python 3.12 env (312_edu):
+#   transformers>=4.57.0
+#   peft>=0.18.1
+#   trl>=0.27.0
+try:
+    import transformers as _tfm
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+except Exception as e:
+    raise RuntimeError(
+        "Fine-tuning dependency mismatch detected (failed to import transformers/peft).\n\n"
+        "Fix (recommended set for Qwen3):\n"
+        "  pip install -U 'transformers>=4.57.0' 'peft>=0.18.1' 'trl>=0.27.0'\n\n"
+        "Debug:\n"
+        f"  transformers_version={getattr(_tfm, '__version__', 'unknown')}\n"
+        f"  original_error={repr(e)}\n"
+    ) from e
+
 from trl import SFTTrainer
 
 
@@ -120,7 +141,25 @@ def setup_model_and_tokenizer(config: dict):
         print(f"📦 Using local model dir: {preferred}")
         model_ref = preferred
 
-    compute_dtype = getattr(torch, str(config["bnb_4bit_compute_dtype"]))
+    # bfloat16 is not supported on some GPUs; fall back to fp16 automatically.
+    compute_dtype_name = str(config.get("bnb_4bit_compute_dtype") or "bfloat16")
+    if compute_dtype_name == "bfloat16" and hasattr(torch.cuda, "is_bf16_supported") and not torch.cuda.is_bf16_supported():
+        compute_dtype_name = "float16"
+    compute_dtype = getattr(torch, compute_dtype_name)
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available, but this SFT recipe uses 4-bit quantization + device_map='auto' (QLoRA).\n"
+            "Please run on a machine with an NVIDIA GPU + CUDA, or switch to a smaller base model.\n"
+            f"- model: {config['model_name']}\n"
+            f"- use_4bit: {config.get('use_4bit')}\n"
+        )
+    try:
+        p = torch.cuda.get_device_properties(torch.cuda.current_device())
+        vram_gb = p.total_memory / (1024**3)
+        print(f"🖥️  CUDA device: {p.name} (VRAM={vram_gb:.1f} GB)")
+    except Exception:
+        pass
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=bool(config["use_4bit"]),
         bnb_4bit_quant_type=str(config["bnb_4bit_quant_type"]),
@@ -128,13 +167,73 @@ def setup_model_and_tokenizer(config: dict):
         bnb_4bit_use_double_quant=bool(config["use_nested_quant"]),
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_ref,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-        local_files_only=bool(preferred is not None),
-    )
+    def _load_model(device_map="auto", **extra_kwargs):
+        return AutoModelForCausalLM.from_pretrained(
+            model_ref,
+            quantization_config=bnb_config,
+            device_map=device_map,
+            trust_remote_code=True,
+            local_files_only=bool(preferred is not None),
+            **extra_kwargs,
+        )
+
+    try:
+        model = _load_model()
+    except ValueError as e:
+        msg = str(e) or ""
+        # transformers/bnb guard: when GPU VRAM is not enough, parts may be dispatched to CPU/disk.
+        # Enable FP32 CPU offload explicitly and retry (best-effort).
+        if "dispatched on the cpu or the disk" in msg.lower():
+            offload_dir = Path(os.environ.get("SFT_OFFLOAD_DIR") or "./data/offload").resolve()
+            offload_dir.mkdir(parents=True, exist_ok=True)
+            print("⚠️  GPU VRAM seems insufficient for the quantized model with device_map='auto'.")
+            print("⚠️  Retrying with CPU offload enabled + custom device_map (may be slower).")
+            print(f"⚠️  Offload dir: {offload_dir}")
+            # NOTE: bitsandbytes 4bit requires a *custom* device_map when offloading,
+            # `device_map="auto"` is not sufficient (will raise the same error again).
+            try:
+                from accelerate import infer_auto_device_map, init_empty_weights
+            except Exception as ie:
+                raise RuntimeError(
+                    "GPU VRAM is currently not enough to load the quantized model while keeping all modules on GPU.\n"
+                    "This often happens when a vLLM server is already running and occupies most VRAM.\n\n"
+                    "Fix options:\n"
+                    "1) Stop the running model server, then retry training:\n"
+                    "   ./deploy/scripts/pipeline.sh serve-model --module tony down\n"
+                    "2) Or train on a different GPU by setting CUDA_VISIBLE_DEVICES.\n"
+                    "3) Or install accelerate and retry to enable safe CPU offload:\n"
+                    "   pip install -U accelerate\n\n"
+                    f"original_error={repr(e)}\n"
+                    f"accelerate_import_error={repr(ie)}\n"
+                ) from e
+
+            # Estimate per-device memory (prefer free VRAM to avoid immediate OOM).
+            free_b, total_b = torch.cuda.mem_get_info()
+            free_gib = max(1, int((free_b / (1024**3)) - 2))  # keep some headroom
+            max_memory = {0: f"{free_gib}GiB", "cpu": "128GiB"}
+
+            cfg = AutoConfig.from_pretrained(
+                model_ref,
+                trust_remote_code=True,
+                local_files_only=bool(preferred is not None),
+            )
+            with init_empty_weights():
+                empty_model = AutoModelForCausalLM.from_config(cfg, trust_remote_code=True)
+            no_split = getattr(empty_model, "_no_split_modules", None) or []
+            device_map = infer_auto_device_map(
+                empty_model,
+                max_memory=max_memory,
+                no_split_module_classes=no_split,
+            )
+
+            model = _load_model(
+                device_map=device_map,
+                max_memory=max_memory,
+                llm_int8_enable_fp32_cpu_offload=True,
+                offload_folder=str(offload_dir),
+            )
+        else:
+            raise
     model.config.use_cache = False
     model.config.pretraining_tp = 1
 

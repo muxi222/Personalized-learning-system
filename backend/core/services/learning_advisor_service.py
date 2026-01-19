@@ -434,7 +434,8 @@ class LearningAdvisorService:
             "streak_days": profile.streak_days,
         }
 
-        # 使用 LLM 生成个性化点评
+        # 使用 LLM 生成个性化点评（默认走上游 LLMService）。
+        # Tony 小书童会在模块级 endpoint 中接入个人模型（vLLM），避免这里强绑定到某个模块。
         llm = get_llm_service()
         prompt = f"""
 作为学习小书童，请根据以下学习数据，为学生生成一份温暖鼓励的学习总结:

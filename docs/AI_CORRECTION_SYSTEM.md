@@ -5,6 +5,63 @@
 > 从整体架构、模块化工程、训练/服务化选型、以及 AI 批改与错题本/学习建议/复习的整合视角，请以主设计文档为准：
 > - `docs/AI_learning_assistant_design.md`
 
+## 0. 逐节严审（Repo Reality Audit）
+
+本节用于把本文的 **每一条 API、路径、表字段、文件命名规则** 与代码逐条对照，并标注状态：
+
+- **已验证**：与代码实现一致（附代码位置）
+- **待补充**：文档缺失关键约束/字段/行为（需要补文档）
+- **待修正**：文档与代码不一致（要么改文档，要么改代码；本文先以“真实代码”为准）
+
+### 0.1 严审结论摘要（高优先级）
+
+- **已验证**：批改入口 `POST /api/v1/ocr/analyze` 的落盘与入库逻辑（hash 命名、ExamCorrection、错题自动入库）。实现：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`
+- **已验证**：批改历史 `GET/DELETE /api/v1/corrections...`。实现：`backend/modules/tony/api/endpoints/ai_correction/corrections.py`
+- **已验证**：批注图片访问（by `correction_id`）在 default 模块与学科模块均有实现：
+  - default：`backend/modules/default/api/endpoints/ocr.py`
+  - tony：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`
+- **待修正（重要）**：同一个批注图片 URL 的 **base 生成存在两套逻辑**：
+  - `POST /api/v1/ocr/analyze` 返回的 `corrected_image_url` 默认指向 default（6100）或 `PUBLIC_API_BASE_URL`
+  - `GET /api/v1/corrections` 返回的 `original_image_url/corrected_image_url` 默认指向当前模块（如 tony:6005）
+  - 代码位置：`backend/modules/tony/api/endpoints/ai_correction/ocr.py` vs `backend/modules/tony/api/endpoints/ai_correction/corrections.py`
+- **待修正（重要）**：AI 批改自动入库的错题目前写入 `Question.image_urls=["/api/v1/ocr/images/questions/{user_id}/{subject}/{filename}"]`（旧式 URL）。
+  - 该 URL 在 “前端 proxy 模式” 下容易造成图片展示不一致/不可访问（因为 default 模块不提供该旧式路径）。
+  - 代码位置：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`（写入 image_urls 与提供 `/ocr/images/{file_type}/...`）
+  - 推荐方向：逐步迁移到 `ImageFile.id` 的统一访问：`GET /api/v1/image-files/{image_id}/content`（default 模块已提供）
+
+### 0.2 逐条核对清单（本文涉及的“规则项”）
+
+**API/路径规则（逐条）**：
+
+| 规则项 | 状态 | Repo Reality（代码位置） |
+|---|---|---|
+| `POST /api/v1/ocr/analyze` | 已验证 | `backend/modules/tony/api/endpoints/ai_correction/ocr.py` |
+| `GET /api/v1/corrections` | 已验证 | `backend/modules/tony/api/endpoints/ai_correction/corrections.py` |
+| `GET /api/v1/corrections/{id}` | 已验证 | 同上 |
+| `GET /api/v1/corrections/statistics/{period}` | 已验证 | 同上 |
+| `DELETE /api/v1/corrections/{id}` | 已验证 | 同上 |
+| `GET /api/v1/ocr/images/corrections/{correction_id}/{image_type}` | 已验证 | default：`backend/modules/default/api/endpoints/ocr.py`；tony：`backend/modules/tony/api/endpoints/ai_correction/ocr.py` |
+| `GET /api/v1/ocr/images/{file_type}/{user_id}/{subject}/{filename}` | 已验证（tony）/ 待补充（default） | tony：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`（default 未提供同名路径） |
+| `GET /api/v1/image-files/{image_id}/content` | 已验证 | `backend/modules/default/api/endpoints/image_files.py` |
+
+**数据库表字段规则（本文提到的字段）**：
+
+| 表/字段 | 状态 | Repo Reality（代码位置） |
+|---|---|---|
+| `ExamCorrection.*`（subject/grade/exam_title/original_image_id/corrected_image_id/total_score/max_score/accuracy_rate/question_count/correct_count/wrong_count/overall_analysis/weak_points/improvement_suggestions/questions_detail/created_at/updated_at） | 已验证 | `backend/core/db/models.py`（`ExamCorrection`） |
+| `Question.exam_correction_id/source/source_description` | 已验证 | `backend/core/db/models.py`（`Question`） |
+| `QuestionSourceEnum.manual/ai_correction` | 已验证（值）/ 待修正（注释文字） | `backend/core/db/models.py`（`QuestionSourceEnum`） |
+| `ImageFile.file_hash/user_id/file_type/subject/file_path/reference_count/image_type/original_image_id` | 已验证 | `backend/core/db/models.py`（`ImageFile`） |
+
+**文件命名与落盘规则（逐条）**：
+
+| 规则项 | 状态 | Repo Reality（代码位置） |
+|---|---|---|
+| 用户目录名：`{sanitize(username)[:50]}_{sanitize(email)[:50]}` | 已验证 | `backend/core/utils/file_utils.py` |
+| 原始试卷：`data/uploads/<user>/corrections/<subject>/{file_hash[:32]}.{ext}` | 已验证 | `backend/modules/tony/api/endpoints/ai_correction/ocr.py` |
+| 批改后试卷：`data/uploads/<user>/corrections/<subject>/{corrected_hash[:32]}.png` | 已验证 | 同上 |
+| 错题图：`data/uploads/<user>/questions/<subject>/{task_id}_q{num}.{ext}`（当前复制整张试卷） | 已验证 | 同上 |
+
 ## 1. 概述
 
 AI批注历史系统是学习小书童的核心功能之一，支持用户上传试卷图片，通过AI自动批改、打分、分析，并将结果持久化存储。系统自动识别错题并导入错题本，同时提供多维度的学习统计分析。
@@ -48,6 +105,8 @@ AI分析：题目、答案、知识点、错因
 4. 关联批注记录：`exam_correction_id`
 5. 复制图片到错题专用目录：`data/uploads/<user>/questions/<subject>/`
 6. 提取知识点作为标签
+
+**状态**：已验证（Tony）。实现：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`（创建 `ExamCorrection` 后扫描 `is_correct=false` 并写入 `Question(source=AI_CORRECTION)`）
 
 **数据示例**：
 ```python
@@ -94,11 +153,18 @@ data/uploads/
     └── questions/
 ```
 
+**状态**：已验证（Tony）。实现：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`
+- 原始试卷命名：`{file_hash[:32]}.{ext}`（hash 去重 + 复用）
+- 批改后试卷命名：`{corrected_hash[:32]}.png`
+- 错题图命名：`{task_id}_q{question_number}.{ext}`（当前实现复制整张试卷；后续可优化为裁剪）
+
 **目录命名规则**：
 - 格式：`{username}_{email}`
 - 示例：`student001_student@example.com`
 - 清理：移除文件系统不安全字符
 - 长度限制：最多50字符
+
+**状态**：已验证。实现：`backend/core/utils/file_utils.py`（`sanitize_filename()` 截断 50；`get_user_directory_name()` 拼接 username+email）
 
 **设计优势**：
 - ✅ **用户隔离**：每个用户有独立目录，数据完全隔离
@@ -152,21 +218,31 @@ class ExamCorrection(Base):
     questions: List[Question]    # 关联的错题记录
 ```
 
+**状态**：已验证。实现：`backend/core/db/models.py`（`ExamCorrection`）
+
 ### 3.2 Question 模型扩展
 
-**新增字段**：
+**与 AI 批改/录入错题强相关的字段（本文关心子集）**：
 ```python
 exam_correction_id: int         # 关联的批注记录ID
 source: QuestionSourceEnum      # 来源：MANUAL / AI_CORRECTION
 source_description: str         # 来源描述
+image_urls: List[str]           # 历史字段：旧式图片 URL 列表（见“逐节严审/待修正”）
+source_image_id: int            # 新字段：与 image_files.id 关联（用于稳定图片访问与按上传聚合）
+is_correct/score/max_score: ... # OCR/批改链路可复用字段（intake / ai_correction 均可写入）
+upload_group_id/upload_index: ... # 按“本次上传/录入”聚合与排序
 ```
 
 **来源枚举**：
 ```python
 class QuestionSourceEnum(str, Enum):
     MANUAL = "manual"                   # 手动录入
-    AI_CORRECTION = "ai_correction"     # AI批注识别
+    AI_CORRECTION = "ai_correction"     # AI 批改/批注（试卷上传批改链路产生的错题）
 ```
+
+**状态**：
+- 字段：已验证。实现：`backend/core/db/models.py`（`Question`）
+- 枚举值：已验证；但 `QuestionSourceEnum.AI_CORRECTION` 的代码注释存在历史遗留（待修正为与本文一致）。实现：`backend/core/db/models.py`（`QuestionSourceEnum`）
 
 ### 3.3 数据关联
 
@@ -190,6 +266,8 @@ User (用户)
 
 #### GET `/api/v1/corrections`
 获取批注记录列表
+
+**状态**：已验证（Tony）。实现：`backend/modules/tony/api/endpoints/ai_correction/corrections.py`（`list_corrections`）
 
 **查询参数**：
 - `page`: 页码（默认1）
@@ -228,8 +306,12 @@ User (用户)
 
 **响应**：包含完整的题目详情和分析结果
 
+**状态**：已验证（Tony）。实现：`backend/modules/tony/api/endpoints/ai_correction/corrections.py`（`get_correction`，返回 `questions_detail`）
+
 #### GET `/api/v1/corrections/statistics/{period}`
 获取统计数据
+
+**状态**：已验证（Tony）。实现：`backend/modules/tony/api/endpoints/ai_correction/corrections.py`（`get_statistics`，period=week|month|quarter|year）
 
 **路径参数**：
 - `period`: `week` | `month` | `quarter` | `year`
@@ -271,10 +353,14 @@ User (用户)
 #### DELETE `/api/v1/corrections/{id}`
 删除批注记录（204 No Content）
 
+**状态**：已验证（Tony）。实现：`backend/modules/tony/api/endpoints/ai_correction/corrections.py`（`delete_correction`）
+
 ### 4.2 OCR批改增强
 
 #### POST `/api/v1/ocr/analyze`
 试卷批改（已增强）
+
+**状态**：已验证（Tony）。实现：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`（`analyze_exam_image`）
 
 **新增功能**：
 1. 自动保存批注记录到数据库
@@ -305,6 +391,8 @@ hint: "月考试卷"
    - 标记来源：AI_CORRECTION
 7. 返回分析结果（含 correction_id 与图片 URL）
 ```
+
+**说明（严审）**：图片 URL 的 base 生成在不同接口存在差异，见 `## 0.1` 的“待修正（重要）”。
 
 ---
 
@@ -477,13 +565,14 @@ def _load_chinese_font(self, size: int = 24):
 **API路径**：
 ```
 GET /api/v1/ocr/images/corrections/{correction_id}/{image_type}
+GET /api/v1/ocr/images/{file_type}/{user_id}/{subject}/{filename}
 GET /api/v1/image-files/{image_id}/content
 ```
 
 **前端使用**：
 ```javascript
 // 批注图片（原图/批改后图）
-// 注意：图片访问由 default 模块统一提供，因此在“前端 proxy 模式”下通常是：
+// 注意：批注图片访问在 default 模块与学科模块均有实现；但在“前端 proxy 模式”下推荐统一走 default：
 // /api/default/v1/ocr/images/corrections/<id>/original
 // /api/default/v1/ocr/images/corrections/<id>/corrected
 const correctionImageUrl = `/api/default/v1/ocr/images/corrections/${correctionId}/${imageType}`
@@ -494,8 +583,13 @@ const imageFileUrl = `/api/default/v1/image-files/${imageId}/content?token=${tok
 ```
 
 **后端处理**：
-- **批注图片**：default 模块通过 `ExamCorrection` 的 `original_image_id/corrected_image_id` 找到 `ImageFile`，再定位文件并返回 `FileResponse`
-- **通用图片**：default 模块通过 `ImageFile.id` 校验用户权限并返回 `FileResponse`
+- **批注图片（by correction_id）**：
+  - 已验证：default 模块：`backend/modules/default/api/endpoints/ocr.py`
+  - 已验证：tony 模块也提供同名接口：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`
+- **历史图片 URL（by user_id/filename）**：
+  - 已验证：tony 模块提供：`backend/modules/tony/api/endpoints/ai_correction/ocr.py`（`/ocr/images/{file_type}/{user_id}/{subject}/{filename}`）
+  - 待补充：default 模块未提供该接口；在 proxy 模式下不建议继续依赖该 URL
+- **通用图片（by image_id）**：已验证：default 模块通过 `ImageFile.id` 校验用户权限并返回 `FileResponse`：`backend/modules/default/api/endpoints/image_files.py`
 
 ---
 
@@ -536,7 +630,7 @@ graph TD
 ### 10.1 访问控制
 - ✅ 所有 API 需要认证（JWT）
 - ✅ 用户只能访问自己的批改/错题/图片
-- ✅ 图片访问必须校验用户权限（default 模块统一处理）
+- ✅ 图片访问必须校验用户权限（default 模块与学科模块均有实现；proxy 模式下推荐统一走 default）
 
 ### 10.2 文件安全
 - ✅ 文件类型验证（仅图片）
@@ -653,6 +747,8 @@ graph TD
 本仓库默认使用 SQLite（`data/sqlite/app.db`）并在启动时自动创建表：
 - `backend/core/db/session.py` → `init_db()` → `Base.metadata.create_all(...)`
 - 同时包含轻量级 SQLite “best-effort migrations”（为旧库补列/修复 PK），避免教学项目引入复杂 Alembic 运维
+
+**状态**：已验证。实现：`backend/core/db/session.py`（`init_db()` + SQLite best-effort migrations）
 
 如在生产使用 PostgreSQL 并需要严谨迁移，可再引入 Alembic（本仓库文档不强制要求）。
 

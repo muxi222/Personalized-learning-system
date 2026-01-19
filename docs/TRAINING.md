@@ -1,4 +1,4 @@
-## Training / GraphRAG / Model Serving (Tony first)
+## Training / GraphRAG / Model Serving (Tony first, but model serving supports all modules)
 
 This repo supports **offline pipelines** that produce:
 - a **GraphRAG knowledge base** (graph + retriever index)
@@ -149,22 +149,243 @@ Notes:
 - If you see an error like “`SchemaInferenceError: Please pass features or at least one example`”, it means the preference JSONL is empty. Regenerate it via the dataset step above.
 - The DPO trainer implementation is compatible with TRL 0.26.x (uses `DPOConfig` internally).
 
-### 5) Model serving (vLLM)
+### 5) Model serving (vLLM, OpenAI-compatible; supports per-module and all)
 
-Start:
+Paths convention (Tony-first; other modules follow the same layout):
+- Base model cache (HuggingFace Hub, shared): `/home/dataset-assist-0/data/work/.cache/huggingface/hub/`
+- Fine-tuning outputs (per-module, in repo): `./data/training/<module>/checkpoints/`
+  - SFT LoRA: `./data/training/<module>/checkpoints/sft_lora/<subject>/`
+  - DPO LoRA: `./data/training/<module>/checkpoints/dpo_lora/`
+
+Start a **single module** model server (local vLLM, recommended):
 
 ```bash
 ./deploy/scripts/pipeline.sh serve-model --module tony up
 ```
 
-Stop:
+#### serve-model 参数全览（以 `pipeline.sh` 当前实现为准）
+
+`pipeline.sh` 启动服务时，实际执行的是 vLLM OpenAI-compatible server：
+- `python -m vllm.entrypoints.openai.api_server ...`
+
+为了便于学习/对比，这里把 **脚本支持的所有“模型启动相关参数”**（CLI flags + 环境变量）统一列出来，并说明它们如何映射到 vLLM 的启动参数。
+
+##### A) `serve-model` CLI（一次性参数，优先级最高）
+
+基础用法：
+
+```bash
+./deploy/scripts/pipeline.sh serve-model --module <m|all> up|down|restart|logs|status [flags...]
+```
+
+可用 flags（`pipeline.sh help` 里也有简版）：
+- `--runtime <vllm|docker>`：选择运行方式。默认 `vllm`（本机 Python 启动）；可用 `SERVE_MODEL_RUNTIME` 设默认值。
+- `--dtype <auto|bfloat16|float16|...>`：设置 vLLM `--dtype`（计算 dtype），**可单独使用**，不依赖量化。
+- `--load-format <auto|safetensors|gguf|...>`：设置 vLLM `--load-format`（加载格式提示），**可单独使用**，不依赖量化。
+- `--quantization <awq|gptq|bitsandbytes|...>`：设置 vLLM `--quantization`（开启权重量化）。当前脚本限制：**只能对单模块使用**（`--module all` 会拒绝）。
+- `--quantized-model <ORG/REPO|/abs/path>`：指定量化 base model（HF repo 或本地目录）。和 `--quantization` 配套使用；也会写入 `data/vllm/quantized_base_models.json` 作为持久化映射。
+
+##### B) 环境变量（持久化参数，适合写进 `.bashrc` / 实验记录）
+
+脚本按“每个 module 一套 env key”的方式读取配置：`..._<MODULE>`（MODULE 为大写，如 `TONY`）。
+
+下表中的 “映射到 vLLM” 指的是 `pipeline.sh` 最终传给 `vllm.entrypoints.openai.api_server` 的参数（如果该项被设置）。
+
+| 类别 | 环境变量 / 文件 | 默认值（脚本内） | 映射到 vLLM | 作用与解释 |
+|---|---|---:|---|---|
+| **运行方式** | `SERVE_MODEL_RUNTIME` | `vllm` | - | `serve-model` 默认 runtime（也可用 CLI `--runtime` 覆盖）。 |
+| **Python 选择** | `VLLM_PYTHON` | 空 | - | 指定用于启动 vLLM 的 Python 解释器路径（用于应对“训练 env 和 vLLM env 不一致”）。 |
+| **基础模型** | `VLLM_BASE_MODEL_<MODULE>` | `OpenPipe/Qwen3-14B-Instruct` | `--model` | vLLM 加载的 base model：可为 HF repo（`ORG/REPO`）或本地目录。 |
+| **量化 base model** | `VLLM_BASE_MODEL_<MODULE>_<QUANT>` | 空 | `--model` | 当启用量化（见 `VLLM_QUANTIZATION_<MODULE>`）时，优先用该值作为 base model。例：`VLLM_BASE_MODEL_TONY_AWQ=...`。 |
+| **量化 base model 映射** | `data/vllm/quantized_base_models.json` | 空 | `--model` | `fetch-quantized-model` / `serve-model --quantized-model` 会写入映射，之后 `serve-model --quantization awq` 可一键切换。 |
+| **模型名（对外展示）** | `VLLM_SERVED_MODEL_NAME_<MODULE>` | `<module>-qwen3-14b` | `--served-model-name` | `/v1/models` 中显示的模型名，且 OpenAI 请求里的 `model` 字段会与之对应。 |
+| **端口** | `VLLM_PORT_<MODULE>` | `8001..8005` | `--port` | OpenAI-compatible API 服务端口。 |
+| **上下文长度** | `VLLM_MAX_MODEL_LEN_<MODULE>` | 8192（小显存会自动降到 4096） | `--max-model-len` | 上下文上限。越大 KV cache 越吃显存。 |
+| **显存占用比例** | `VLLM_GPU_MEMORY_UTILIZATION_<MODULE>` | `0.90` | `--gpu-memory-utilization` | vLLM 给 KV cache/权重分配的显存比例上限；过高易 OOM，过低影响吞吐/并发。 |
+| **稳定性** | `VLLM_ENFORCE_EAGER_<MODULE>` | `true` | `--enforce-eager` / `--no-enforce-eager` | eager 模式更稳但可能更慢；用于规避某些 CUDA/编译相关不稳定。 |
+| **并发/批处理** | `VLLM_MAX_NUM_SEQS_<MODULE>` | 空（使用 vLLM 默认） | `--max-num-seqs` | 限制单步并发序列数，降低可减轻显存压力。 |
+| **并发/批处理** | `VLLM_MAX_NUM_BATCHED_TOKENS_<MODULE>` | 空 | `--max-num-batched-tokens` | 限制 prefill batching token 数，降低可减少峰值显存/延迟抖动。 |
+| **KV cache dtype** | `VLLM_KV_CACHE_DTYPE_<MODULE>` | 空 | `--kv-cache-dtype` | KV cache 精度（如 fp8）。能省显存但可能影响质量/硬件要求更高。 |
+| **计算 dtype** | `VLLM_DTYPE_<MODULE>` | 空（使用 vLLM 默认） | `--dtype` | 控制计算 dtype（不是量化 bitwidth）。常用：`auto`/`bfloat16`/`float16`。 |
+| **权重量化** | `VLLM_QUANTIZATION_<MODULE>` | 空 | `--quantization` | 开启量化模式（awq/gptq/bitsandbytes 等，取决于 vLLM 与模型格式）。 |
+| **加载格式提示** | `VLLM_LOAD_FORMAT_<MODULE>` | 空 | `--load-format` | 权重加载格式提示。大多数 HF safetensors 模型用 `auto` 即可。 |
+| **Swap / Offload** | `VLLM_SWAP_SPACE_<MODULE>` | 空 | `--swap-space` | KV cache swap 到主存（GiB）。可缓解 OOM，但延迟更高。 |
+| **Swap / Offload** | `VLLM_CPU_OFFLOAD_GB_<MODULE>` | 空 | `--cpu-offload-gb` | 将一部分内容 offload 到 CPU（GiB）。减显存但会更慢。 |
+| **Chat 模板** | `VLLM_CHAT_TEMPLATE_<MODULE>` | 空（课程建议提供） | `--chat-template` | 指定 Jinja chat template，避免 transformers>=4.44 的 “default chat template is no longer allowed”。 |
+| **LoRA（自动发现）** | `./data/training/<module>/checkpoints/...` | - | `--enable-lora --lora-modules ...` | 脚本会自动收集 `sft_lora` / `dpo_lora`，并按 `name=path` 加入 vLLM。 |
+| **LoRA（手动追加）** | `VLLM_LORA_MODULES_<MODULE>` | 空 | `--lora-modules` | 逗号分隔的 `name=/abs/path`，追加更多 LoRA。 |
+| **LoRA rank** | `VLLM_MAX_LORA_RANK_<MODULE>` | 自动检测（最低 16） | `--max-lora-rank` | 解决 “LoRA rank 32 > max_lora_rank 16” 等问题；脚本可从 `adapter_config.json` 自动推断。 |
+| **LoRA 数量** | `VLLM_MAX_LORAS_<MODULE>` | 空 | `--max-loras` | 限制每批最多使用的 LoRA 数，避免同时加载过多 adapter 带来压力。 |
+| **HF 镜像** | `HF_ENDPOINT` | 空 | - | HuggingFace Hub 访问镜像（如 `https://hf-mirror.com`）。影响下载/断点续传与在线拉取。 |
+| **HF revision** | `HF_REVISION` | `main` | - | 用于 `fetch-model` / `fetch-quantized-model` 的 snapshot 下载 revision。 |
+| **代理绕过** | `NO_PROXY` | 空 | - | 强烈建议包含 `127.0.0.1,localhost`，避免 curl 走 SOCKS/HTTP 代理导致本地验证失败。 |
+
+##### C) 参考资料（便于对照学习/研究）
+
+- vLLM 启动参数（EngineArgs / serving 参数总览）：[vLLM Engine Arguments](https://docs.vllm.ai/en/stable/configuration/engine_args/)
+- vLLM OpenAI-compatible server（与 `api_server` 相关的说明/用法）：[vLLM Docs (Serving)](https://docs.vllm.ai/en/stable/serving/)
+- vLLM LoRA 支持（`--enable-lora/--lora-modules/--max-lora-rank/--max-loras`）：[vLLM LoRA Adapters](https://docs.vllm.ai/en/stable/features/lora.html)
+- HuggingFace Hub 断点续传下载（`snapshot_download` / 缓存机制）：[huggingface_hub Download guide](https://huggingface.co/docs/huggingface_hub/en/guides/download)
+- Transformers chat template 机制（Jinja 模板、v4.44+ 默认模板限制讨论背景）：[HF Forum discussion](https://discuss.huggingface.co/t/as-of-transformers-v4-44-default-chat-template-is-no-longer-allowed/134431)
+- AWQ 论文（Activation-aware Weight Quantization）：[arXiv:2306.00978](https://arxiv.org/abs/2306.00978)
+- GPTQ 论文（Accurate Post-Training Quantization for GPT）：[arXiv:2210.17323](https://arxiv.org/abs/2210.17323)
+
+Memory tuning (best practice):
+- vLLM memory usage is dominated by **KV cache**, which grows with `max_model_len` and concurrency.
+- On 40GB-class GPUs, `max_model_len=8192` is often too tight; we recommend starting with:
+
+```bash
+export VLLM_MAX_MODEL_LEN_TONY=4096
+export VLLM_GPU_MEMORY_UTILIZATION_TONY=0.85
+./deploy/scripts/pipeline.sh serve-model --module tony up
+```
+
+Industrial knobs (optional; vLLM 0.13.0 supports these flags):
+
+```bash
+# Concurrency / batching (lower => lower memory pressure under load)
+export VLLM_MAX_NUM_SEQS_TONY=8
+export VLLM_MAX_NUM_BATCHED_TOKENS_TONY=8192
+
+# KV cache dtype (advanced; fp8 requires CUDA 11.8+ and may affect quality)
+# export VLLM_KV_CACHE_DTYPE_TONY=fp8_e4m3
+
+# Weight quantization (advanced; requires you to serve a quantized base model)
+# export VLLM_QUANTIZATION_TONY=awq      # or gptq, bitsandbytes, ...
+# export VLLM_LOAD_FORMAT_TONY=auto      # loader hint; keep auto unless you know the format
+# export VLLM_DTYPE_TONY=bfloat16        # compute dtype; bfloat16/float16/auto are common
+
+# Swap/offload (advanced; uses host memory to avoid OOM, but slower)
+# export VLLM_SWAP_SPACE_TONY=4
+# export VLLM_CPU_OFFLOAD_GB_TONY=4
+
+# Limit resident LoRAs (if you have many subject adapters)
+# export VLLM_MAX_LORAS_TONY=4
+
+./deploy/scripts/pipeline.sh serve-model --module tony up
+```
+
+Quantized serving (AWQ/GPTQ) one-click:
+
+```bash
+# 1) Prefetch a quantized base model once and register mapping
+./deploy/scripts/pipeline.sh fetch-quantized-model --module tony --quantization awq --model <ORG/REPO>
+
+# 2) Serve with quantization enabled (pipeline will switch base_model automatically)
+./deploy/scripts/pipeline.sh serve-model --module tony up --quantization awq
+```
+
+Recommended `--quantization/--load-format/--dtype` combinations (vLLM 0.13.0):
+
+```bash
+# Baseline (non-quant): keep defaults, or explicitly prefer BF16 when your GPU supports it
+./deploy/scripts/pipeline.sh serve-model --module tony up --dtype bfloat16 --load-format auto
+
+# AWQ (common default): quantized weights + FP16 compute; keep load-format auto
+./deploy/scripts/pipeline.sh serve-model --module tony up --quantization awq --dtype float16 --load-format auto
+
+# GPTQ (common default): also typically FP16 compute
+./deploy/scripts/pipeline.sh serve-model --module tony up --quantization gptq --dtype float16 --load-format auto
+```
+
+Detailed notes:
+- `--dtype` controls **compute dtype** inside vLLM (not the quantized weight bitwidth). `bfloat16` is usually preferred for stability/quality if supported; `float16` uses less memory on some GPUs.
+- `--load-format` is a **loader hint** for how weights are stored. If you’re using HuggingFace safetensors models (including most AWQ/GPTQ repos), `auto` is the safest default.
+- These CLI flags are equivalent to env vars and can be persisted:
+
+```bash
+export VLLM_DTYPE_TONY=bfloat16
+export VLLM_LOAD_FORMAT_TONY=auto
+export VLLM_QUANTIZATION_TONY=awq
+./deploy/scripts/pipeline.sh serve-model --module tony up
+```
+
+Notes:
+- AWQ/GPTQ require you to use a **quantized base model repo** (not the original FP16/BF16 repo).
+- Mapping is persisted under `data/vllm/quantized_base_models.json` so students don't have to re-export env vars.
+
+If you see vLLM errors like “`default chat template is no longer allowed`” (transformers>=4.44), restart vLLM with an explicit chat template:
+
+```bash
+export VLLM_CHAT_TEMPLATE_TONY=./deploy/vllm/chat_templates/template_chatml.jinja
+./deploy/scripts/pipeline.sh serve-model --module tony up --runtime vllm
+```
+
+If you see the process exit early with only an NCCL warning (no Python traceback), try stability flags:
+
+```bash
+export VLLM_ENFORCE_EAGER_TONY=true
+export VLLM_GPU_MEMORY_UTILIZATION_TONY=0.85
+# Optional: reduce context length if your GPU is smaller
+# export VLLM_MAX_MODEL_LEN_TONY=4096
+./deploy/scripts/pipeline.sh serve-model --module tony up
+```
+
+Prefetch / resume base model download into the unified classroom HF cache (recommended on first run):
+
+```bash
+./deploy/scripts/pipeline.sh fetch-model --module tony
+```
+
+Unified HF cache path (used by training + `fetch-model` + `serve-model`):
+- `/home/dataset-assist-0/data/work/.cache/huggingface/hub/`
+
+Resumable download behavior:
+- If the download is interrupted, rerun the same command; it will **continue** using the existing cache instead of starting from 0.
+- During `train-sft/train-dpo`, the trainer prints a local cache status line (pinned revision + snapshot completeness / missing shards) before attempting any download.
+
+Start **all module** model servers (rpj/xmx/wzy/wzm/tony):
+
+```bash
+./deploy/scripts/pipeline.sh serve-model --module all up
+```
+
+Stop a single module:
 
 ```bash
 ./deploy/scripts/pipeline.sh serve-model --module tony down
 ```
 
-The compose file is:
-- `training/modules/tony/serving/docker-compose.vllm.yml`
+Stop all:
+
+```bash
+./deploy/scripts/pipeline.sh serve-model --module all down
+```
+
+Logs:
+
+```bash
+./deploy/scripts/pipeline.sh serve-model --module tony logs
+```
+
+Ports (default):
+- tony: `8001`
+- rpj: `8002`
+- xmx: `8003`
+- wzy: `8004`
+- wzm: `8005`
+
+Override per-module port:
+
+```bash
+export VLLM_PORT_TONY=8001
+```
+
+LoRA auto-discovery (by convention):
+- `data/training/<module>/checkpoints/dpo_lora/`  -> exposed as model id `<module>-dpo`
+- `data/training/<module>/checkpoints/sft_lora/<subject>/` -> exposed as `<module>-sft-<subject>`
+
+Verify:
+
+```bash
+# If your environment has a global SOCKS/HTTP proxy, bypass it for localhost:
+export NO_PROXY=127.0.0.1,localhost
+curl --noproxy '*' http://127.0.0.1:8001/v1/models
+```
+
+Notes:
+- `pipeline.sh serve-model` defaults to local vLLM runtime (no Docker).
+- Docker compose serving is still available (Tony skeleton): `training/modules/tony/serving/docker-compose.vllm.yml`
 
 ### 6) Backend integration (GraphRAG feature flag)
 
@@ -200,9 +421,13 @@ GraphRAG expansion remains feature-gated:
 export GRAPHRAG_ENABLED=true
 ```
 
-#### Evaluation (Tony)
+#### 8) Evaluation
 
 Telemetry is stored in SQLite table `metric_events` (see `backend/core/db/models.py`).
+
+What this evaluates (vs model quality eval in section 9):
+- **8) Evaluation**: “product/runtime” evaluation from **real user journeys + tool calls** (success rate, latency, retention, acceptance). It answers: *系统链路是否跑通？体验是否变好？用户是否更愿意使用？*
+- **9) Model endpoint evaluation**: “model quality” evaluation by sending a **fixed prompt set** to an OpenAI-compatible endpoint. It answers: *模型回答是否更对/更稳/更像老师？*
 
 Scripts:
 - `training/modules/tony/eval/metrics_from_db.py`:
@@ -217,10 +442,154 @@ Scripts:
 
 Run (set DB via env):
 
+Note: these scripts are runnable as plain files (they auto-add repo root to `sys.path`).
+If you prefer module execution, you can also run:
+
 ```bash
 export DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
-python training/modules/tony/eval/metrics_from_db.py --module tony
-python training/modules/tony/eval/retrieval_hit_rate.py --k 5 --max-questions 200
+python -m training.modules.tony.eval.metrics_from_db --module tony
+python -m training.modules.tony.eval.retrieval_hit_rate --k 5 --max-questions 200
+```
+
+Tip: run them as two separate commands (or chain with `&&`). Do **not** join with a Chinese comma/顿号 like `、` — bash will not treat it as a command separator.
+
+If `sqlalchemy` is not installed in your current Python env:
+- `metrics_from_db.py` will automatically fall back to stdlib `sqlite3` and still works.
+- `retrieval_hit_rate.py` requires full backend deps (install via `pip install -r requirements.txt`).
+
+Notes for `retrieval_hit_rate.py`:
+- It evaluates **retrieval**, so it is **not** guaranteed to work just because your personal chat model (vLLM at `http://127.0.0.1:8001/v1`) is up.
+- “Personal model” is used for **generation** (`/v1/chat/completions`). Retrieval quality depends on:
+  - **an embedding model** (OpenAI embeddings or a local sentence-transformers model), and
+  - **a built index** (FAISS/BM25 files under `data/faiss/<module>/` and `data/bm25/<module>/`), if you want to measure the runtime hybrid retriever.
+- If embedding/index deps are missing, the script will fall back to a lightweight keyword retriever so students can still get a report (treat it as a *lower bound*).
+
+Minimal copy-paste: local embeddings + build FAISS/BM25 index (Tony)
+
+```bash
+# 0) Install deps once (recommended: use your class conda env)
+# conda activate 312_edu
+pip install -r requirements.txt
+
+# 1) Use the unified HF cache (same path as training/serving)
+export HF_HOME=/home/dataset-assist-0/data/work/.cache/huggingface
+export HF_HUB_CACHE=/home/dataset-assist-0/data/work/.cache/huggingface/hub
+
+# 2) Recommend a local embedding model (fast + decent Chinese)
+export LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+
+# 3) Build/update indices on disk (FAISS + BM25)
+# - `kb --build-index` prepares corpus + BM25
+# - `embed-index` writes vector embeddings + FAISS
+./deploy/scripts/pipeline.sh kb --module tony --build-index --embedding-backend sentence-transformers --embedding-model "$LOCAL_EMBEDDING_MODEL"
+./deploy/scripts/pipeline.sh embed-index --module tony --embedding-backend sentence-transformers --embedding-model "$LOCAL_EMBEDDING_MODEL"
+
+# 4) Verify retrieval evaluation (hit@k)
+export DATABASE_URL=sqlite+aiosqlite:///./data/sqlite/app.db
+python -m training.modules.tony.eval.retrieval_hit_rate --k 5 --max-questions 200
+```
+
+Fast smoke-test (no real embeddings, just to validate pipeline wiring)
+
+```bash
+./deploy/scripts/pipeline.sh kb --module tony --build-index --embedding-backend hash --limit 200
+./deploy/scripts/pipeline.sh embed-index --module tony --embedding-backend hash --limit 200
+python -m training.modules.tony.eval.retrieval_hit_rate --k 5 --max-questions 200
+```
+
+### 9) Model endpoint evaluation (OpenAI-compatible, per-module)
+
+Industry-common pattern:
+- Run a model behind an OpenAI-compatible server (vLLM)
+- Send a curated prompt set (JSONL) to `/v1/chat/completions`
+- Evaluate:
+  - **MCQ accuracy** (if `type=mcq` + `gold`)
+  - **char-F1** overlap (if `reference` is provided)
+  - Optional **LLM-as-a-judge** rubric scoring (requires a judge endpoint)
+
+Run for one module:
+
+```bash
+./deploy/scripts/pipeline.sh eval-model --module tony
+```
+
+Note (vLLM / transformers>=4.44):
+- If the model tokenizer does not define a `chat_template`, `/v1/chat/completions` may return 400.
+- Our recommended fix is to **inject a chat template at vLLM startup** via `--chat-template` (pipeline already enables a ChatML template by default for the classroom).
+- You can override per-module:
+
+```bash
+export VLLM_CHAT_TEMPLATE_TONY=./deploy/vllm/chat_templates/template_chatml.jinja
+```
+
+If you see the 400 error above in vLLM logs, you must **restart vLLM** for the template to take effect:
+
+```bash
+./deploy/scripts/pipeline.sh serve-model --module tony down
+export VLLM_CHAT_TEMPLATE_TONY=./deploy/vllm/chat_templates/template_chatml.jinja
+./deploy/scripts/pipeline.sh serve-model --module tony up --runtime vllm
+```
+
+Run for all modules:
+
+```bash
+./deploy/scripts/pipeline.sh eval-model --module all
+```
+
+Outputs:
+- `data/training/<module>/eval/model_eval_report.json`
+- (Tony) `data/training/tony/eval/retrieval_eval_report.json` (准召率：precision/recall/hit@k/mrr/ndcg/map; also merged into `model_eval_report.json` under `retrieval_eval`)
+
+Where to edit eval prompts:
+- `data/training/<module>/eval/model_eval.jsonl` (auto-created from a template on first run)
+
+### 8) Personal model (per-module) config for “小书童”
+
+The companion feature uses a module-scoped OpenAI-compatible endpoint (e.g. local vLLM).
+
+Subject-specific LoRA routing (recommended; default ON in deployment scripts):
+- When you select a subject in the UI, backend will try to use the subject LoRA model id:
+  - `<module>-sft-<subject>` (example: `tony-sft-history`)
+- If the subject LoRA is missing and this flag is enabled, the request is **blocked** with a clear error:
+
+```bash
+export COMPANION_REQUIRE_SUBJECT_MODEL=true
+```
+
+To allow fallback to the default per-module model (`PERSONAL_MODEL_MODEL_<MODULE>`) while developing:
+
+```bash
+export COMPANION_REQUIRE_SUBJECT_MODEL=false
+```
+
+Enable Tony personal model (recommended):
+
+```bash
+export PERSONAL_MODEL_ENABLED_TONY=true
+export PERSONAL_MODEL_API_BASE_TONY=http://127.0.0.1:8001/v1
+export PERSONAL_MODEL_MODEL_TONY=tony-dpo
+```
+
+Other modules follow the same pattern (example: RPJ):
+
+```bash
+export PERSONAL_MODEL_ENABLED_RPJ=true
+export PERSONAL_MODEL_API_BASE_RPJ=http://127.0.0.1:8002/v1
+export PERSONAL_MODEL_MODEL_RPJ=rpj-dpo
+```
+
+### End-to-end closed-loop (Tony)
+
+When fully enabled, the following features form a closed loop:
+- **小书童对话** (`/companion`): DB conversation memory + Hybrid retrieval (FAISS+BM25) + optional GraphRAG expansion → calls your **personal fine-tuned model** (vLLM LoRA like `tony-dpo`).
+- **学习建议/学习计划** (`/api/v1/learning/learning-plan`): review candidates from DB + optional GraphRAG expansion → calls personal model when enabled.
+- **举一反三** (`/api/v1/learning/similar-questions`): retrieval via **MCP retrieval** (or local vector store fallback) + optional GraphRAG → generation uses personal model when enabled.
+
+Logging (recommended while debugging):
+
+```bash
+# Log personal-model responses (truncated previews) for debugging
+export PERSONAL_MODEL_LOG_VERBOSE=true
 ```
 
 ### Module note

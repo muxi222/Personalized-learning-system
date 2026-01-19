@@ -23,6 +23,7 @@ const navItems = [
   { to: '/submit', icon: PlusCircle, label: '录入错题' },
   { to: '/questions', icon: List, label: '错题本' },
   { to: '/learning', icon: Brain, label: '学习建议' },
+  { to: '/companion', icon: Sparkles, label: '小书童', highlight: false },
   { to: '/review', icon: RefreshCw, label: '复习' },
 ]
 
@@ -52,6 +53,11 @@ export default function Layout() {
       queryClient.invalidateQueries({ queryKey: ['recommendations'] })
       queryClient.invalidateQueries({ queryKey: ['study-plan'] })
       queryClient.invalidateQueries({ queryKey: ['learning-summary'] })
+      return
+    }
+    if (to === '/companion') {
+      queryClient.invalidateQueries({ queryKey: ['companion-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['companion-conversation'] })
       return
     }
     if (to === '/') {

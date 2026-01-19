@@ -101,6 +101,11 @@ if [ -f "${PROJECT_ROOT}/.env" ]; then
     set +a
 fi
 
+# Default feature flags (can be overridden by .env / exported env)
+if [ -z "${COMPANION_REQUIRE_SUBJECT_MODEL:-}" ]; then
+    export COMPANION_REQUIRE_SUBJECT_MODEL=true
+fi
+
 # 激活 Conda 环境
 eval "$(conda shell.bash hook)"
 conda activate 312_edu 2>/dev/null || {

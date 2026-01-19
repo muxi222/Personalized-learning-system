@@ -1,0 +1,5 @@
+{"id":"tony-1","type":"freeform","prompt":"用初中生能理解的方式解释“王安石变法”的核心目标、主要措施和失败原因，并给出 3 个复习小练习。","reference":""}
+{"id":"tony-2","type":"freeform","prompt":"地理：解释“季风气候”的形成机制，并用一个生活例子帮助记忆。","reference":""}
+{"id":"tony-3","type":"freeform","prompt":"我最近总记不住历史时间线，很焦虑。请用温暖的语气安慰我，并给一个 7 天可执行的复习计划。","reference":""}
+{"id":"tony-4","type":"mcq","prompt":"选择题：下列哪一项最能体现“分封制”的特点？A. 郡县制 B. 世袭封国 C. 科举取士 D. 三省六部。请只输出最终选项字母。","gold":"B","reference":"B"}
+

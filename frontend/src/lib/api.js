@@ -411,6 +411,79 @@ export const learningApi = {
 }
 
 // ============================================
+// Companion APIs - 小书童（Tony-first，通过 default 模块代理）
+// ============================================
+// 约定：
+// - 前端统一调用 default 模块：/api/v1/companion/*
+// - 通过 query param `subject=history|geography|other` 决定转发到 tony 模块
+export const companionApi = {
+  listConversations: (subject = 'history', limit = 20) => {
+    return createApiClient(null).get('/companion/conversations', {
+      params: { subject, limit },
+    })
+  },
+
+  getConversation: (conversationId, subject = 'history') => {
+    return createApiClient(null).get(`/companion/conversations/${conversationId}`, {
+      params: { subject },
+    })
+  },
+
+  deleteConversation: (conversationId, subject = 'history') => {
+    return createApiClient(null).delete(`/companion/conversations/${conversationId}`, {
+      params: { subject },
+    })
+  },
+
+  chat: ({ subject = 'history', message, conversation_id = null, mode = 'chat' }) => {
+    return createApiClient(null).post(`/companion/chat`, {
+      message,
+      conversation_id,
+      mode,
+    }, {
+      params: { subject },
+    })
+  },
+
+  /**
+   * Stream chat (SSE).
+   * Returns the raw Response; caller should parse `text/event-stream`.
+   */
+  chatStream: async ({ subject = 'history', message, conversation_id = null, mode = 'chat', signal } = {}) => {
+    const authStorage = localStorage.getItem('auth-storage')
+    let token = null
+    if (authStorage) {
+      try {
+        const { state } = JSON.parse(authStorage)
+        token = state?.token || null
+      } catch {
+        token = null
+      }
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    }
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+    }
+
+    const resp = await fetch(`/api/v1/companion/chat/stream?subject=${encodeURIComponent(subject)}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        message,
+        conversation_id,
+        mode,
+      }),
+      signal,
+    })
+    return resp
+  },
+}
+
+// ============================================
 // Feedback APIs - 支持模块化路由
 // ============================================
 export const feedbackApi = {
@@ -507,6 +580,7 @@ export default {
   correctionsApi,
   taskApi,
   learningApi,
+  companionApi,
   feedbackApi,
   authApi,
   healthApi,

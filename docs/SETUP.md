@@ -41,6 +41,22 @@ vim .env
 
 可选：
 - `OPENAI_API_KEY` / `OPENAI_API_BASE` / `OPENAI_MODEL`: 用于对接 OpenAI-compatible 推理服务（如 vLLM）
+- `PERSONAL_MODEL_ENABLED_<MODULE>` / `PERSONAL_MODEL_API_BASE_<MODULE>` / `PERSONAL_MODEL_MODEL_<MODULE>`:
+  - 用于启用“个人微调模型（小书童）”调用链路（Tony-first）
+  - 示例（Tony）：
+
+```bash
+export PERSONAL_MODEL_ENABLED_TONY=true
+export PERSONAL_MODEL_API_BASE_TONY=http://127.0.0.1:8001/v1
+export PERSONAL_MODEL_MODEL_TONY=tony-dpo
+```
+
+（可选）个人模型 trace 落盘（默认开启，写入 `./logs/trace_personal_model_<module>.jsonl`）：
+
+```bash
+export PERSONAL_MODEL_TRACE_ENABLED=true   # 关闭则设为 false
+export PERSONAL_MODEL_TRACE_SAMPLE_RATE=1.0
+```
 - `GRAPHRAG_ENABLED=true`: 启用 GraphRAG（读取 `data/training/<module>/graphrag/graph.json`）
 - `MCP_RETRIEVAL_ENABLED=true` + `MCP_RETRIEVAL_URL=http://127.0.0.1:7010/mcp`: 启用 MCP 工具层（Phase 1: tony retrieval-mcp）
 

@@ -12,6 +12,7 @@ import CorrectionHistory from './pages/CorrectionHistory'
 import CorrectionDetail from './pages/CorrectionDetail'
 import LearningAdvisor from './pages/LearningAdvisor'
 import TaskDetail from './pages/TaskDetail'
+import Companion from './pages/Companion'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import PageErrorBoundary from './components/PageErrorBoundary'
@@ -49,6 +50,7 @@ function App() {
         <Route path="corrections" element={<CorrectionHistory />} />
         <Route path="corrections/:id" element={<CorrectionDetail />} />
         <Route path="learning" element={<LearningAdvisor />} />
+        <Route path="companion" element={<Companion />} />
         <Route path="questions" element={<QuestionList />} />
         <Route
           path="questions/:id"
