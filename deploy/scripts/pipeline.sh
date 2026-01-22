@@ -816,6 +816,68 @@ vllm_base_model_for() {
   fi
 }
 
+quant_map_file() {
+  # Persistent mapping for quantized base models (so serve-model --quantization can be one-click).
+  echo "${PROJECT_ROOT}/data/vllm/quantized_base_models.json"
+}
+
+get_quantized_model_from_map() {
+  local module="$1"
+  local quant="$2"
+  local f
+  f="$(quant_map_file)"
+  "${VLLM_PY:-python}" - <<'PY' "${f}" "${module}" "${quant}" 2>/dev/null || true
+import json, os, sys
+f, module, quant = sys.argv[1], sys.argv[2].lower(), sys.argv[3].lower()
+if not os.path.isfile(f):
+    raise SystemExit(0)
+try:
+    obj = json.load(open(f, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+print(((obj.get(module) or {}).get(quant) or "").strip())
+PY
+}
+
+set_quantized_model_in_map() {
+  local module="$1"
+  local quant="$2"
+  local model_id="$3"
+  local f
+  f="$(quant_map_file)"
+  mkdir -p "$(dirname "${f}")"
+  "${VLLM_PY:-python}" - <<'PY' "${f}" "${module}" "${quant}" "${model_id}"
+import json, os, sys
+f, module, quant, model_id = sys.argv[1], sys.argv[2].lower(), sys.argv[3].lower(), sys.argv[4]
+obj = {}
+if os.path.isfile(f):
+    try:
+        obj = json.load(open(f, "r", encoding="utf-8"))
+    except Exception:
+        obj = {}
+obj.setdefault(module, {})[quant] = model_id
+with open(f, "w", encoding="utf-8") as w:
+    json.dump(obj, w, ensure_ascii=False, indent=2)
+print(f)
+PY
+}
+
+resolve_quantized_base_model_for() {
+  local module="$1"
+  local quant="$2"
+  if [ -z "${module}" ] || [ -z "${quant}" ]; then
+    echo ""
+    return 0
+  fi
+  local env_key="VLLM_BASE_MODEL_$(echo "${module}" | tr '[:lower:]' '[:upper:]')_$(echo "${quant}" | tr '[:lower:]' '[:upper:]')"
+  local override="${!env_key:-}"
+  if [ -n "${override}" ]; then
+    echo "${override}"
+    return 0
+  fi
+  get_quantized_model_from_map "${module}" "${quant}"
+}
+
 vllm_chat_template_for() {
   # transformers>=4.44 disallows "default chat template" when tokenizer has no chat_template.
   # vLLM will then return 400 for /v1/chat/completions unless --chat-template is provided.
@@ -1500,26 +1562,41 @@ case "$CMD" in
     fi
 
     if [ -n "${SERVE_QUANTIZATION}" ]; then
+      # Only enforce the presence of a quantized base-model mapping when we are actually
+      # going to start/restart the server. For status/logs/down, allow inspection even if
+      # the mapping is missing (avoid "just checking status is blocked").
+      quant_requires_mapping="false"
+      case "${ACTION}" in
+        up|restart) quant_requires_mapping="true" ;;
+        *) quant_requires_mapping="false" ;;
+      esac
+
       if [ "$MODULE" = "all" ]; then
-        log_err "--quantization is only supported with a single --module (not 'all')"
-        exit 1
-      fi
-      export "VLLM_QUANTIZATION_${MODULE^^}=${SERVE_QUANTIZATION}"
-      if [ -n "${SERVE_QUANTIZED_MODEL}" ]; then
-        export "VLLM_BASE_MODEL_${MODULE^^}_${SERVE_QUANTIZATION^^}=${SERVE_QUANTIZED_MODEL}"
-        # Persist so future runs can simply use `--quantization ...`.
-        set_quantized_model_in_map "${MODULE}" "${SERVE_QUANTIZATION}" "${SERVE_QUANTIZED_MODEL}" >/dev/null 2>&1 || true
-      else
-        # Ensure we have a mapping; otherwise "one-click" won't know which base model to serve.
-        qbase="$(resolve_quantized_base_model_for "${MODULE}" "${SERVE_QUANTIZATION}")"
-        if [ -z "${qbase}" ]; then
-          log_err "Missing quantized base model mapping for module=${MODULE} quantization=${SERVE_QUANTIZATION}."
-          log_info "Fix options:"
-          log_info "  1) Download + register once:"
-          log_info "     ./deploy/scripts/pipeline.sh fetch-quantized-model --module ${MODULE} --quantization ${SERVE_QUANTIZATION} --model <ORG/REPO>"
-          log_info "  2) Or pass it directly for this run:"
-          log_info "     ./deploy/scripts/pipeline.sh serve-model --module ${MODULE} up --quantization ${SERVE_QUANTIZATION} --quantized-model <ORG/REPO|/path>"
+        if [ "${quant_requires_mapping}" = "true" ]; then
+          log_err "--quantization is only supported with a single --module (not 'all')"
           exit 1
+        fi
+        log_warn "Ignoring --quantization with --module all for action=${ACTION} (status/logs/down only)."
+      else
+        export "VLLM_QUANTIZATION_${MODULE^^}=${SERVE_QUANTIZATION}"
+        if [ -n "${SERVE_QUANTIZED_MODEL}" ]; then
+          export "VLLM_BASE_MODEL_${MODULE^^}_${SERVE_QUANTIZATION^^}=${SERVE_QUANTIZED_MODEL}"
+          # Persist so future runs can simply use `--quantization ...`.
+          set_quantized_model_in_map "${MODULE}" "${SERVE_QUANTIZATION}" "${SERVE_QUANTIZED_MODEL}" >/dev/null 2>&1 || true
+        else
+          if [ "${quant_requires_mapping}" = "true" ]; then
+            # Ensure we have a mapping; otherwise "one-click" won't know which base model to serve.
+            qbase="$(resolve_quantized_base_model_for "${MODULE}" "${SERVE_QUANTIZATION}")"
+            if [ -z "${qbase}" ]; then
+              log_err "Missing quantized base model mapping for module=${MODULE} quantization=${SERVE_QUANTIZATION}."
+              log_info "Fix options:"
+              log_info "  1) Download + register once:"
+              log_info "     ./deploy/scripts/pipeline.sh fetch-quantized-model --module ${MODULE} --quantization ${SERVE_QUANTIZATION} --model <ORG/REPO>"
+              log_info "  2) Or pass it directly for this run:"
+              log_info "     ./deploy/scripts/pipeline.sh serve-model --module ${MODULE} up --quantization ${SERVE_QUANTIZATION} --quantized-model <ORG/REPO|/path>"
+              exit 1
+            fi
+          fi
         fi
       fi
     fi

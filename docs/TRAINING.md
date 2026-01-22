@@ -275,6 +275,35 @@ Quantized serving (AWQ/GPTQ) one-click:
 ./deploy/scripts/pipeline.sh serve-model --module tony up --quantization awq
 ```
 
+How to find a suitable AWQ/GPTQ repo on Hugging Face (and recommended repos for this course):
+
+- **What you are searching for**: a *quantized base model* repo that matches your base family (here: Qwen3 14B). You generally cannot set `--quantization awq` on an FP16/BF16 repo and expect it to work—you must use weights produced for that quantization scheme.
+
+- **Recommended (Qwen3 14B)**:
+  - **AWQ (official)**: `Qwen/Qwen3-14B-AWQ`
+  - **GPTQ (community, Int4)**: `JunHowie/Qwen3-14B-GPTQ-Int4`
+    - (If you prefer browsing all quantized variants for a base model, Hugging Face provides a “quantized models for base model” view; search for “Quantized Models for Qwen/Qwen3-14B” in the HF UI.)
+
+- **HF UI quick search**:
+  - Search keywords: `Qwen3-14B AWQ`, `Qwen3-14B GPTQ`, `Qwen3-14B int4 awq`, `Qwen3-14B gptq int4`
+  - Prefer repos whose card/readme explicitly mentions compatibility with **vLLM** and the expected quantization method.
+
+- **Programmatic search (optional)** using `huggingface_hub` (works if you can access HF):
+
+```bash
+python - <<'PY'
+from huggingface_hub import HfApi
+
+api = HfApi()
+for q in ["awq", "gptq"]:
+    # Basic keyword search (best-effort; refine by reading model cards).
+    models = api.list_models(search=f"Qwen3-14B {q}", limit=10)
+    print(q, "top hits:")
+    for m in models:
+        print(" -", m.modelId)
+PY
+```
+
 Recommended `--quantization/--load-format/--dtype` combinations (vLLM 0.13.0):
 
 ```bash
