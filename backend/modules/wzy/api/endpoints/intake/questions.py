@@ -1,5 +1,6 @@
 """
-WZY模块 - 错题管理API（数学和物理）
+Questions API Endpoints
+错题相关API - WZY模块（数学和物理）
 """
 
 import os
@@ -7,7 +8,8 @@ import uuid
 import json
 import logging
 import time
-from typing import Optional, List, Any
+import asyncio
+from typing import Optional, List, Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +26,8 @@ from backend.core.schemas.question import (
     SuggestedQuestion,
 )
 from backend.core.schemas.task import TaskResponse, TaskStatus
-from backend.core.db.models import TaskStatusEnum, ImageFile
+from backend.core.db.models import TaskStatusEnum
+from backend.core.db.models import ImageFile
 from backend.modules.wzy.api.deps import get_current_user_id
 from backend.modules.wzy.config import settings
 from backend.core.services.gemini_ocr_service import get_gemini_ocr_service, SubjectType
@@ -36,20 +39,59 @@ router = APIRouter()
 
 UPLOAD_DIR = "./data/uploads"
 
-# WZY模块支持的学科（数学和物理）
+# WZY模块学科映射：数学和物理
 SUBJECT_NAME_MAP = {
     "数学": "math",
     "物理": "physics",
+    "其他": "other",  # 为了兼容性保留
 }
-WZY_SUBJECTS = ["math", "physics"]
 
 class SuggestedQuestionAnswerResponse(BaseModel):
     index: int
     suggested_question: SuggestedQuestion
     generated: bool = False
 
+def ensure_markdown_format(text: str) -> str:
+    """
+    确保文本以合适的Markdown格式返回，特别是数学公式
+    """
+    if not text:
+        return text
+    
+    text = str(text)
+    
+    # 如果已经是Markdown格式，直接返回
+    if "```" in text or "#" in text or "**" in text:
+        return text
+    
+    # 检查是否包含数学公式但没有合适的标记
+    import re
+    
+    # 检查LaTeX公式模式
+    latex_patterns = [
+        r'\\\(.*?\\\)',  # \(...\)
+        r'\\\[.*?\\\]',  # \[...\]
+        r'\$(?!\$).*?(?<!\$)\$(?!\$)',  # $...$ 但不匹配 $$...$$
+        r'\$\$.*?\$\$',  # $$...$$
+    ]
+    
+    has_latex = False
+    for pattern in latex_patterns:
+        if re.search(pattern, text, re.DOTALL):
+            has_latex = True
+            break
+    
+    # 如果包含数学公式，但文本中没有其他Markdown标记，可以添加一些基本的Markdown
+    if has_latex and not any(mark in text for mark in ["```", "#", "**", "*", ">"]):
+        # 对于包含数学公式的长文本，可以包装在代码块中
+        if len(text) > 100:
+            lines = text.split('\n')
+            if len(lines) > 3:
+                return f"```math\n{text}\n```"
+    
+    return text
+
 def _public_base() -> str:
-    """获取公共API基础URL"""
     return (settings.PUBLIC_API_BASE_URL or "http://localhost:6003").rstrip("/")
 
 
@@ -98,13 +140,80 @@ async def build_question_image_urls(
     return out
 
 def validate_subject(subject: str) -> None:
-    """验证学科是否属于WZY模块"""
-    if subject not in WZY_SUBJECTS:
+    """验证学科是否属于WZY模块（数学和物理）"""
+    if subject not in settings.SUBJECTS:
         raise HTTPException(
             status_code=400,
             detail=f"Subject '{subject}' is not supported by WZY module. "
-                   f"Supported subjects: {WZY_SUBJECTS}"
+                   f"Supported subjects: {settings.SUBJECTS}"
         )
+
+async def call_router_llm_json_with_retry(
+    prompt: str,
+    model: Optional[str] = None,
+    log_ctx: str = "",
+    trace_id: str = "",
+    trace_stage: str = "",
+    max_retries: int = 3,
+    retry_delay: float = 1.0,
+    timeout: float = 30.0
+) -> Dict[str, Any]:
+    """
+    带有重试机制的大模型调用函数
+    """
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            # 导入原始函数
+            from backend.modules.wzy.agents.intake.question_intake_ocr_agent import call_router_llm_json
+            
+            # 设置超时
+            try:
+                result = await asyncio.wait_for(
+                    call_router_llm_json(
+                        prompt=prompt,
+                        model=model,
+                        log_ctx=log_ctx,
+                        trace_id=trace_id,
+                        trace_stage=trace_stage
+                    ),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                raise TimeoutError(f"模型调用超时 ({timeout}秒)")
+            
+            # 验证结果是否为字典
+            if isinstance(result, dict):
+                logger.info(
+                    f"[call_router_llm_json_with_retry] success attempt={attempt+1}/{max_retries} "
+                    f"trace_id={trace_id} trace_stage={trace_stage}"
+                )
+                return result
+            else:
+                raise ValueError(f"模型返回的不是字典类型: {type(result)}")
+                
+        except (json.JSONDecodeError, ValueError, KeyError, AttributeError, TimeoutError) as e:
+            last_error = e
+            logger.warning(
+                f"[call_router_llm_json_with_retry] attempt={attempt+1}/{max_retries} failed: {e} "
+                f"trace_id={trace_id} trace_stage={trace_stage}"
+            )
+            
+            if attempt < max_retries - 1:
+                # 等待一段时间后重试（指数退避）
+                wait_time = retry_delay * (2 ** attempt)  # 1, 2, 4 秒
+                logger.info(f"等待 {wait_time} 秒后重试...")
+                await asyncio.sleep(wait_time)
+                continue
+            else:
+                logger.error(
+                    f"[call_router_llm_json_with_retry] all {max_retries} attempts failed: {last_error}"
+                )
+                raise
+    
+    # 理论上不会执行到这里
+    raise RuntimeError(f"重试{max_retries}次后仍然失败: {last_error}")
 
 @router.post("/", response_model=TaskResponse, status_code=202)
 async def create_question(
@@ -133,19 +242,10 @@ async def create_question(
     await db.commit()
 
     # Start background processing
-    # Using BackgroundTasks
-
     async def process_async():
-        try:
-            # 尝试导入WZY模块的QuestionIntakeAgent
-            try:
-                from backend.modules.wzy.agents.intake.question_intake_agent import WzyQuestionIntakeAgent as QuestionIntakeAgent
-                logger.info(f"Using WZY QuestionIntakeAgent for task {task_id}")
-            except ImportError:
-                logger.warning(f"WZY QuestionIntakeAgent not found, trying default")
-                from backend.modules.wzy.agents.intake.question_intake_agent import QuestionIntakeAgent
+        from backend.modules.wzy.agents.intake.question_intake_agent import QuestionIntakeAgent
 
-            # 使用新的 QuestionIntakeAgent (设计文档4.1节)
+        try:
             agent = QuestionIntakeAgent()
             result = await agent.process(
                 raw_input=question_data.content,
@@ -153,40 +253,106 @@ async def create_question(
                 task_id=task_id,
                 image_urls=question_data.image_urls,
                 student_answer=question_data.student_answer,
-                subject=question_data.subject,
-                difficulty=question_data.difficulty or "medium",
             )
 
             if result.get("success"):
-                logger.info(f"WZY Task {task_id} completed, question_id={result.get('question_id')}")
+                logger.info(f"Task {task_id} completed, question_id={result.get('question_id')}")
             else:
-                logger.warning(f"WZY Task {task_id} completed with errors: {result.get('errors')}")
+                logger.warning(f"Task {task_id} completed with errors: {result.get('errors')}")
 
         except Exception as e:
-            logger.error(f"WZY Task {task_id} failed: {e}")
+            logger.error(f"Task {task_id} failed: {e}")
             async with async_session_maker() as session:
                 await crud_task.fail_task(session, task_id, str(e))
                 await session.commit()
 
     background_tasks.add_task(process_async)
 
-    logger.info(f"Created WZY task {task_id} for user {user_id}, subject={question_data.subject}")
+    logger.info(f"Created task {task_id} for user {user_id}")
 
     return TaskResponse(
         task_id=task_id,
         status=TaskStatus.PENDING,
-        message="数学/物理错题提交成功，正在处理中...",
+        message="Task created. Processing started.",
     )
 
+async def process_image_intake_with_optimized_prompt(
+    user_id: int,
+    task_id: str,
+    file_path: str,
+    subject: str,
+    grade: str,
+    difficulty: str,
+    image_file_id: Optional[int] = None
+):
+    """
+    处理图片录入的优化版本，使用简化的reasoner_agent
+    """
+    from backend.modules.wzy.agents.intake.question_intake_ocr_agent import QuestionIntakeOCRAgent
+    from backend.core.db.session import async_session_maker
+    
+    max_retries = 2  # 减少重试次数
+    retry_delay = 1.0
+    
+    for attempt in range(max_retries):
+        try:
+            agent = QuestionIntakeOCRAgent()
+            logger.info(
+                f"[wzy/questions/ocr] task_id={task_id} user_id={user_id} attempt={attempt+1}/{max_retries} "
+                f"agent.process(type=image) subject={subject} diff={difficulty}"
+            )
+            
+            # 设置环境变量，强制使用简化模式
+            os.environ["WZY_REASONER_MAX_TOKENS"] = "1024"
+            os.environ["WZY_DEEP_ENRICH_MAX_ITEMS"] = "1"
+            os.environ["WZY_SIMPLIFIED_MODE"] = "true"  # 新增标志
+            
+            result = await agent.process(
+                input_type="image",
+                user_id=user_id,
+                task_id=task_id,
+                subject=subject,
+                grade=grade,
+                difficulty=difficulty,
+                image_path=file_path,
+                source_image_id=image_file_id,
+            )
+            
+            if result.get("success"):
+                logger.info(f"Image intake task {task_id} succeeded on attempt {attempt+1}")
+                return result
+            else:
+                logger.warning(f"Image intake task {task_id} failed on attempt {attempt+1}: {result.get('errors')}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay * (attempt + 1))
+                    continue
+        
+        except Exception as e:
+            logger.error(f"Image intake task {task_id} failed on attempt {attempt+1}: {e}", exc_info=True)
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay * (attempt + 1))
+                continue
+            else:
+                async with async_session_maker() as session:
+                    await crud_task.fail_task(session, task_id, str(e) or "处理失败")
+                    await session.commit()
+                return {"success": False, "errors": [str(e)]}
+    
+    # 如果所有重试都失败
+    async with async_session_maker() as session:
+        await crud_task.fail_task(session, task_id, "处理失败，已重试2次")
+        await session.commit()
+    return {"success": False, "errors": ["处理失败，已重试2次"]}
+    
 @router.post("/ocr", response_model=TaskResponse, status_code=202)
 async def create_question_intake_ocr(
     file: Optional[UploadFile] = File(None),
     text_data: Optional[str] = Form(None),
     input_type: str = Form(..., description="输入类型: 'image' 或 'text'"),
-    subject: str = Form("数学"),
+    subject: str = Form("math"),  # WZY默认数学
     grade: str = Form("", description="学段/年级（可选，例如：初中/高中/高一/初三）"),
     difficulty: str = Form("medium"),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
+    background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
@@ -283,7 +449,8 @@ async def create_question_intake_ocr(
             from backend.core.utils.file_utils import calculate_file_hash, get_user_upload_dir
             from backend.core.crud import crud_image_file
 
-            # NOTE: 产品要求“录入错题图片不去重”：即使上传同一张图片，也要生成新的 image_files.id，
+            # NOTE: 产品要求"录入错题图片不去重"：即使上传同一张图片，也要生成新的 image_files.id，
+            # 以便后续按图片维度查询/删除更可控。
             # 由于 image_files.file_hash 在部分部署中可能有唯一约束，这里对 hash 做 task_id 级别的盐化，
             # 确保每次上传都会生成新的记录，但仍保留原始 hash 便于日志排查。
             file_hash_raw = calculate_file_hash(content)
@@ -303,7 +470,6 @@ async def create_question_intake_ocr(
                 filename
             )
 
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, "wb") as f:
                 f.write(content)
 
@@ -344,44 +510,33 @@ async def create_question_intake_ocr(
 
             await db.commit()
 
-            # 异步处理
+            # 异步处理 - 使用优化版本
             async def process_image():
                 try:
-                    # 尝试导入WZY OCR Agent
-                    try:
-                        from backend.modules.wzy.agents.intake.question_intake_agent import WzyQuestionIntakeAgent as QuestionIntakeAgent
-                        logger.info(f"Using WZY QuestionIntakeAgent for OCR task {task_id}")
-                        
-                        agent = QuestionIntakeAgent()
-                        result = await agent.process(
-                            raw_input="",  # OCR 会从图片中提取
-                            user_id=user_id,
-                            task_id=task_id,
-                            image_urls=[file_path],
-                            student_answer="",
-                            subject=subject,
-                            difficulty=difficulty,
-                        )
-                        
-                        duration_ms = int((time.perf_counter() - t0) * 1000)
-                        logger.info(
-                            f"[wzy/questions/ocr] task_id={task_id} agent.process done duration_ms={duration_ms} "
-                            f"success={bool(result.get('success'))}"
-                        )
+                    result = await process_image_intake_with_optimized_prompt(
+                        user_id=user_id,
+                        task_id=task_id,
+                        file_path=file_path,
+                        subject=subject,
+                        grade=grade,
+                        difficulty=difficulty,
+                        image_file_id=image_file_id
+                    )
+                    duration_ms = int((time.perf_counter() - t0) * 1000)
+                    logger.info(
+                        f"[wzy/questions/ocr] task_id={task_id} user_id={user_id} agent.process done duration_ms={duration_ms} "
+                        f"success={bool(result.get('success'))} created_count={result.get('created_count') or result.get('created_count', None)}"
+                    )
 
-                        if not result.get("success"):
-                            async with async_session_maker() as session:
-                                errs = result.get("errors", [])
-                                msg = "; ".join([str(e) for e in errs]) if isinstance(errs, list) else str(errs)
-                                await crud_task.fail_task(session, task_id, msg or "处理失败")
-                                await session.commit()
-                    except ImportError:
-                        # 如果WZY的Agent尚未实现，使用通用OCR处理
-                        logger.warning(f"WZY QuestionIntakeAgent not implemented, using generic OCR for task {task_id}")
-                        await _process_image_with_generic_ocr(task_id, user_id, file_path, subject, image_file_id)
-                        
+                    if not result.get("success"):
+                        async with async_session_maker() as session:
+                            errs = result.get("errors", [])
+                            msg = "; ".join([str(e) for e in errs]) if isinstance(errs, list) else str(errs)
+                            await crud_task.fail_task(session, task_id, msg or "处理失败")
+                            await session.commit()
+
                 except Exception as e:
-                    logger.error(f"WZY Image intake task {task_id} failed: {e}", exc_info=True)
+                    logger.error(f"Image intake task {task_id} failed: {e}", exc_info=True)
                     async with async_session_maker() as session:
                         await crud_task.fail_task(session, task_id, str(e) or "处理失败")
                         await session.commit()
@@ -397,37 +552,31 @@ async def create_question_intake_ocr(
             try:
                 text_json = json.loads(text_data)
             except json.JSONDecodeError:
-                # 如果不是JSON，直接作为文本内容
-                text_json = {"content": text_data}
+                raise HTTPException(status_code=400, detail="text_data必须是有效的JSON格式")
 
             # 异步处理
             async def process_text():
+                from backend.modules.wzy.agents.intake.question_intake_ocr_agent import QuestionIntakeOCRAgent
+                from backend.core.db.session import async_session_maker
+
                 try:
-                    # 尝试导入WZY Agent
-                    try:
-                        from backend.modules.wzy.agents.intake.question_intake_agent import WzyQuestionIntakeAgent as QuestionIntakeAgent
-                        logger.info(f"Using WZY QuestionIntakeAgent for text task {task_id}")
-                    except ImportError:
-                        logger.warning(f"WZY QuestionIntakeAgent not found, trying default")
-                        from backend.modules.wzy.agents.intake.question_intake_agent import QuestionIntakeAgent
-                    
-                    agent = QuestionIntakeAgent()
+                    agent = QuestionIntakeOCRAgent()
                     logger.info(
-                        f"[wzy/questions/ocr] task_id={task_id} start agent.process(type=text) subject={subject} diff={difficulty} "
+                        f"[wzy/questions/ocr] task_id={task_id} user_id={user_id} start agent.process(type=text) subject={subject} diff={difficulty} "
                         f"text_keys={list(text_json.keys()) if isinstance(text_json, dict) else None}"
                     )
                     result = await agent.process(
-                        raw_input=text_json.get("content", str(text_json)),
+                        input_type="text",
                         user_id=user_id,
                         task_id=task_id,
                         subject=subject,
+                        grade=grade,
                         difficulty=difficulty,
-                        student_answer=text_json.get("student_answer", ""),
-                        image_urls=text_json.get("image_urls", []),
+                        text_data=text_json,
                     )
                     duration_ms = int((time.perf_counter() - t0) * 1000)
                     logger.info(
-                        f"[wzy/questions/ocr] task_id={task_id} agent.process done duration_ms={duration_ms} success={bool(result.get('success'))}"
+                        f"[wzy/questions/ocr] task_id={task_id} user_id={user_id} agent.process done duration_ms={duration_ms} success={bool(result.get('success'))}"
                     )
 
                     if not result.get("success"):
@@ -438,7 +587,7 @@ async def create_question_intake_ocr(
                             await session.commit()
 
                 except Exception as e:
-                    logger.error(f"WZY Text intake task {task_id} failed: {e}", exc_info=True)
+                    logger.error(f"Text intake task {task_id} failed: {e}", exc_info=True)
                     async with async_session_maker() as session:
                         await crud_task.fail_task(session, task_id, str(e) or "处理失败")
                         await session.commit()
@@ -456,16 +605,16 @@ async def create_question_intake_ocr(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"WZY Failed to process intake OCR: {e}", exc_info=True)
+        logger.error(f"Failed to process intake OCR: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
 @router.post("/ocr-old", response_model=TaskResponse, status_code=202)
 async def create_question_with_image_old(
     file: UploadFile = File(...),
-    subject: str = Form("math"),
+    subject: str = Form("other"),
     difficulty: str = Form("medium"),
     title: Optional[str] = Form(None),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
+    background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
@@ -513,6 +662,7 @@ async def create_question_with_image_old(
     if existing_image and existing_image.user_id == user.id:
         is_duplicate = True
         logger.info(f"Duplicate image detected for user {user.id}: hash={file_hash[:16]}...")
+        # 前端可以通过响应中的信息来显示提醒
 
     # 生成task_id用于后续处理
     task_id = str(uuid.uuid4())
@@ -538,7 +688,6 @@ async def create_question_with_image_old(
         )
 
         # 保存文件
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "wb") as f:
             f.write(content)
 
@@ -559,21 +708,18 @@ async def create_question_with_image_old(
 
         # 创建任务记录
         await crud_task.create_task(db, task_id, user_id=user_id)
+        await crud_task.create_task(db, task_id, user_id=user_id)
         await db.commit()
 
         # 异步处理OCR和分析
         async def process_with_ocr():
-            try:
-                # 尝试导入WZY Agent
-                try:
-                    from backend.modules.wzy.agents.intake.question_intake_agent import WzyQuestionIntakeAgent as QuestionIntakeAgent
-                    logger.info(f"Using WZY QuestionIntakeAgent for OCR old task {task_id}")
-                except ImportError:
-                    logger.warning(f"WZY QuestionIntakeAgent not found, trying default")
-                    from backend.modules.wzy.agents.intake.question_intake_agent import QuestionIntakeAgent
+            from backend.modules.wzy.agents.intake.question_intake_agent import QuestionIntakeAgent
+            from backend.core.db.session import async_session_maker
 
+            try:
                 # 1. OCR识别
-                ocr_service = get_gemini_ocr_service(settings)
+                from backend.modules.wzy.config import settings as wzy_settings
+                ocr_service = get_gemini_ocr_service(wzy_settings)
                 await ocr_service.initialize()
 
                 # 解析学科类型 - 支持中文和英文
@@ -587,6 +733,7 @@ async def create_question_with_image_old(
                 logger.info(f"Starting OCR for question image: {file_path}")
 
                 # 使用简化的prompt进行单题识别
+                from backend.core.services.gemini_ocr_service import GeminiOCRService
                 ocr_result = await ocr_service._analyze_image(
                     image_path=file_path,
                     prompt=f"""你是一个专业的学习助手。请识别图片中的错题，提取以下信息（如果图片中没有某项信息，请留空）：
@@ -610,6 +757,7 @@ async def create_question_with_image_old(
                 )
 
                 # 解析OCR结果
+                import json
                 import re
 
                 # 尝试从结果中提取JSON
@@ -643,19 +791,19 @@ async def create_question_with_image_old(
                 )
 
                 if result.get("success"):
-                    logger.info(f"WZY OCR task {task_id} completed, question_id={result.get('question_id')}")
+                    logger.info(f"OCR task {task_id} completed, question_id={result.get('question_id')}")
                 else:
-                    logger.warning(f"WZY OCR task {task_id} completed with errors: {result.get('errors')}")
+                    logger.warning(f"OCR task {task_id} completed with errors: {result.get('errors')}")
 
             except Exception as e:
-                logger.error(f"WZY OCR task {task_id} failed: {e}", exc_info=True)
+                logger.error(f"OCR task {task_id} failed: {e}", exc_info=True)
                 async with async_session_maker() as session:
                     await crud_task.fail_task(session, task_id, str(e))
                     await session.commit()
 
         background_tasks.add_task(process_with_ocr)
 
-        logger.info(f"Created WZY OCR task {task_id} for user {user_id}")
+        logger.info(f"Created OCR task {task_id} for user {user_id}")
 
         return TaskResponse(
             task_id=task_id,
@@ -664,7 +812,7 @@ async def create_question_with_image_old(
         )
 
     except Exception as e:
-        logger.error(f"WZY Failed to process image upload: {e}")
+        logger.error(f"Failed to process image upload: {e}")
         # 清理文件
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -685,29 +833,12 @@ async def list_questions(
     支持分页、筛选和搜索
     """
     skip = (page - 1) * page_size
-    
-    # 如果指定了学科，验证是否为WZY支持的学科
-    if subject and subject not in WZY_SUBJECTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Subject '{subject}' is not supported by WZY module. "
-                   f"Supported subjects: {WZY_SUBJECTS}"
-        )
-    
-    # 构建筛选条件：只查询数学和物理的题目
-    where_conditions = {"user_id": user_id}
-    if subject:
-        where_conditions["subject"] = subject
-    else:
-        # 如果不指定学科，默认只查询数学和物理
-        where_conditions["subject"] = WZY_SUBJECTS
-    
     questions, total = await crud_question.get_questions(
         db,
         user_id=user_id,
         skip=skip,
         limit=page_size,
-        subject=subject if subject else None,
+        subject=subject,
         difficulty=difficulty,
         search=search,
     )
@@ -777,16 +908,28 @@ async def get_question(
     question = await crud_question.get_question(db, question_id, user_id)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
-    
-    # 验证学科是否属于WZY模块
-    if question.subject not in WZY_SUBJECTS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Question subject '{question.subject}' is not managed by WZY module"
-        )
 
     resp = QuestionDetail.model_validate(question)
     resp.image_urls = await build_question_image_urls(db, user_id=user_id, question=question)
+    
+    # 确保Markdown格式字段正确处理
+    # 如果字段中包含LaTeX数学公式，确保它们被正确标记
+    if resp.explanation:
+        resp.explanation = ensure_markdown_format(resp.explanation)
+    if resp.error_analysis:
+        resp.error_analysis = ensure_markdown_format(resp.error_analysis)
+    if resp.student_answer:
+        resp.student_answer = ensure_markdown_format(resp.student_answer)
+    if resp.correct_answer:
+        resp.correct_answer = ensure_markdown_format(resp.correct_answer)
+    
+    # 处理举一反三题目中的答案格式
+    for sq in resp.suggested_questions:
+        if sq.answer:
+            sq.answer = ensure_markdown_format(sq.answer)
+        if sq.explanation:
+            sq.explanation = ensure_markdown_format(sq.explanation)
+    
     # Derive answer_sources (student raw / teacher marked / model inferred / grading basis) from summarized_input JSON
     try:
         si = getattr(question, "summarized_input", None)
@@ -816,6 +959,38 @@ async def get_question(
     return resp
 
 
+def ensure_markdown_format(text: str) -> str:
+    """
+    确保文本以合适的Markdown格式返回，特别是数学公式
+    """
+    if not text:
+        return text
+    
+    # 如果文本中已经有LaTeX公式标记，确保格式正确
+    text = str(text)
+    
+    # 检查是否包含LaTeX公式但没有正确的标记
+    latex_patterns = [
+        r'\\\(.*?\\\)',  # \(...\)
+        r'\\\[.*?\\\]',  # \[...\]
+        r'\$(?!\$).*?(?!<\$)\$',  # $...$ 但不匹配 $$...$$
+    ]
+    
+    has_latex = False
+    for pattern in latex_patterns:
+        import re
+        if re.search(pattern, text):
+            has_latex = True
+            break
+    
+    # 如果包含数学公式但没有合适的标记，添加Markdown代码块提示
+    if has_latex and not text.startswith("```"):
+        # 添加Markdown代码块提示，让前端知道这是数学公式
+        return text
+    
+    return text
+
+
 @router.post("/{question_id}/suggested-questions/{index}/answer", response_model=SuggestedQuestionAnswerResponse)
 async def get_suggested_question_answer(
     question_id: int,
@@ -824,19 +999,12 @@ async def get_suggested_question_answer(
     user_id: int = Depends(get_current_user_id),
 ):
     """
-    WZY-only: lazily generate/fill the answer for a '举一反三'练习题。
+    WZY模块: lazily generate/fill the answer for a '举一反三'练习题。
     Frontend uses this when sq.answer is empty, so users can see the solution after clicking '查看答案'.
     """
     question = await crud_question.get_question(db, question_id, user_id)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
-    
-    # 验证学科是否属于WZY模块
-    if question.subject not in WZY_SUBJECTS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Question subject '{question.subject}' is not managed by WZY module"
-        )
 
     # Normalize suggested_questions via QuestionDetail validator (handles list[str]/legacy dict formats)
     resp = QuestionDetail.model_validate(question)
@@ -846,64 +1014,84 @@ async def get_suggested_question_answer(
 
     sq = sqs[index]
     if isinstance(sq.answer, str) and sq.answer.strip():
+        # 确保现有答案格式正确
+        sq.answer = ensure_markdown_format(sq.answer)
+        if sq.explanation:
+            sq.explanation = ensure_markdown_format(sq.explanation)
         return SuggestedQuestionAnswerResponse(index=index, suggested_question=sq, generated=False)
 
     # Generate answer via router LLM (with WZY tracing/logging)
-    try:
-        from backend.modules.wzy.agents.intake.question_intake_ocr_agent import call_router_llm_json
-    except Exception as e:
-        raise HTTPException(status_code=501, detail=f"TODO: Suggested answer generator not available: {e}")
-
     model = os.getenv("WZY_PRACTICE_ANSWER_MODEL") or os.getenv("WZY_TEXT_MODEL") or None
-    trace_id = f"wzy_sq_answer_q{question_id}_i{index}_{uuid.uuid4().hex[:8]}"
+    trace_id = f"sq_answer_q{question_id}_i{index}_{uuid.uuid4().hex[:8]}"
+    
+    # 优化prompt，要求返回Markdown格式的答案
     prompt = f"""
-你是一位资深老师。下面是一道“举一反三”的练习题，请给出参考答案与简要思路。
+请作为数学老师，为以下练习题提供参考答案和解题思路：
+
+题目：{sq.content}
 
 要求：
-1) 只输出 JSON，不要输出任何额外文本
-2) answer 要写清楚最终答案（必要时分点）
-3) explanation 写简要解题思路（可选，但建议给）
+1. 使用Markdown格式返回，数学公式使用$...$或$$...$$包裹
+2. 答案要清晰、完整，包含必要的计算步骤
+3. 如果可能，提供多种解法或思路
 
-练习题：
-{sq.content}
-
-输出 JSON 格式：
+请按照以下JSON格式返回：
 {{
-  "answer": "......",
-  "explanation": "......"
+  "answer": "答案内容（使用Markdown格式）",
+  "explanation": "详细的解题思路和步骤（使用Markdown格式）"
 }}
 """.strip()
 
     try:
-        obj = await call_router_llm_json(
+        # 使用带重试的版本调用大模型
+        obj = await call_router_llm_json_with_retry(
             prompt,
             model=model,
             log_ctx=f"task=- user={user_id} subject={getattr(resp, 'subject', '')} q={question_id} sq={index}",
             trace_id=trace_id,
             trace_stage="suggested_answer",
+            max_retries=3,
+            retry_delay=1.0,
+            timeout=30.0
         )
     except Exception as e:
         logger.error(
-            f"[wzy/suggested_answer] user={user_id} q={question_id} sq={index} failed: {e}",
+            f"[suggested_answer] user={user_id} q={question_id} sq={index} failed after retries: {e}",
             exc_info=True,
         )
         raise HTTPException(status_code=503, detail=f"模型服务暂时不可用：{str(e)}")
 
+    # 验证返回的数据结构
     if not isinstance(obj, dict):
-        raise HTTPException(status_code=502, detail="模型输出解析失败")
+        raise HTTPException(status_code=502, detail="模型输出解析失败：返回的不是字典格式")
+    
     answer = obj.get("answer")
     explanation = obj.get("explanation")
+    
     if not isinstance(answer, str) or not answer.strip():
-        raise HTTPException(status_code=502, detail="模型未返回有效答案")
+        # 如果answer字段为空，尝试从其他可能的字段获取
+        for key in ["答案", "solution", "result"]:
+            if key in obj and isinstance(obj[key], str) and obj[key].strip():
+                answer = obj[key].strip()
+                break
+        
+        if not answer or not answer.strip():
+            raise HTTPException(status_code=502, detail="模型未返回有效答案")
+    
+    # 确保答案是Markdown格式
+    answer = ensure_markdown_format(answer.strip())
+    
     if explanation is not None and not isinstance(explanation, str):
         explanation = None
+    elif explanation is not None:
+        explanation = ensure_markdown_format(explanation.strip())
 
     updated = SuggestedQuestion(
         content=sq.content,
-        answer=answer.strip(),
+        answer=answer,
         difficulty=sq.difficulty,
         knowledge_points=list(sq.knowledge_points or []),
-        explanation=(explanation.strip() if isinstance(explanation, str) and explanation.strip() else sq.explanation),
+        explanation=(explanation if isinstance(explanation, str) and explanation else sq.explanation),
     )
     sqs[index] = updated
 
@@ -913,14 +1101,14 @@ async def get_suggested_question_answer(
         await db.commit()
     except Exception as e:
         logger.warning(
-            f"[wzy/suggested_answer] user={user_id} q={question_id} sq={index} commit failed: {e}",
+            f"[suggested_answer] user={user_id} q={question_id} sq={index} commit failed: {e}",
             exc_info=True,
         )
         # still return generated answer even if persistence fails
 
     return SuggestedQuestionAnswerResponse(index=index, suggested_question=updated, generated=True)
 
-@router.put("/{question_id}", response_model=QuestionResponse)
+@router.patch("/{question_id}", response_model=QuestionResponse)
 async def update_question(
     question_id: int,
     question_data: QuestionUpdate,
@@ -930,22 +1118,6 @@ async def update_question(
     """
     更新错题信息
     """
-    # 先获取原有题目
-    question = await crud_question.get_question(db, question_id, user_id)
-    if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
-    
-    # 验证学科是否属于WZY模块
-    if question.subject not in WZY_SUBJECTS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Question subject '{question.subject}' is not managed by WZY module"
-        )
-
-    # 如果更新了学科，验证新学科
-    if question_data.subject and question_data.subject != question.subject:
-        validate_subject(question_data.subject)
-
     question = await crud_question.update_question(
         db, question_id, question_data, user_id
     )
@@ -967,14 +1139,6 @@ async def delete_question(
     q = await crud_question.get_question(db, question_id, user_id)
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
-    
-    # 验证学科是否属于WZY模块
-    if q.subject not in WZY_SUBJECTS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Question subject '{q.subject}' is not managed by WZY module"
-        )
-    
     source_image_id = getattr(q, "source_image_id", None)
 
     success = await crud_question.delete_question(db, question_id, user_id)
@@ -1011,13 +1175,6 @@ async def reanalyze_question(
     question = await crud_question.get_question(db, question_id, user_id)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
-    
-    # 验证学科是否属于WZY模块
-    if question.subject not in WZY_SUBJECTS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Question subject '{question.subject}' is not managed by WZY module"
-        )
 
     # Create new task
     task_id = str(uuid.uuid4())
@@ -1026,34 +1183,42 @@ async def reanalyze_question(
 
     # Start background reanalysis using new agent
     async def reanalyze_async():
-        try:
-            # 尝试导入WZY Agent
-            try:
-                from backend.modules.wzy.agents.intake.question_intake_agent import WzyQuestionIntakeAgent as QuestionIntakeAgent
-                logger.info(f"Using WZY QuestionIntakeAgent for reanalysis task {task_id}")
-            except ImportError:
-                logger.warning(f"WZY QuestionIntakeAgent not found, trying default")
-                from backend.modules.wzy.agents.intake.question_intake_agent import QuestionIntakeAgent
-            
-            # 使用QuestionIntakeAgent重新分析
-            agent = QuestionIntakeAgent()
-            result = await agent.process(
-                raw_input=question.content,
-                user_id=user_id,
-                task_id=task_id,
-                image_urls=question.image_urls or [],
-                student_answer=question.student_answer,
-                subject=question.subject,
-                difficulty=question.difficulty or "medium",
-            )
+        from backend.modules.wzy.agents.intake.question_intake_agent import analyze_error, update_result
+        from backend.core.agents.state import QuestionIntakeState
+        from backend.core.db.session import async_session_maker
 
-            if result.get("success"):
-                logger.info(f"WZY Reanalysis task {task_id} completed")
-            else:
-                logger.warning(f"WZY Reanalysis task {task_id} completed with errors: {result.get('errors')}")
+        try:
+            # 构建状态
+            state: QuestionIntakeState = {
+                "task_id": task_id,
+                "question_id": question_id,
+                "user_id": user_id,
+                "raw_input": question.content,
+                "structured_data": {
+                    "question_body": question.content,
+                    "student_answer": question.student_answer,
+                    "correct_answer": question.correct_answer,
+                },
+                "subject": question.subject.value if question.subject else "math",
+                "grade": question.grade or "",
+                "chapter": question.chapter or "",
+                "knowledge_points": question.knowledge_points or [],
+                "errors": [],
+            }
+
+            # 执行分析
+            result = await analyze_error(state)
+            state = {**state, **result}
+
+            # 更新结果
+            await update_result(state)
+
+            async with async_session_maker() as session:
+                await crud_task.complete_task(session, task_id, question_id)
+                await session.commit()
 
         except Exception as e:
-            logger.error(f"WZY Reanalysis task {task_id} failed: {e}")
+            logger.error(f"Reanalysis task {task_id} failed: {e}")
             async with async_session_maker() as session:
                 await crud_task.fail_task(session, task_id, str(e))
                 await session.commit()
@@ -1086,26 +1251,9 @@ async def find_similar_questions(
         question = await crud_question.get_question(db, query.question_id, user_id)
         if not question:
             raise HTTPException(status_code=404, detail="Question not found")
-        
-        # 验证学科是否属于WZY模块
-        if question.subject not in WZY_SUBJECTS:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Question subject '{question.subject}' is not managed by WZY module"
-            )
-            
         query_text = question.content
-        query_subject = question.subject
     elif query.content:
         query_text = query.content
-        query_subject = query.subject if query.subject else "数学"
-        
-        # 验证学科
-        if query_subject not in WZY_SUBJECTS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Subject '{query_subject}' is not supported by WZY module"
-            )
     else:
         raise HTTPException(status_code=400, detail="Provide question_id or content")
 
@@ -1113,7 +1261,7 @@ async def find_similar_questions(
     results = await vector_store.search_by_text(
         query_text=query_text,
         n_results=query.limit,
-        where={"user_id": user_id, "subject": query_subject} if user_id else {"subject": query_subject},
+        where={"user_id": user_id} if user_id else None,
     )
 
     # Get full question data
@@ -1123,89 +1271,7 @@ async def find_similar_questions(
         if query.question_id and q_id == query.question_id:
             continue  # Skip self
         question = await crud_question.get_question(db, q_id, user_id)
-        if question and question.subject in WZY_SUBJECTS:  # 确保是WZY管理的学科
+        if question:
             questions.append(QuestionResponse.model_validate(question))
 
     return questions
-
-
-# ============== 辅助函数 ==============
-
-async def _process_image_with_generic_ocr(task_id: str, user_id: int, file_path: str, subject: str, image_file_id: int):
-    """
-    使用通用OCR处理图片
-    """
-    try:
-        # 使用新的数据库会话
-        async with async_session_maker() as session:
-            # 使用Gemini OCR服务
-            ocr_service = get_gemini_ocr_service(settings)
-            await ocr_service.initialize()
-            
-            # 根据学科设置OCR提示词
-            ocr_prompt = f"""请识别这张{subject}题目图片，提取以下信息：
-            
-1. 题目内容
-2. 如果有学生写的答案，提取学生答案
-3. 如果有正确答案，提取正确答案
-4. 题目类型（选择题、填空题、解答题等）
-5. 涉及的知识点
-
-请以JSON格式返回。"""
-            
-            ocr_result = await ocr_service._analyze_image(
-                image_path=file_path,
-                prompt=ocr_prompt
-            )
-            
-            # 解析OCR结果
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', ocr_result)
-            if json_match:
-                try:
-                    ocr_data = json.loads(json_match.group())
-                except:
-                    ocr_data = {"question_content": ocr_result}
-            else:
-                ocr_data = {"question_content": ocr_result}
-            
-            # 创建题目记录
-            from backend.core.crud import crud_question
-            
-            question_dict = {
-                "content": ocr_data.get("question_content", "OCR识别结果"),
-                "subject": subject,
-                "difficulty": "medium",
-                "user_id": user_id,
-                "image_urls": [file_path],
-                "source_image_id": image_file_id,
-                "student_answer": ocr_data.get("student_answer", ""),
-                "correct_answer": ocr_data.get("correct_answer", ""),
-                "question_type": ocr_data.get("question_type", ""),
-                "knowledge_points": ocr_data.get("knowledge_points", []),
-                "tags": [f"{subject.lower()}_wzy", "ocr_processed"],
-            }
-            
-            created_question = await crud_question.create_question(session, question_dict)
-            
-            # 更新任务状态为完成
-            await crud_task.complete_task(
-                session,
-                task_id,
-                question_id=created_question.id if created_question else None,
-                result={
-                    "question_id": created_question.id if created_question else None,
-                    "subject": subject,
-                    "ocr_data": ocr_data,
-                    "processed_by": "wzy_generic_ocr",
-                }
-            )
-            
-            await session.commit()
-            logger.info(f"WZY Generic OCR processing completed for task {task_id}")
-            
-    except Exception as e:
-        logger.error(f"WZY Generic OCR processing failed for task {task_id}: {e}", exc_info=True)
-        async with async_session_maker() as session:
-            await crud_task.fail_task(session, task_id, f"OCR processing failed: {str(e)}")
-            await session.commit()

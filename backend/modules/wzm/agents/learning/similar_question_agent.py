@@ -5,6 +5,7 @@ WZM - 相似题/举一反三 Agent（学生实现版 / Stub）
 请对照参考实现：`backend/modules/tony/agents/learning/similar_question_agent.py`
 """
 
+import os
 import logging
 from typing import Dict, Any, Optional
 

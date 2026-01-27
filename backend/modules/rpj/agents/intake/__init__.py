@@ -1,3 +1,3 @@
-"""RPJ module - Intake agents subpackage."""
+"""WZY module - Intake agents subpackage."""
 
 

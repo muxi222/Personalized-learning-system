@@ -73,7 +73,11 @@ async def _proxy(
 
     t0 = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # IMPORTANT: This is an internal localhost proxy call (127.0.0.1 -> module port).
+        # In many classroom environments, users set ALL_PROXY/HTTP_PROXY globally.
+        # httpx defaults to `trust_env=True` and would route localhost traffic through proxies,
+        # causing confusing failures like "Server disconnected without sending a response".
+        async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
             if method == "GET":
                 resp = await client.get(url, params=params, headers=headers)
             elif method == "DELETE":
@@ -152,7 +156,8 @@ async def _proxy_stream(
     async def gen():
         t0 = time.monotonic()
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            # Same proxy caveat as above; disable env proxies for localhost module calls.
+            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
                 async with client.stream("POST", url, params=params, json=json_body or {}, headers=headers) as resp:
                     dt_ms = int((time.monotonic() - t0) * 1000)
                     logger.info(

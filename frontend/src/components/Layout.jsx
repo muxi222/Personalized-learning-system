@@ -83,8 +83,8 @@ export default function Layout() {
               <BookOpen className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="font-display font-bold text-lg text-white">AI学习小书童</h1>
-              <p className="text-xs text-slate-500">智能错题分析</p>
+              <h1 className="font-display font-bold text-lg text-white">灵动书童</h1>
+              <p className="text-xs text-slate-500">你的 AI 个性化学习引擎</p>
             </div>
           </div>
         </div>

@@ -21,7 +21,7 @@ from langgraph.graph import StateGraph, END
 
 from backend.core.agents.state import QuestionIntakeState
 from backend.core.agents.base_agent import BaseAgent
-from backend.modules.tony.config import settings
+from backend.modules.xmx.config import settings
 
 logger = logging.getLogger(__name__)
 

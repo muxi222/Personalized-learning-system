@@ -90,7 +90,7 @@ export default function Register() {
             <BookOpen className="w-8 h-8 text-white" />
           </div>
           <h1 className="font-display text-3xl font-bold text-white mb-2">
-            AI学习小书童
+            灵动书童
           </h1>
           <p className="text-slate-400">开启智能学习之旅</p>
         </div>

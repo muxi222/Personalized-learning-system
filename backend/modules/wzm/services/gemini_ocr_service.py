@@ -32,9 +32,9 @@ import asyncio
 import random
 import time
 
-from ..base_config import get_base_settings
-from .llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
-from .llm_trace import write_llm_trace
+from backend.core.base_config import get_base_settings
+from backend.core.services.llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
+from backend.core.services.llm_trace import write_llm_trace
 
 settings = get_base_settings()
 
@@ -1195,7 +1195,7 @@ class GeminiOCRService:
                     # 确保答案是 Unicode 字符串
                     if isinstance(ans, bytes):
                         ans_t = ans_t.decode('utf-8')
-                    p_t = str(p).decode('utf-8')
+                    p_t = str(p)
                     ans = ans + p_t + "." + ans_t
 
                 # 计算可用的文本宽度（留出左右边距）

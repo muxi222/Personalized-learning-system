@@ -1,7 +1,7 @@
 [project]
 name = "learning-assistant"
 version = "0.1.0"
-description = "AI个性化学习小书童 - 智能错题分析与举一反三推荐系统"
+description = "灵动书童：你的 AI 个性化学习引擎"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

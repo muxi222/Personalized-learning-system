@@ -62,7 +62,8 @@ async def _proxy_stats_to_module(module: str, subject: str, request: Request) ->
         headers["authorization"] = auth
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Localhost intra-service call; do not route through env proxies.
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             resp = await client.get(url, params={"subject": subject}, headers=headers)
     except Exception as e:
         logger.error(f"[DEFAULT] proxy feedback stats failed: module={module}, subject={subject}, err={e}")

@@ -4,6 +4,7 @@
 参考：`backend/modules/tony/api/endpoints/shared/users.py`
 """
 
+import os
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException

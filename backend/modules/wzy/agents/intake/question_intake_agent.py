@@ -305,6 +305,8 @@ async def trigger_embedding(state: QuestionIntakeState) -> Dict[str, Any]:
 
     question_id = state.get("question_id")
     structured_data = state.get("structured_data", {})
+    logger.info(f"[trigger_embedding] Structured data: {structured_data}, 111111")
+    logger.info(f"[trigger_embedding] Question id: {question_id}, 222222")
 
     if not question_id:
         return {

@@ -37,9 +37,9 @@ export default function Login() {
             <BookOpen className="w-8 h-8 text-white" />
           </div>
           <h1 className="font-display text-3xl font-bold text-white mb-2">
-            AI学习小书童
+            灵动书童
           </h1>
-          <p className="text-slate-400">智能错题分析与举一反三推荐系统</p>
+          <p className="text-slate-400">你的 AI 个性化学习引擎</p>
         </div>
 
         {/* Login form */}

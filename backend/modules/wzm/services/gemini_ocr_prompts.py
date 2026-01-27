@@ -5,6 +5,7 @@ WZM - Gemini OCR Prompt Provider (students TODO)
 - WZM 属于学生模块：仅提供入口文件与 TODO。
 - 当前默认透传到 tony 的 prompt provider，以保持系统运行不变。
 """
+import os
 
 from typing import Optional, Dict, Any
 

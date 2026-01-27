@@ -66,7 +66,8 @@ async def _proxy_learning_get(
         headers["authorization"] = auth
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        # Localhost intra-service call; do not route through env proxies.
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
             resp = await client.get(url, params=params, headers=headers)
     except Exception as e:
         logger.error(f"[DEFAULT] proxy learning failed: module={module}, url={url}, err={e}")

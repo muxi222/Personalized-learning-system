@@ -1,60 +1,37 @@
 """
-RPJ - 错题录入 Agent（学生实现版 / Stub）
+错题录入Agent - Question Intake Agent
+根据设计文档4.1节实现
 
-本文件为RPJ模块（语文、英语、政治学科）的错题录入Agent框架。
-请参考Tony模块实现：`backend/modules/tony/agents/intake/question_intake_agent.py`
-
-主要功能：
-1. 接收用户输入（文本/图片OCR结果）
-2. 解析为结构化错题数据
-3. 保存到数据库并生成向量
-4. 生成举一反三题目
+功能流程:
+1. 接收用户输入 (文本/图片)
+2. OCR处理 (如果是图片)
+3. 语义解析 - 使用LLM提取结构化信息
+4. 数据存储 - 保存到数据库
+5. 触发异步Embedding
 """
 
 import logging
 import json
-from typing import Dict, Any, Optional, List
-from datetime import datetime
+from typing import Dict, Any, Optional
 
 from langgraph.graph import StateGraph, END
 
 from backend.core.agents.state import QuestionIntakeState
 from backend.core.agents.prompts import QUESTION_INTAKE_PROMPT
 from backend.core.agents.base_agent import BaseAgent
-from backend.modules.rpj.config import settings
+from backend.modules.tony.config import settings
 
 logger = logging.getLogger(__name__)
 
-# RPJ模块学科映射（语文、英语、政治）
-RPJ_SUBJECT_MAP = {
-    "chinese": "语文",
-    "english": "英语", 
-    "politics": "政治",
-    "other": "其他",
-}
-
-# RPJ模块难度映射
-DIFFICULTY_MAP = {
-    "easy": "简单",
-    "medium": "中等",
-    "hard": "困难",
-    "简单": "easy",
-    "中等": "medium",
-    "困难": "hard",
-}
-
 class QuestionIntakeAgent(BaseAgent):
     """
-    RPJ模块错题录入Agent
-    
-    负责接收、解析、存储错题（语文、英语、政治学科）
-    基于LangGraph工作流实现
+    错题录入Agent
+    负责接收、解析、存储错题
     """
 
     def __init__(self):
-        super().__init__(subjects=["chinese", "english", "politics", "other"])
+        super().__init__(subjects=settings.SUBJECTS)
         self.graph = create_intake_graph()
-        logger.info(f"[RPJ] QuestionIntakeAgent initialized with subjects: {self.subjects}")
 
     async def process(
         self,
@@ -67,11 +44,10 @@ class QuestionIntakeAgent(BaseAgent):
         subject: Optional[str] = None,
         difficulty: Optional[str] = None,
         title: Optional[str] = None,
-        grade: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        处理错题录入主流程
-        
+        处理错题录入
+
         Args:
             raw_input: 原始输入文本
             user_id: 用户ID
@@ -79,408 +55,443 @@ class QuestionIntakeAgent(BaseAgent):
             image_urls: 图片URL列表 (可选)
             student_answer: 学生答案 (可选)
             correct_answer: 正确答案 (可选)
-            subject: 学科 (可选，支持：chinese/english/politics/other)
-            difficulty: 难度 (可选，支持：easy/medium/hard)
+            subject: 学科 (可选)
+            difficulty: 难度 (可选)
             title: 题目标题 (可选)
-            grade: 年级 (可选)
-            
-        Returns:
-            处理结果字典:
-            {
-                "task_id": str,
-                "question_id": int | None,
-                "success": bool,
-                "errors": List[str],
-                "structured_data": Dict,
-                "created_at": str
-            }
-        """
-        # TODO(student): 实现RPJ模块的错题录入主流程
-        # 参考实现：Tony模块的QuestionIntakeAgent.process方法
-        # 需要适配RPJ模块的学科特点
-        
-        # 步骤1: 验证输入参数
-        # - 验证学科是否在RPJ模块支持范围内
-        # - 验证难度格式
-        # - 处理中英文转换
-        
-        # 步骤2: 构建初始状态
-        # - 合并原始输入和OCR结果（如果有）
-        # - 预设结构化数据
-        # - 设置学科和难度
-        
-        # 步骤3: 运行工作流图
-        # - 使用self.graph.astream处理
-        # - 捕获各个节点的输出
-        
-        # 步骤4: 返回处理结果
-        # - 包含question_id（如果成功）
-        # - 包含错误信息（如果失败）
-        
-        raise NotImplementedError("QuestionIntakeAgent.process() not implemented for RPJ module")
 
-# ============ Graph Nodes (工作流节点) ============
+        Returns:
+            处理结果，包含question_id等
+        """
+        # Validate subject if provided
+        if subject and not self.validate_subject(subject):
+            logger.error(f"Subject '{subject}' not supported by TONY module")
+            return {
+                "task_id": task_id,
+                "question_id": None,
+                "success": False,
+                "errors": [f"Subject '{subject}' not supported by TONY module. Supported: {settings.SUBJECTS}"],
+            }
+
+        initial_state: QuestionIntakeState = {
+            "raw_input": raw_input,
+            "user_id": user_id,
+            "task_id": task_id,
+            "image_urls": image_urls or [],
+            "errors": [],
+            "parse_attempts": 0,
+            "parse_success": False,
+        }
+
+        # 预设结构化数据
+        structured_data = {}
+        if student_answer:
+            structured_data["student_answer"] = student_answer
+        if correct_answer:
+            structured_data["correct_answer"] = correct_answer
+        if title:
+            structured_data["title"] = title
+
+        if structured_data:
+            initial_state["structured_data"] = structured_data
+
+        # 预设学科和难度
+        if subject:
+            initial_state["subject"] = subject
+        if difficulty:
+            initial_state["difficulty"] = difficulty
+
+        # 运行图
+        final_state = None
+        async for state in self.graph.astream(initial_state):
+            for node_name, node_output in state.items():
+                if isinstance(node_output, dict):
+                    final_state = {**initial_state, **(final_state or {}), **node_output}
+
+        return {
+            "task_id": task_id,
+            "question_id": final_state.get("question_id") if final_state else None,
+            "success": final_state.get("parse_success", False) if final_state else False,
+            "errors": final_state.get("errors", []) if final_state else [],
+        }
+
+# ============ Graph Nodes ============
+
+async def ocr_process(state: QuestionIntakeState) -> Dict[str, Any]:
+    """
+    OCR处理节点 - 处理图片输入
+    """
+    logger.info(f"[ocr_process] Task {state.get('task_id')}: Processing images")
+
+    image_urls = state.get("image_urls", [])
+    if not image_urls:
+        return {
+            "ocr_result": "",
+            "current_step": "ocr_process",
+            "progress": 5.0,
+        }
+
+    # TODO: 集成OCR服务 (Tesseract / 云服务)
+    # 目前返回空，后续可扩展
+    try:
+        # 示例: 使用多模态模型直接理解图片
+        # 或调用OCR API
+        ocr_text = ""
+
+        logger.info(f"[ocr_process] Processed {len(image_urls)} images")
+
+        return {
+            "ocr_result": ocr_text,
+            "image_text": ocr_text,
+            "current_step": "ocr_process",
+            "progress": 10.0,
+        }
+    except Exception as e:
+        logger.error(f"[ocr_process] OCR error: {e}")
+        return {
+            "errors": [f"OCR处理失败: {str(e)}"],
+            "current_step": "ocr_process",
+            "progress": 10.0,
+        }
 
 async def semantic_parse(state: QuestionIntakeState) -> Dict[str, Any]:
     """
-    语义解析节点 - 使用LLM提取结构化信息（RPJ模块专用）
-    
-    TODO(student):
-    1. 使用RPJ模块的LLM配置调用大模型
-    2. 设计适合语文、英语、政治学科的prompt模板
-    3. 提取以下信息：
-       - 题目正文 (question_body)
-       - 题目类型 (question_type: 选择题/填空题/阅读理解/作文等)
-       - 学科 (subject: chinese/english/politics)
-       - 年级 (grade)
-       - 章节 (chapter: 从CHAPTER_TAXONOMY中选择)
-       - 知识点 (knowledge_points: 从KNOWLEDGE_POINT_TAXONOMY中选择1-3个)
-       - 难度 (difficulty: easy/medium/hard)
-       - 标签 (tags: 2-6个短词)
-    
-    Args:
-        state: 工作流状态
-        
-    Returns:
-        包含解析结果的字典
+    语义解析节点 - 使用LLM提取结构化信息
+    根据设计文档4.1节的Prompt设计
     """
-    # TODO(student): 实现RPJ模块的语义解析
-    # 参考：Tony模块的semantic_parse函数
-    # 注意：要适配语文、英语、政治学科的特点
-    
-    # 示例代码结构：
-    # 1. 合并原始输入和OCR结果
-    # combined_input = state.get("raw_input", "") + state.get("ocr_result", "")
-    
-    # 2. 构建学科特定的prompt
-    # subject = state.get("subject", "chinese")
-    # prompt = build_rpj_prompt(subject, combined_input)
-    
-    # 3. 调用LLM服务（使用RPJ模块配置）
-    # from backend.core.services.llm_service import get_llm_service
-    # llm = get_llm_service(module="rpj")
-    # result = await llm.generate_json(prompt=prompt, temperature=0.3)
-    
-    # 4. 验证和标准化结果
-    # - 学科必须映射为英文：chinese/english/politics
-    # - 章节必须从CHAPTER_TAXONOMY中选择
-    # - 知识点必须从KNOWLEDGE_POINT_TAXONOMY中选择
-    # - 难度转换为标准格式
-    
-    # 5. 返回结构化数据
-    
-    raise NotImplementedError("semantic_parse() not implemented for RPJ module")
+    logger.info(f"[semantic_parse] Task {state.get('task_id')}: Parsing input")
 
-async def subject_validation_and_normalization(state: QuestionIntakeState) -> Dict[str, Any]:
-    """
-    学科验证与归一化节点（RPJ模块专用）
-    
-    TODO(student):
-    1. 验证用户选择的学科与解析出的学科是否一致
-    2. 如果不一致且置信度高(≥0.75)，记录学科不匹配警告
-    3. 对章节和知识点进行归一化处理
-    4. 生成标准化标签
-    
-    Args:
-        state: 工作流状态
-        
-    Returns:
-        包含验证和归一化结果的字典
-    """
-    # TODO(student): 实现学科验证与归一化
-    # 这个节点是RPJ模块特有的，用于确保学科一致性
-    
-    # 步骤：
-    # 1. 从state中获取用户选择的学科和解析出的学科
-    # 2. 比较两者，如果不同且解析置信度高，添加警告
-    # 3. 使用RPJ模块的分类体系对章节和知识点进行归一化
-    # 4. 生成适合检索的标签
-    
-    raise NotImplementedError("subject_validation_and_normalization() not implemented for RPJ module")
+    from backend.core.services.llm_service import get_llm_service
+
+    llm = get_llm_service()
+
+    # 合并原始输入和OCR结果
+    raw_input = state.get("raw_input", "")
+    ocr_text = state.get("ocr_result", "")
+    combined_input = f"{raw_input}\n{ocr_text}".strip()
+
+    if not combined_input:
+        return {
+            "errors": ["输入内容为空"],
+            "parse_success": False,
+            "current_step": "semantic_parse",
+            "progress": 20.0,
+        }
+
+    # 使用设计文档中的Prompt
+    prompt = QUESTION_INTAKE_PROMPT.format(user_input_text=combined_input)
+
+    # 调用LLM进行结构化解析
+    result = await llm.generate_json(
+        prompt=prompt,
+        temperature=0.3,  # 低温度确保一致性
+    )
+
+    if not result:
+        logger.error("[semantic_parse] Failed to parse input")
+        return {
+            "structured_data": {"question_body": combined_input},
+            "errors": ["无法解析题目结构，将使用原始文本"],
+            "parse_success": False,
+            "parse_attempts": state.get("parse_attempts", 0) + 1,
+            "current_step": "semantic_parse",
+            "progress": 20.0,
+        }
+
+    # 合并已有的structured_data (如student_answer)
+    existing_data = state.get("structured_data", {})
+    structured_data = {**result, **existing_data}
+
+    logger.info(f"[semantic_parse] Parsed fields: {list(result.keys())}")
+
+    return {
+        "structured_data": structured_data,
+        "subject": result.get("subject", "其他"),
+        "grade": result.get("grade", ""),
+        "difficulty": result.get("difficulty", "中级"),
+        "chapter": result.get("chapter", ""),
+        "knowledge_points": result.get("knowledge_points", []),
+        "parse_success": True,
+        "parse_attempts": state.get("parse_attempts", 0) + 1,
+        "current_step": "semantic_parse",
+        "progress": 30.0,
+    }
 
 async def save_to_database(state: QuestionIntakeState) -> Dict[str, Any]:
     """
-    数据存储节点 - 保存到数据库（RPJ模块专用）
-    
-    TODO(student):
-    1. 将结构化数据保存到数据库
-    2. 处理学科映射（中英文转换）
-    3. 保存章节和知识点信息
-    4. 记录原始输入和解析后的输入
-    
-    Args:
-        state: 工作流状态
-        
-    Returns:
-        包含question_id的字典
+    数据存储节点 - 保存到数据库
     """
-    # TODO(student): 实现RPJ模块的数据存储
-    # 参考：Tony模块的save_to_database函数
-    
-    # 注意事项：
-    # 1. 使用RPJ模块的数据库模型
-    # 2. 学科类型需要映射为RPJ模块的SubjectType
-    # 3. 难度需要映射为DifficultyLevel
-    # 4. 保存章节和知识点到特定字段
-    # 5. 记录学科判定信息（detected_subject, confidence等）
-    
-    raise NotImplementedError("save_to_database() not implemented for RPJ module")
+    logger.info(f"[save_to_database] Task {state.get('task_id')}: Saving to DB")
+
+    from backend.core.db.session import async_session_maker
+    from backend.core.crud.crud_question import create_question
+    from backend.core.schemas.question import QuestionCreate, SubjectType, DifficultyLevel
+
+    structured_data = state.get("structured_data", {})
+    user_id = state.get("user_id")
+
+    if not user_id:
+        return {
+            "errors": ["缺少用户ID"],
+            "current_step": "save_to_database",
+            "progress": 40.0,
+        }
+
+    try:
+        # 映射学科
+        subject_map = {
+            "数学": SubjectType.MATH,
+            "math": SubjectType.MATH,
+            "物理": SubjectType.PHYSICS,
+            "physics": SubjectType.PHYSICS,
+            "化学": SubjectType.CHEMISTRY,
+            "chemistry": SubjectType.CHEMISTRY,
+            "生物": SubjectType.BIOLOGY,
+            "biology": SubjectType.BIOLOGY,
+            "英语": SubjectType.ENGLISH,
+            "english": SubjectType.ENGLISH,
+            "语文": SubjectType.CHINESE,
+            "chinese": SubjectType.CHINESE,
+        }
+        subject = subject_map.get(
+            structured_data.get("subject", "").lower(),
+            SubjectType.OTHER
+        )
+
+        # 映射难度
+        difficulty_map = {
+            "初级": DifficultyLevel.EASY,
+            "easy": DifficultyLevel.EASY,
+            "中级": DifficultyLevel.MEDIUM,
+            "medium": DifficultyLevel.MEDIUM,
+            "高级": DifficultyLevel.HARD,
+            "hard": DifficultyLevel.HARD,
+        }
+        difficulty = difficulty_map.get(
+            structured_data.get("difficulty", "").lower(),
+            DifficultyLevel.MEDIUM
+        )
+
+        # 创建题目
+        question_data = QuestionCreate(
+            content=structured_data.get("question_body", state.get("raw_input", "")),
+            title=structured_data.get("chapter", ""),
+            subject=subject,
+            difficulty=difficulty,
+            image_urls=state.get("image_urls", []),
+            student_answer=structured_data.get("student_answer"),
+            correct_answer=structured_data.get("correct_answer"),
+            source=structured_data.get("source"),
+            chapter=structured_data.get("chapter"),
+            tags=structured_data.get("knowledge_points", []),
+        )
+
+        async with async_session_maker() as session:
+            question = await create_question(session, question_data, user_id)
+            await session.commit()
+            question_id = question.id
+
+        logger.info(f"[save_to_database] Created question ID: {question_id}")
+
+        return {
+            "question_id": question_id,
+            "current_step": "save_to_database",
+            "progress": 50.0,
+        }
+
+    except Exception as e:
+        logger.error(f"[save_to_database] Error: {e}")
+        return {
+            "errors": [f"保存失败: {str(e)}"],
+            "current_step": "save_to_database",
+            "progress": 40.0,
+        }
 
 async def trigger_embedding(state: QuestionIntakeState) -> Dict[str, Any]:
     """
-    触发异步Embedding节点（RPJ模块专用）
-    
-    TODO(student):
-    1. 生成题目文本的embedding向量
-    2. 将向量保存到向量数据库
-    3. 添加学科、章节、知识点等元数据
-    
-    Args:
-        state: 工作流状态
-        
-    Returns:
-        包含embedding状态的字典
+    触发异步Embedding节点
+    根据设计文档4.1节: 将question_id和question_body发送至消息队列
     """
-    # TODO(student): 实现RPJ模块的向量化处理
-    # 参考：Tony模块的trigger_embedding函数
-    
-    # 注意事项：
-    # 1. 使用RPJ模块的embedding配置
-    # 2. 结合学科特点优化文本表示
-    # 3. 元数据中包含学科、章节、知识点等信息
-    
-    raise NotImplementedError("trigger_embedding() not implemented for RPJ module")
+    logger.info(f"[trigger_embedding] Task {state.get('task_id')}: Triggering embedding")
+
+    from backend.core.services.embedding_service import get_embedding_service
+    from backend.core.services.vector_store_service import get_vector_store_service
+
+    question_id = state.get("question_id")
+    structured_data = state.get("structured_data", {})
+
+    if not question_id:
+        return {
+            "errors": ["缺少question_id，无法生成embedding"],
+            "current_step": "trigger_embedding",
+            "progress": 60.0,
+        }
+
+    try:
+        # 获取题目内容用于embedding
+        question_body = structured_data.get("question_body", state.get("raw_input", ""))
+        knowledge_points = state.get("knowledge_points", [])
+
+        # 合并知识点以增强embedding
+        if knowledge_points:
+            question_body = f"{question_body}\n知识点: {', '.join(knowledge_points)}"
+
+        # 根据学科选择Embedding模型 (设计文档4.1节)
+        subject = state.get("subject", "")
+        embedding_service = get_embedding_service()
+
+        # 生成embedding
+        embedding = await embedding_service.embed_text(question_body)
+
+        if embedding:
+            # 存入向量数据库
+            vector_store = get_vector_store_service()
+            await vector_store.initialize()
+
+            metadata = {
+                "user_id": state.get("user_id"),
+                "subject": subject,
+                "grade": state.get("grade", ""),
+                "difficulty": state.get("difficulty", ""),
+                "knowledge_points": ",".join(knowledge_points),
+            }
+
+            await vector_store.add_embedding(
+                doc_id=str(question_id),
+                embedding=embedding,
+                metadata=metadata,
+                document=question_body,
+            )
+
+            logger.info(f"[trigger_embedding] Embedding saved for question {question_id}")
+
+        return {
+            "embedding": embedding,
+            "current_step": "trigger_embedding",
+            "progress": 70.0,
+        }
+
+    except Exception as e:
+        logger.error(f"[trigger_embedding] Error: {e}")
+        return {
+            "errors": [f"Embedding生成失败: {str(e)}"],
+            "current_step": "trigger_embedding",
+            "progress": 60.0,
+        }
 
 async def analyze_error(state: QuestionIntakeState) -> Dict[str, Any]:
     """
-    错因分析节点（RPJ模块专用）
-    
-    TODO(student):
-    1. 根据学科特点分析错误原因
-    2. 语文：分析语言表达、理解偏差、知识盲点等
-    3. 英语：分析语法错误、词汇不足、理解偏差等
-    4. 政治：分析概念混淆、理解偏差、应用不当等
-    
-    Args:
-        state: 工作流状态
-        
-    Returns:
-        包含错因分析结果的字典
+    错因分析节点
     """
-    # TODO(student): 实现RPJ模块的错因分析
-    # 参考：Tony模块的analyze_error函数
-    
-    # 注意事项：
-    # 1. 设计学科特定的错因分析prompt
-    # 2. 语文：关注语言表达、修辞手法、篇章结构等
-    # 3. 英语：关注语法、词汇、阅读理解等
-    # 4. 政治：关注概念理解、理论应用、时事分析等
-    
-    raise NotImplementedError("analyze_error() not implemented for RPJ module")
+    logger.info(f"[analyze_error] Task {state.get('task_id')}: Analyzing error")
 
-async def generate_suggested_questions(state: QuestionIntakeState) -> Dict[str, Any]:
-    """
-    生成举一反三题目节点（RPJ模块专用）
-    
-    TODO(student):
-    1. 根据原题生成相似题目
-    2. 保持相同知识点但变换形式
-    3. 生成1-3个举一反三题目
-    4. 包含题目、答案、难度、知识点等信息
-    
-    Args:
-        state: 工作流状态
-        
-    Returns:
-        包含举一反三题目的字典
-    """
-    # TODO(student): 实现RPJ模块的举一反三题目生成
-    # 这个节点是错题录入的重要环节
-    
-    # 步骤：
-    # 1. 基于原题的知识点和难度
-    # 2. 生成相似但不同的题目
-    # 3. 确保题目质量（语法正确、逻辑清晰）
-    # 4. 生成参考答案和解题思路
-    
-    raise NotImplementedError("generate_suggested_questions() not implemented for RPJ module")
+    from backend.core.services.llm_service import get_llm_service
+    from backend.core.agents.prompts import get_error_analysis_prompt, get_subject_name_cn
+
+    llm = get_llm_service()
+    structured_data = state.get("structured_data", {})
+    subject = state.get("subject", "")
+
+    # 获取学科专用Prompt
+    prompt_template = get_error_analysis_prompt(subject)
+
+    prompt = prompt_template.format(
+        subject=get_subject_name_cn(subject),
+        question_body=structured_data.get("question_body", state.get("raw_input", "")),
+        student_answer=structured_data.get("student_answer", "未提供"),
+        correct_answer=structured_data.get("correct_answer", "未提供"),
+        knowledge_points=", ".join(state.get("knowledge_points", ["未知"])),
+        grade=state.get("grade", "未知"),
+        chapter=state.get("chapter", "未知"),
+    )
+
+    error_analysis = await llm.generate(
+        prompt=prompt,
+        system_prompt="你是学习小书童，一位温暖有耐心的老师。",
+        temperature=0.7,
+        max_tokens=2000,
+    )
+
+    if not error_analysis:
+        return {
+            "error_analysis": "分析生成失败，请稍后重试。",
+            "current_step": "analyze_error",
+            "progress": 85.0,
+        }
+
+    return {
+        "error_analysis": error_analysis,
+        "current_step": "analyze_error",
+        "progress": 85.0,
+    }
 
 async def update_result(state: QuestionIntakeState) -> Dict[str, Any]:
     """
-    更新最终结果节点（RPJ模块专用）
-    
-    TODO(student):
-    1. 更新数据库中的错题记录
-    2. 添加错因分析和举一反三题目
-    3. 更新任务状态为完成
-    4. 记录处理时间
-    
-    Args:
-        state: 工作流状态
-        
-    Returns:
-        包含最终状态的字典
+    更新最终结果节点
     """
-    # TODO(student): 实现RPJ模块的结果更新
-    # 参考：Tony模块的update_result函数
-    
-    # 注意事项：
-    # 1. 更新错题记录的错因分析字段
-    # 2. 保存举一反三题目到数据库
-    # 3. 更新任务状态
-    # 4. 记录完整的处理结果
-    
-    raise NotImplementedError("update_result() not implemented for RPJ module")
+    logger.info(f"[update_result] Task {state.get('task_id')}: Updating result")
 
-# ============ 辅助函数 ============
+    from backend.core.db.session import async_session_maker
+    from backend.core.crud.crud_question import update_question_analysis
+    from backend.core.crud.crud_task import complete_task
 
-def build_rpj_prompt(subject: str, input_text: str) -> str:
-    """
-    构建RPJ模块的语义解析prompt
-    
-    TODO(student):
-    根据学科构建特定的prompt模板
-    
-    Args:
-        subject: 学科（chinese/english/politics）
-        input_text: 输入文本
-        
-    Returns:
-        prompt字符串
-    """
-    # TODO(student): 实现RPJ模块的prompt构建
-    # 需要针对语文、英语、政治学科设计不同的prompt
-    
-    subject_cn = {
-        "chinese": "语文",
-        "english": "英语",
-        "politics": "政治"
-    }.get(subject, "其他")
-    
-    # 示例结构：
-    prompt_template = f"""
-    你是一位经验丰富的{subject_cn}老师，请分析以下题目并提取结构化信息：
-    
-    【题目原文】
-    {input_text}
-    
-    请提取以下信息（如果某项信息不存在，请留空或填写"未知"）：
-    1. 题目正文 (question_body)
-    2. 题目类型 (question_type: 选择题/填空题/阅读理解/作文/简答题/论述题等)
-    3. 学科 (subject: chinese/english/politics)
-    4. 年级 (grade: 如"高一"、"初三"等)
-    5. 章节 (chapter: 从以下选择：{CHAPTER_TAXONOMY.get(subject, ["综合"])})
-    6. 知识点 (knowledge_points: 从以下选择1-3个：{KNOWLEDGE_POINT_TAXONOMY.get(subject, ["综合"])})
-    7. 难度 (difficulty: easy/medium/hard)
-    8. 标签 (tags: 生成2-6个短词标签，用于检索)
-    
-    请以JSON格式返回，不要添加其他内容。
-    """
-    
-    return prompt_template
+    question_id = state.get("question_id")
+    task_id = state.get("task_id")
 
-def normalize_chapter(chapter: str, subject: str) -> str:
-    """
-    章节归一化函数
-    
-    TODO(student):
-    将解析出的章节映射到预定义的分类体系中
-    
-    Args:
-        chapter: 原始章节
-        subject: 学科
-        
-    Returns:
-        归一化后的章节
-    """
-    # TODO(student): 实现章节归一化
-    # 将相似的章节名称映射到标准名称
-    
-    raise NotImplementedError("normalize_chapter() not implemented for RPJ module")
+    if question_id:
+        try:
+            async with async_session_maker() as session:
+                await update_question_analysis(
+                    db=session,
+                    question_id=question_id,
+                    error_analysis=state.get("error_analysis"),
+                    knowledge_points=state.get("knowledge_points", []),
+                )
 
-def normalize_knowledge_points(knowledge_points: List[str], subject: str) -> List[str]:
-    """
-    知识点归一化函数
-    
-    TODO(student):
-    将解析出的知识点映射到预定义的分类体系中
-    
-    Args:
-        knowledge_points: 原始知识点列表
-        subject: 学科
-        
-    Returns:
-        归一化后的知识点列表
-    """
-    # TODO(student): 实现知识点归一化
-    # 将相似的知识点名称映射到标准名称
-    
-    raise NotImplementedError("normalize_knowledge_points() not implemented for RPJ module")
+                if task_id:
+                    await complete_task(session, task_id, question_id)
 
-# ============ Graph Definition (工作流定义) ============
+                await session.commit()
+
+            logger.info(f"[update_result] Updated question {question_id}")
+        except Exception as e:
+            logger.error(f"[update_result] Error: {e}")
+
+    return {
+        "current_step": "update_result",
+        "progress": 100.0,
+    }
+
+# ============ Graph Definition ============
 
 def create_intake_graph():
     """
-    创建RPJ模块错题录入Agent的工作流图
-    
-    TODO(student):
-    设计适合RPJ模块的工作流，包含以下节点：
-    1. semantic_parse: 语义解析
-    2. subject_validation_and_normalization: 学科验证与归一化
+    创建错题录入Agent的工作流图
+
+    流程:
+    1. ocr_process: OCR处理图片
+    2. semantic_parse: 语义解析提取结构化信息
     3. save_to_database: 保存到数据库
-    4. trigger_embedding: 触发向量化
+    4. trigger_embedding: 触发异步Embedding
     5. analyze_error: 错因分析
-    6. generate_suggested_questions: 生成举一反三题目
-    7. update_result: 更新结果
-    
-    注意：可以根据需要调整节点顺序和连接关系
+    6. update_result: 更新最终结果
     """
-    
     workflow = StateGraph(QuestionIntakeState)
-    
-    # TODO(student): 添加工作流节点
-    # workflow.add_node("semantic_parse", semantic_parse)
-    # workflow.add_node("subject_validation_and_normalization", subject_validation_and_normalization)
-    # workflow.add_node("save_to_database", save_to_database)
-    # workflow.add_node("trigger_embedding", trigger_embedding)
-    # workflow.add_node("analyze_error", analyze_error)
-    # workflow.add_node("generate_suggested_questions", generate_suggested_questions)
-    # workflow.add_node("update_result", update_result)
-    
-    # TODO(student): 定义工作流边（连接关系）
-    # workflow.set_entry_point("semantic_parse")
-    # workflow.add_edge("semantic_parse", "subject_validation_and_normalization")
-    # workflow.add_edge("subject_validation_and_normalization", "save_to_database")
-    # ...
-    # workflow.add_edge("update_result", END)
-    
-    # TODO(student): 编译工作流图
-    # return workflow.compile()
-    
-    raise NotImplementedError("create_intake_graph() not implemented for RPJ module")
 
-# ============ 全局变量（从模块配置导入） ============
+    # 添加节点
+    workflow.add_node("ocr_process", ocr_process)
+    workflow.add_node("semantic_parse", semantic_parse)
+    workflow.add_node("save_to_database", save_to_database)
+    workflow.add_node("trigger_embedding", trigger_embedding)
+    workflow.add_node("analyze_error", analyze_error)
+    workflow.add_node("update_result", update_result)
 
-# 从配置中获取分类体系
-try:
-    from backend.modules.rpj.api.endpoints.intake.questions import (
-        CHAPTER_TAXONOMY, 
-        KNOWLEDGE_POINT_TAXONOMY
-    )
-except ImportError:
-    # 备用分类体系
-    CHAPTER_TAXONOMY = {
-        "chinese": ["文言文", "现代文", "古诗词", "作文", "语言运用", "综合"],
-        "english": ["阅读理解", "完形填空", "语法", "写作", "词汇", "综合"],
-        "politics": ["政治生活", "经济生活", "文化生活", "哲学", "时事政治", "综合"],
-        "other": ["综合"],
-    }
-    
-    KNOWLEDGE_POINT_TAXONOMY = {
-        "chinese": ["文言实词", "修辞手法", "篇章结构", "写作技巧", "文学常识", "综合"],
-        "english": ["时态语态", "从句结构", "阅读理解技巧", "写作模板", "词汇搭配", "综合"],
-        "politics": ["政治制度", "经济原理", "文化传承", "哲学原理", "政策法规", "综合"],
-        "other": ["综合"],
-    }
+    # 定义边
+    workflow.set_entry_point("ocr_process")
+    workflow.add_edge("ocr_process", "semantic_parse")
+    workflow.add_edge("semantic_parse", "save_to_database")
+    workflow.add_edge("save_to_database", "trigger_embedding")
+    workflow.add_edge("trigger_embedding", "analyze_error")
+    workflow.add_edge("analyze_error", "update_result")
+    workflow.add_edge("update_result", END)
 
-logger.info(f"[RPJ] QuestionIntakeAgent stub loaded with taxonomies for subjects: {list(CHAPTER_TAXONOMY.keys())}")
+    return workflow.compile()

@@ -114,7 +114,8 @@ async def get_due_for_review(
                 params["chapter"] = chapter
 
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                # Localhost intra-service call; do not route through env proxies.
+                async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
                     resp = await client.get(url, params=params, headers=headers)
             except Exception as e:
                 logger.error(f"[DEFAULT] proxy review due failed: module={module}, subject={subject}, err={e}")
