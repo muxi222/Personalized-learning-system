@@ -1102,144 +1102,132 @@ class GeminiOCRService:
         return ImageFont.load_default()
 
     async def create_correction_overlay(
-        self,
-        image_path: str,
-        analysis_result: ExamAnalysisResult,
-        correction_style: str = "red_pen",
-    ) -> CorrectionImageResult:
-        """
-        在原试卷上添加批改效果
+            self,
+            image_path: str,
+            analysis_result: ExamAnalysisResult,
+            correction_style: str = "red_pen",
+        ) -> CorrectionImageResult:
+            """
+            在原试卷上添加批改效果 (修复版：从底部向上堆叠文字，防止重叠或超出边界)
+            """
+            try:
+                from PIL import Image, ImageDraw
 
-        模拟「红笔批改」效果，在原图上添加:
-        - 对勾/叉号
-        - 错误答案旁边的正确答案标注
-        - 分数标注
-        - 评语
+                # 加载原图
+                img = Image.open(image_path)
+                draw = ImageDraw.Draw(img)
 
-        Args:
-            image_path: 原始试卷图片路径
-            analysis_result: 分析结果
-            correction_style: 批改风格 (red_pen, blue_pen, stamp)
+                # 加载字体
+                font = self._load_chinese_font(size=110)
+                small_font = self._load_chinese_font(size=60) # 稍微调大一点字体，看清楚点
 
-        Returns:
-            CorrectionImageResult: 包含批改后的图像
-        """
-        try:
-            from PIL import Image, ImageDraw
+                # 颜色设置
+                colors = {
+                    "red_pen": "#FF0000",
+                    "blue_pen": "#0000FF",
+                    "stamp": "#8B0000",
+                }
+                color = colors.get(correction_style, "#FF0000")
 
-            # 加载原图
-            img = Image.open(image_path)
-            draw = ImageDraw.Draw(img)
+                correction_notes = []
 
-            # 加载中文字体
-            font = self._load_chinese_font(size=20)
-            small_font = self._load_chinese_font(size=12)
+                # 1. 绘制总分 (右上角)
+                total_text = f"总分: {analysis_result.total_score}/{analysis_result.max_score}"
+                if isinstance(total_text, bytes):
+                    total_text = total_text.decode('utf-8')
+                # 简单估算宽度，防止画出右边界
+                bbox = draw.textbbox((0, 0), total_text, font=font)
+                w = bbox[2] - bbox[0]
+                draw.text((img.width - w - 20, 30), total_text, fill=color, font=font)
+                correction_notes.append(total_text)
 
-            # 颜色设置
-            colors = {
-                "red_pen": "#FF0000",
-                "blue_pen": "#0000FF",
-                "stamp": "#8B0000",
-            }
-            color = colors.get(correction_style, "#FF0000")
-
-            correction_notes = []
-
-            # 添加总分
-            total_text = f"总分: {analysis_result.total_score}/{analysis_result.max_score}"
-            # 确保文本是 Unicode 字符串
-            if isinstance(total_text, bytes):
-                total_text = total_text.decode('utf-8')
-            draw.text((img.width - 200, 30), total_text, fill=color, font=font)
-            correction_notes.append(total_text)
-
-            start_y = 0
-            # 添加评语
-            if analysis_result.overall_analysis:
-                # 确保评语是 Unicode 字符串
-                analysis_text = analysis_result.overall_analysis
-                if isinstance(analysis_text, bytes):
-                    analysis_text = analysis_text.decode('utf-8')
-
-                # 计算可用的文本宽度（留出左右边距）
+                # --- 核心修复：从底部向上堆叠布局 ---
+                
+                # cursor_y 表示当前可用的最底部 Y 坐标（初始为图片底部留 10px 边距）
+                cursor_y = img.height - 10
                 text_max_width = img.width - 60  # 左右各留30像素边距
+                line_spacing = 4
 
-                # 将评语换行
-                comment_prefix = "评语: "
-                full_comment = comment_prefix + analysis_text
-                wrapped_lines = self._wrap_text(full_comment, small_font, text_max_width)
+                # 定义一个内部函数来绘制文本块（自动向上生长）
+                def draw_block_upwards(text_content, label_prefix=""):
+                    nonlocal cursor_y
+                    if not text_content:
+                        return
 
-                # 计算行高
-                bbox = draw.textbbox((0, 0), "测试", font=small_font)
-                line_height = bbox[3] - bbox[1] + 4  # 行高 + 间距
+                    if isinstance(text_content, bytes):
+                        try:
+                            text_content = text_content.decode('utf-8')
+                        except:
+                            text_content = str(text_content)
 
-                # 从底部向上绘制，最多显示5行
-                max_lines = min(5, len(wrapped_lines))
-                start_y = img.height - (max_lines * line_height + 5)
+                    full_text = f"{label_prefix}{text_content}"
+                    lines = self._wrap_text(full_text, small_font, text_max_width)
+                    
+                    # 计算这个块的总高度
+                    # 拿一行字测高度
+                    bbox = draw.textbbox((0, 0), "测试Test", font=small_font)
+                    line_height = bbox[3] - bbox[1] + line_spacing
+                    
+                    block_height = len(lines) * line_height
+                    
+                    # 计算起始绘制点 (Top Y of this block)
+                    start_y = cursor_y - block_height
+                    
+                    # 绘制每一行
+                    for i, line in enumerate(lines):
+                        y = start_y + (i * line_height)
+                        # 只有在图片范围内才画
+                        if y > 0: 
+                            draw.text((30, y), line, fill=color, font=small_font)
+                    
+                    # 更新 cursor_y，为下一个块留出空间 (再往上移 15px 间距)
+                    cursor_y = start_y - 15
+                    return full_text
 
-                # 绘制每一行
-                for i, line in enumerate(wrapped_lines[:max_lines]):
-                    y_pos = start_y + (i * line_height)
-                    if y_pos >= 0:  # 确保不超出图片顶部
-                        draw.text((30, y_pos), line, fill=color, font=small_font)
+                # 2. 绘制评语 (最底下)
+                if analysis_result.overall_analysis:
+                    note = draw_block_upwards(analysis_result.overall_analysis, "评语: ")
+                    if note: correction_notes.append(note)
 
-                correction_notes.append(f"评语: {analysis_text}")
+                # 3. 绘制正确答案 (在评语上面)
+                if analysis_result.questions:
+                    ans_str = ""
+                    p = 0
+                    for ques in analysis_result.questions:
+                        p += 1
+                        # 处理可能为 None 的情况
+                        ans_val = ques.correct_answer
+                        if ans_val is None:
+                            ans_val = ""
+                        # 处理 bytes
+                        if isinstance(ans_val, bytes):
+                            ans_val = ans_val.decode('utf-8', errors='ignore')
+                        
+                        ans_str += f"{p}.{str(ans_val)}   "
+                    
+                    note = draw_block_upwards(ans_str, "正确答案: ")
+                    if note: correction_notes.append(note)
 
-            # 添加正确答案
-            if analysis_result.questions:
-                ans = ""
-                p = 0
-                for ques in analysis_result.questions:
-                    p = p + 1
-                    ans_t = ques.correct_answer
-                    # 确保答案是 Unicode 字符串
-                    if isinstance(ans, bytes):
-                        ans_t = ans_t.decode('utf-8')
-                    p_t = str(p)
-                    ans = ans + p_t + "." + ans_t
+                # 保存结果
+                import io
+                buffer = io.BytesIO()
+                img.save(buffer, format='PNG')
+                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-                # 计算可用的文本宽度（留出左右边距）
-                text_max_width = img.width - 60  # 左右各留30像素边距
+                return CorrectionImageResult(
+                    original_image_path=image_path,
+                    corrected_image_base64=img_base64,
+                    correction_notes=correction_notes,
+                    success=True,
+                )
 
-                 # 将答案换行
-                wrapped_lines = self._wrap_text(ans, small_font, text_max_width)
-
-                # 计算行高
-                bbox = draw.textbbox((0, 0), "测试", font=small_font)
-                line_height = bbox[3] - bbox[1] + 4  # 行高 + 间距
-
-                # 从底部向上绘制，最多显示5行
-                max_lines = min(5, len(wrapped_lines))
-                start_y = img.height - (max_lines * line_height + start_y + 5)
-
-                # 绘制每一行
-                for i, line in enumerate(wrapped_lines[:max_lines]):
-                    y_pos = start_y + (i * line_height)
-                    if y_pos >= 0:  # 确保不超出图片顶部
-                        draw.text((30, y_pos), line, fill=color, font=small_font)
-
-                correction_notes.append(f"正确答案: {analysis_text}")
-
-            # 保存为 base64
-            import io
-            buffer = io.BytesIO()
-            img.save(buffer, format='PNG')
-            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-            return CorrectionImageResult(
-                original_image_path=image_path,
-                corrected_image_base64=img_base64,
-                correction_notes=correction_notes,
-                success=True,
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to create correction overlay: {e}")
-            return CorrectionImageResult(
-                original_image_path=image_path,
-                success=False,
-                error_message=str(e),
-            )
+            except Exception as e:
+                logger.error(f"Failed to create correction overlay: {e}", exc_info=True)
+                return CorrectionImageResult(
+                    original_image_path=image_path,
+                    success=False,
+                    error_message=str(e),
+                )
 
     def _extract_json(self, text: str) -> Optional[Dict]:
         """从文本中提取 JSON"""

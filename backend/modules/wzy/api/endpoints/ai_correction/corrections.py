@@ -43,7 +43,6 @@ def image_to_url(correction_id: int, image_type: str) -> str:
     host = settings.HOST if settings.HOST not in ['0.0.0.0', ''] else 'localhost'
     port = settings.PORT
 
-    # 修改：端口从6005改为6003
     # 生成完整URL: http://localhost:6003/api/v1/ocr/images/corrections/{correction_id}/{image_type}
     return f"http://{host}:{port}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
 
@@ -205,7 +204,7 @@ async def delete_correction(
 async def get_statistics(
     period: str = Path(
         ...,
-        regex="^(week|month|quarter|year)$",
+        pattern=r"^(week|month|quarter|year)$",  # 修复：regex -> pattern
         description="统计周期：week=周, month=月, quarter=季度, year=年"
     ),
     db: AsyncSession = Depends(get_db),

@@ -370,7 +370,7 @@ is_valid_module() {
 
 ensure_training_module_supported() {
   # Training/offline pipeline is Tony-first by design.
-  if [ "$MODULE" != "tony" ]; then
+  if [[ "$MODULE" != "tony" && "$MODULE" != "wzm" ]]; then
     log_err "Module '$MODULE' offline pipeline is TODO/student-only. Only 'tony' is fully implemented."
     log_info "You can use the Tony scripts as reference: training/modules/tony/..."
     exit 1

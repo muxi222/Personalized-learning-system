@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tony-vllm
+  labels:
+    app: tony-vllm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tony-vllm
+  template:
+    metadata:
+      labels:
+        app: tony-vllm
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model"
+            - "OpenPipe/Qwen3-14B-Instruct"
+            - "--served-model-name"
+            - "tony-qwen3-14b"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+            - "--max-model-len"
+            - "8192"
+            - "--gpu-memory-utilization"
+            - "0.90"
+          ports:
+            - containerPort: 8000
+          resources:
+            # TODO: set proper GPU/CPU/mem requests/limits for your cluster
+            limits:
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 20
+

@@ -18,7 +18,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="WZM model eval runner (vLLM)")
     parser.add_argument("--module", default="wzm")  # passed from pipeline.sh
     parser.add_argument("--api-base", default="http://127.0.0.1:8005/v1")
-    parser.add_argument("--model", default="wzm-dpo")
+    parser.add_argument("--model", default="wzm-qwen3-14b")
     parser.add_argument("--judge-api-base", default="")
     parser.add_argument("--judge-model", default="")
     args, passthru = parser.parse_known_args()

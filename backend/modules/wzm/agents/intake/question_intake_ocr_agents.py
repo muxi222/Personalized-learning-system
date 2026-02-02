@@ -339,7 +339,7 @@ async def get_dynamic_taxonomy_candidates(
     subject: str,
     grade: Optional[str],
     max_chapters: int = 20,
-    max_kps: int = 30,
+    max_kps: int = 50,
 ) -> Dict[str, List[str]]:
     """
     从数据库中动态提取“该用户在该学科下已经出现过的分类”，作为 taxonomy 候选。
@@ -1075,6 +1075,8 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             user_hint=(
                 "这是化学错题识别场景：一张图片可能包含多道错题。"
                 "请识别图片中的所有题目（尽量逐题拆分），并提取每道题的题干、学生答案、正确答案、知识点。"
+                "非常重要：请务必返回每道题在图片中的边界框坐标 (box_2d)，格式为 [ymin, xmin, ymax, xmax] (0-1000归一化坐标)，否则无法进行批改。"
+                "提取每道题的题干、学生答案、正确答案、知识点..."
                 "非常重要：请特别注意化学方程式的配平、离子符号的上标下标、以及有机化学结构式的识别。"
                 "请按试卷中题目出现的顺序组织 questions 数组。"
             ),
@@ -2440,77 +2442,33 @@ async def parse_structure(state: Dict[str, Any]) -> Dict[str, Any]:
             await db.commit()
 
 async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
-    """保存错题节点"""
+    """
+    保存错题节点 (修复版)
+    修复了 MissingGreenlet 错误：通过使用 flush() 而不是 commit() 来安全获取 ID。
+    """
     t0 = time.perf_counter()
     logger.info(f"[save_question] {_ctx(state)} start")
-    logger.debug(f"[save_question] Entry - State keys: {list(state.keys())}")
-    logger.debug(f"[save_question] Cache keys: {list(_initial_state_cache.keys())}")
     
     # 从全局缓存获取初始状态，确保关键字段不丢失
     task_id = state.get("task_id")
-    initial_state = None
-    
     if task_id and task_id in _initial_state_cache:
         initial_state = _initial_state_cache[task_id]
-        logger.debug(f"[save_question] Found cache by task_id: {task_id}, user_id={initial_state.get('user_id')}")
-    else:
-        # 如果 task_id 也是 None 或不在缓存中，尝试从缓存中找到匹配的初始状态
-        # 优先通过 subject 和 difficulty 匹配，如果都匹配不上，使用最后一个缓存条目
-        subject_hint = state.get("subject") or state.get("structured_data", {}).get("subject", "chemistry")
-        difficulty_hint = state.get("difficulty") or state.get("structured_data", {}).get("difficulty", "medium")
-        
-        logger.info(f"[save_question] Searching cache by subject={subject_hint}, difficulty={difficulty_hint}")
-        
-        # 尝试精确匹配
-        for cached_task_id, cached_state in _initial_state_cache.items():
-            cached_subject = cached_state.get("subject", "").lower()
-            cached_difficulty = cached_state.get("difficulty", "").lower()
-            if (cached_subject == subject_hint.lower() and 
-                cached_difficulty == difficulty_hint.lower()):
-                initial_state = cached_state
-                task_id = cached_task_id
-                logger.info(f"[save_question] Found matching cache entry: task_id={cached_task_id}, user_id={initial_state.get('user_id')}")
-                break
-        
-        # 如果还是没找到，使用最后一个缓存条目（通常是最新的）
-        if initial_state is None and _initial_state_cache:
-            last_task_id = list(_initial_state_cache.keys())[-1]
-            initial_state = _initial_state_cache[last_task_id]
-            task_id = last_task_id
-            logger.warning(f"[save_question] Using last cache entry as fallback: task_id={last_task_id}, user_id={initial_state.get('user_id')}")
-    
-    # 合并初始状态和当前状态（初始状态优先，确保关键字段不丢失）
-    if initial_state:
         state = {**initial_state, **state}
-        task_id = state.get("task_id")  # 重新获取 task_id
-        logger.debug(f"[save_question] After merge - task_id={task_id}, user_id={state.get('user_id')}")
-    else:
-        logger.error(f"[save_question] No cache entry found! Cache is empty or task_id mismatch.")
-    
-    logger.info(f"[save_question] {_ctx(state)} saving_to_db")
-    logger.debug(f"[save_question] Full state keys: {list(state.keys())}")
-    logger.debug(f"[save_question] State values: user_id={state.get('user_id')}, task_id={state.get('task_id')}, subject={state.get('subject')}")
+        task_id = state.get("task_id")
 
+    # 引入必要的模型和工具
     from backend.core.db.session import async_session_maker
-    from backend.core.crud import crud_question, crud_task
-    from backend.core.db.models import SubjectEnum, DifficultyEnum, QuestionSourceEnum
+    from backend.core.crud import crud_task
+    # 【重要】必须导入 Question 模型
+    from backend.core.db.models import Question, SubjectEnum, DifficultyEnum, QuestionSourceEnum
 
     user_id = state.get("user_id")
-    task_id = state.get("task_id")
-    
-    structured_data = state.get("structured_data", {})
-    structured_data_list = state.get("structured_data_list") if isinstance(state.get("structured_data_list"), list) else None
-    # Default subject set to chemistry
     subject = state.get("subject", "chemistry")
     difficulty = state.get("difficulty", "medium")
     grade = state.get("grade", "")
 
-    # 验证必要字段
+    # 验证 user_id
     if not user_id:
-        logger.error(f"[save_question] user_id is missing in state. State keys: {list(state.keys())}, State: {state}")
-        logger.error(f"[save_question] Cache contents: {list(_initial_state_cache.keys())}")
-        for cached_task_id, cached_state in _initial_state_cache.items():
-            logger.error(f"[save_question] Cache entry {cached_task_id}: user_id={cached_state.get('user_id')}")
         return {
             "errors": ["user_id 缺失，无法保存错题"],
             "success": False,
@@ -2518,12 +2476,11 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             "progress": 60.0,
         }
 
-    # 如果前面节点已经产生错误（例如：学科不匹配），则不入库，直接失败任务
+    # 如果已有错误，直接标记任务失败
     if isinstance(state.get("errors"), list) and state.get("errors"):
-        err_msg = "; ".join([str(e) for e in state.get("errors") if e])
         try:
             async with async_session_maker() as db:
-                await crud_task.fail_task(db, task_id, err_msg or "任务失败")
+                await crud_task.fail_task(db, task_id, "; ".join(state["errors"]))
                 await db.commit()
         except Exception:
             pass
@@ -2533,86 +2490,49 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             "current_step": "save_question",
             "progress": 60.0,
         }
-    
-    # 再次验证 user_id 不是 None（双重保险）
-    if user_id is None:
-        logger.error(f"[save_question] user_id is None after all attempts. State: {state}")
-        return {
-            "errors": ["user_id 缺失，无法保存错题"],
-            "success": False,
-            "current_step": "save_question",
-            "progress": 60.0,
-        }
 
     try:
         async with async_session_maker() as db:
-            # 解析学科和难度
+            # 1. 准备枚举值
             try:
                 subject_enum = SubjectEnum(subject)
             except ValueError:
                 subject_enum = SubjectEnum.OTHER
-
+            
             try:
                 difficulty_enum = DifficultyEnum(difficulty)
             except ValueError:
                 difficulty_enum = DifficultyEnum.MEDIUM
 
-            items = structured_data_list or [structured_data]
-            # 保证入库顺序与试卷顺序一致：优先按 order(1..n) 排序，否则保持原顺序
+            # 2. 准备数据列表
+            structured_data = state.get("structured_data", {})
+            structured_data_list = state.get("structured_data_list")
+            items = structured_data_list if isinstance(structured_data_list, list) else [structured_data]
+
+            # 按 order 排序以保持题目顺序
             try:
                 indexed = []
                 for i, it in enumerate(items):
                     v = it.get("order") if isinstance(it, dict) else None
                     try:
-                        ov = int(v)
+                        ov = int(v) if v is not None else 10**9
                     except Exception:
-                        ov = None
-                    indexed.append((ov if ov is not None else 10**9, i, it))
+                        ov = 10**9
+                    indexed.append((ov, i, it))
                 items = [it for _, __, it in sorted(indexed, key=lambda x: (x[0], x[1]))]
             except Exception:
                 pass
 
             created_ids: List[int] = []
+
+            # 3. 循环创建题目对象
             for idx, item in enumerate(items):
-                # 确保 content 不为空（Pydantic 验证要求）
-                question_content = (item.get("question_body") or "").strip()
-                if not question_content:
-                    question_content = "题目内容待补充"
+                content = (item.get("question_body") or "").strip()
+                if not content:
+                    content = "题目内容待补充"
 
-                question_data = {
-                    "user_id": int(user_id),
-                    "content": question_content,
-                    "student_answer": item.get("student_answer"),
-                    "correct_answer": item.get("correct_answer") or None,
-                    "is_correct": item.get("is_correct"),
-                    "score": item.get("score"),
-                    "max_score": item.get("max_score"),
-                    "explanation": item.get("explanation"),
-                    "subject": subject_enum,
-                    "grade": grade,
-                    "difficulty": difficulty_enum,
-                    "knowledge_points": item.get("knowledge_points", []),
-                    "error_analysis": item.get("error_analysis"),
-                    "suggested_questions": item.get("suggested_questions") or [],
-                    "chapter": item.get("chapter") or None,
-                    "tags": item.get("tags") or [],
-                    "source": QuestionSourceEnum.MANUAL,
-                    "source_description": "录入错题功能",
-                    # 保序：同一次上传的多题，按 OCR 输出顺序入库
-                    "upload_group_id": task_id,
-                    "upload_index": int(idx + 1),
-                }
-
-                # 图片：同一张图片可对应多道错题
-                if state.get("input_type") == "image" and state.get("image_path"):
-                    question_data["image_urls"] = [state.get("image_path")]
-                    if state.get("source_image_id") is not None:
-                        question_data["source_image_id"] = int(state.get("source_image_id"))
-
-                # 原始输入/总结（图片/文字模式都支持）
-                if state.get("original_input") is not None:
-                    question_data["original_input"] = state.get("original_input")
-                # summarized_input：为避免新增 DB 字段，用 JSON 存“答案来源/判定依据”
+                # 构建 summarized_input 元数据
+                meta = {}
                 try:
                     meta = {
                         "answer_sources": {
@@ -2622,70 +2542,82 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                         },
                         "grading": {
                             "decided_by": item.get("grading_basis") or "unknown",
-                            "note": "是否错题优先按老师批改/自标答案判定；模型答案仅供参考",
-                        },
-                    }
-                    # Teacher marking evidence (tick/cross/color)
-                    tm = {
-                        "is_correct": item.get("teacher_marked_is_correct"),
-                        "mark": item.get("teacher_marked_mark") or "",
-                        "color": item.get("teacher_marked_color") or "",
-                        "evidence": item.get("teacher_marked_evidence") or "",
-                    }
-                    # Only keep if at least one signal exists
-                    if (
-                        tm.get("is_correct") is True
-                        or tm.get("is_correct") is False
-                        or tm.get("mark")
-                        or tm.get("color")
-                        or tm.get("evidence")
-                    ):
-                        meta["grading"]["teacher_mark"] = tm
-                    # Keep the previous summarized_input (e.g. overall_analysis/text_summary) if available
-                    if state.get("summarized_input") is not None:
-                        meta["summary"] = state.get("summarized_input")
-                    question_data["summarized_input"] = json.dumps(meta, ensure_ascii=False)
-                except Exception:
-                    if state.get("summarized_input") is not None:
-                        question_data["summarized_input"] = state.get("summarized_input")
-
-                if question_data.get("user_id") is None:
-                    raise ValueError("user_id 缺失，无法保存错题")
-
-                logger.info(
-                    f"[save_question] Creating question {idx+1}/{len(items)} with user_id={question_data['user_id']}, "
-                    f"subject={subject_enum}, difficulty={difficulty_enum}"
-                )
-
-                q = await crud_question.create_question(db, question_data=None, **question_data)
-                created_ids.append(q.id)
-
-            await db.commit()
-
-            # 任务表仍保留单个 question_id（兼容），但在 result 里返回全部 question_ids
-            first_id = created_ids[0]
-            await crud_task.complete_task(
-                db,
-                task_id,
-                first_id,
-                result={
-                    "stages": {
-                        "saved": {
-                            "question_ids": created_ids,
-                            "created_count": len(created_ids),
-                            "source_image_id": state.get("source_image_id"),
-                            "upload_group_id": task_id,
                         }
                     }
-                },
-            )
-            await db.commit()
+                    if state.get("summarized_input"):
+                        meta["summary"] = state.get("summarized_input")
+                except Exception:
+                    pass
 
+                # 实例化 ORM 对象 (不使用 crud_question.create_question)
+                q = Question(
+                    user_id=int(user_id),
+                    content=content,
+                    student_answer=item.get("student_answer"),
+                    correct_answer=item.get("correct_answer") or None,
+                    is_correct=item.get("is_correct"),
+                    score=item.get("score"),
+                    max_score=item.get("max_score"),
+                    explanation=item.get("explanation"),
+                    subject=subject_enum,
+                    grade=grade,
+                    difficulty=difficulty_enum,
+                    knowledge_points=item.get("knowledge_points", []),
+                    error_analysis=item.get("error_analysis"),
+                    suggested_questions=item.get("suggested_questions") or [],
+                    chapter=item.get("chapter") or None,
+                    tags=item.get("tags") or [],
+                    source=QuestionSourceEnum.MANUAL,
+                    source_description="录入错题功能",
+                    upload_group_id=task_id,
+                    upload_index=int(idx + 1),
+                    summarized_input=json.dumps(meta, ensure_ascii=False) if meta else None
+                )
+
+                # 处理图片关联
+                if state.get("input_type") == "image" and state.get("image_path"):
+                    q.image_urls = [state.get("image_path")]
+                    if state.get("source_image_id"):
+                        q.source_image_id = int(state.get("source_image_id"))
+                
+                if state.get("original_input"):
+                    q.original_input = state.get("original_input")
+
+                # 【关键修复】添加到 Session 并 Flush
+                db.add(q)
+                await db.flush()  # 生成 ID，但不提交事务，对象保持活跃
+                
+                # 安全获取 ID
+                created_ids.append(q.id)
+                logger.info(f"[save_question] Flushed question {idx+1}/{len(items)}, ID={q.id}")
+
+            # 4. 更新任务状态
+            if created_ids:
+                first_id = created_ids[0]
+                await crud_task.complete_task(
+                    db,
+                    task_id,
+                    first_id,
+                    result={
+                        "stages": {
+                            "saved": {
+                                "question_ids": created_ids,
+                                "created_count": len(created_ids),
+                                "source_image_id": state.get("source_image_id"),
+                                "upload_group_id": task_id,
+                            }
+                        }
+                    },
+                )
+            
+            # 5. 最后统一提交
+            await db.commit()
+            
             duration_ms = int((time.perf_counter() - t0) * 1000)
-            logger.info(f"[save_question] {_ctx(state)} done created_count={len(created_ids)} ids={created_ids} duration_ms={duration_ms}")
+            logger.info(f"[save_question] {_ctx(state)} success ids={created_ids} duration={duration_ms}ms")
 
             return {
-                "question_id": first_id,
+                "question_id": created_ids[0] if created_ids else None,
                 "question_ids": created_ids,
                 "created_count": len(created_ids),
                 "success": True,
@@ -2694,8 +2626,8 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             }
 
     except Exception as e:
-        duration_ms = int((time.perf_counter() - t0) * 1000) if "t0" in locals() else -1
-        logger.error(f"[save_question] {_ctx(state)} error duration_ms={duration_ms}: {e}", exc_info=True)
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        logger.error(f"[save_question] {_ctx(state)} error: {e}", exc_info=True)
         return {
             "errors": [f"保存错题失败: {str(e)}"],
             "success": False,

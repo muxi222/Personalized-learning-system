@@ -8,6 +8,8 @@
 3. 文字模式: 大模型处理总结
 4. 数据存储 - 保存到数据库（记录原始输入和总结后的输入）
 5. 触发异步Embedding
+
+支持学科: 语文(chinese)、英语(english)、道法(morality)
 """
 
 import logging
@@ -124,51 +126,65 @@ def _extract_json_object_loose(raw: str) -> Optional[Dict[str, Any]]:
 _initial_state_cache: Dict[str, Dict[str, Any]] = {}
 
 # =========================
-# 学科分类（chapter/tags）
+# 学科分类（chapter/tags）- 只支持语文、英语、道法
 # =========================
 CATEGORY_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
-    # 历史
-    "history": {
-        "junior": ["中国古代史", "中国近代史", "世界史", "史料分析", "时序与地图", "综合"],
-        "senior": ["中国古代史", "中国近现代史", "世界史", "史学方法", "史料实证", "综合"],
+    # 语文
+    "chinese": {
+        "junior": ["现代文阅读", "文言文阅读", "古诗词鉴赏", "语言文字运用", "写作", "名著阅读", "综合"],
+        "senior": ["现代文阅读", "文言文阅读", "古诗词鉴赏", "语言文字运用", "写作", "名著阅读", "综合"],
     },
-    # 地理
-    "geography": {
-        "junior": ["自然地理", "人文地理", "区域地理", "地图判读", "综合"],
-        "senior": ["自然地理", "人文地理", "区域发展", "地理信息与地图", "环境与可持续", "综合"],
+    # 英语
+    "english": {
+        "junior": ["听力", "阅读理解", "完形填空", "语法填空", "短文改错", "书面表达", "词汇", "综合"],
+        "senior": ["听力", "阅读理解", "完形填空", "语法填空", "短文改错", "书面表达", "词汇", "综合"],
     },
-    "other": {
-        "junior": ["综合"],
-        "senior": ["综合"],
+    # 道法（道德与法治/思想品德）
+    "morality": {
+        "junior": ["道德品质", "法律基础", "心理健康", "国情国策", "时事政治", "综合"],
+        "senior": ["哲学与生活", "政治与法治", "经济与社会", "文化与哲学", "时事政治", "综合"],
     },
 }
 
 KNOWLEDGE_POINT_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
-    # 历史（尽量收敛到“教研常用大类”，避免过度分散）
-    "history": {
+    # 语文
+    "chinese": {
         "junior": [
-            "中国古代政治制度", "中国古代经济与文化", "中国近代史(列强侵略与民族危机)", "近代化探索与革命",
-            "抗日战争与解放战争", "世界史(近代以来)", "世界大战与国际关系", "史料分析与论证方法", "综合",
+            "字音字形", "词语运用", "病句辨析", "修辞手法", "标点符号", "文学常识", 
+            "现代文阅读(信息筛选)", "现代文阅读(理解分析)", "现代文阅读(鉴赏评价)",
+            "文言文实词虚词", "文言文翻译", "古诗词鉴赏(意象意境)", "古诗词鉴赏(情感主旨)",
+            "写作(记叙文)", "写作(议论文)", "写作(应用文)", "名著阅读", "综合",
         ],
         "senior": [
-            "中国古代史(政治/经济/文化)", "中国近现代史(革命与建设)", "世界史(近代以来)", "现代国际关系与全球化",
-            "史学方法与史料实证", "综合",
+            "语言文字运用", "现代文阅读(论述类)", "现代文阅读(文学类)", "现代文阅读(实用类)",
+            "文言文阅读", "古诗词鉴赏", "名篇名句默写", "写作(任务驱动型)", "写作(材料作文)",
+            "写作(议论文)", "文学文化常识", "综合",
         ],
     },
-    # 地理
-    "geography": {
+    # 英语
+    "english": {
         "junior": [
-            "地球与地图(经纬网)", "大气与天气(气候)", "水文与地貌", "人口与城市", "区域地理(中国/世界)",
-            "资源环境与可持续", "综合",
+            "听力(对话理解)", "听力(短文理解)", "阅读理解(细节理解)", "阅读理解(推理判断)", 
+            "阅读理解(主旨大意)", "完形填空", "语法填空", "短文改错", 
+            "书面表达(应用文)", "书面表达(记叙文)", "词汇(词义辨析)", "词汇(固定搭配)",
+            "语法(时态语态)", "语法(从句)", "语法(非谓语动词)", "综合",
         ],
         "senior": [
-            "地球与地图(经纬网/地图判读)", "自然地理(大气/水文/地貌)", "人文地理(人口/城市/产业)",
-            "区域发展与区位分析", "环境与可持续发展", "综合",
+            "听力", "阅读理解", "七选五", "完形填空", "语法填空", "短文改错", 
+            "书面表达(应用文)", "书面表达(读后续写)", "书面表达(概要写作)", 
+            "词汇", "语法", "综合",
         ],
     },
-    "other": {
-        "junior": ["综合"],
-        "senior": ["综合"],
+    # 道法（道德与法治/思想品德）
+    "morality": {
+        "junior": [
+            "自尊自强", "交往沟通", "权利与义务", "法律基础", "国情国策", 
+            "心理健康", "道德品质", "时事政治", "综合",
+        ],
+        "senior": [
+            "生活与哲学", "经济生活", "政治生活", "文化生活", 
+            "法律与法治", "时事政治", "综合",
+        ],
     },
 }
 
@@ -188,15 +204,15 @@ def normalize_grade_bucket(grade: Optional[str]) -> str:
 
 def get_category_candidates(subject: str, grade: Optional[str]) -> List[str]:
     bucket = normalize_grade_bucket(grade)
-    return CATEGORY_TAXONOMY.get(subject, CATEGORY_TAXONOMY.get("other", {})).get(bucket, ["综合"])
+    return CATEGORY_TAXONOMY.get(subject, {}).get(bucket, ["综合"])
 
 def get_knowledge_point_candidates(subject: str, grade: Optional[str]) -> List[str]:
     bucket = normalize_grade_bucket(grade)
-    return KNOWLEDGE_POINT_TAXONOMY.get(subject, KNOWLEDGE_POINT_TAXONOMY.get("other", {})).get(bucket, ["综合"])
+    return KNOWLEDGE_POINT_TAXONOMY.get(subject, {}).get(bucket, ["综合"])
 
 def get_text_reasoning_model_names() -> List[str]:
     """
-    文本深度推理模型列表（用于：学科判定、分类、错因分析、总结等“纯文本”任务）。
+    文本深度推理模型列表（用于：学科判定、分类、错因分析、总结等"纯文本"任务）。
     - 读取 TONY_TEXT_REASONING_MODELS=gemini-3-pro-preview,gpt-5.2,...
     - 为空则回退到 settings.GEMINI_MODEL
     """
@@ -357,21 +373,22 @@ async def get_dynamic_taxonomy_candidates(
     max_kps: int = 30,
 ) -> Dict[str, List[str]]:
     """
-    从数据库中动态提取“该用户在该学科下已经出现过的分类”，作为 taxonomy 候选。
-    这是减少人工穷举的关键手段：让 taxonomy 随数据自然生长，但通过“归一化/NEW门控”避免发散。
+    从数据库中动态提取"该用户在该学科下已经出现过的分类"，作为 taxonomy 候选。
+    这是减少人工穷举的关键手段：让 taxonomy 随数据自然生长，但通过"归一化/NEW门控"避免发散。
     """
     from sqlalchemy import select, func
     from backend.core.db.session import async_session_maker
     from backend.core.db.models import Question, SubjectEnum
 
-    # seed（兜底）：仍保留少量“教学大类”，但不要求穷举所有知识点/章节
+    # seed（兜底）：仍保留少量"教学大类"，但不要求穷举所有知识点/章节
     seed_chapters = get_category_candidates(subject, grade) or ["综合"]
     seed_kps = get_knowledge_point_candidates(subject, grade) or ["综合"]
 
     try:
         subject_enum = SubjectEnum(subject)
     except Exception:
-        subject_enum = SubjectEnum.OTHER
+        # 如果学科不在支持列表中，返回空列表
+        return {"chapters": ["综合"], "knowledge_points": ["综合"]}
 
     chapters: List[str] = []
     kps: List[str] = []
@@ -441,7 +458,7 @@ async def deep_enrich_ocr_items(
     log_ctx: str = "",
 ) -> List[Dict[str, Any]]:
     """
-    图片模式的“深度解析”：在 OCR(浅层) 输出基础上，用强文本模型做二次推理，补全/强化：
+    图片模式的"深度解析"：在 OCR(浅层) 输出基础上，用强文本模型做二次推理，补全/强化：
     - 更完整的题干表达
     - 更可靠的知识点/章节分类
     - 错因分析（更详细）
@@ -466,19 +483,30 @@ async def deep_enrich_ocr_items(
         for i, it in enumerate(items[:max_items])
     ]
 
-    prompt = f"""你是资深教研员与讲题老师。现在给你 OCR(浅层) 提取出的多道错题，请你做“深度解析 + 分类归一化”。
+    # 根据学科调整提示词
+    subject_prompts = {
+        "chinese": "语文错题分析需要关注：字音字形、词语运用、病句辨析、文言文实词虚词、古诗词鉴赏、现代文阅读技巧、写作方法等。",
+        "english": "英语错题分析需要关注：词汇辨析、语法规则、阅读理解策略、写作技巧、听力技巧、完形填空技巧等。",
+        "morality": "道法（道德与法治）错题分析需要关注：法律条文理解、道德原则应用、时事政治分析、国情国策理解等。",
+    }
+    
+    subject_specific_guide = subject_prompts.get(user_selected_subject, "")
+
+    prompt = f"""你是资深教研员与讲题老师。现在给你 OCR(浅层) 提取出的多道错题，请你做"深度解析 + 分类归一化"。
 
 用户选择学科：{user_selected_subject}
 年级/学段：{grade or "未知"}
 
+{subject_specific_guide}
+
 请输出：
-1) detected_subject（必须是 ["history","geography","other"] 之一）与 confidence(0~1)
+1) detected_subject（必须是 ["chinese","english","morality"] 之一）与 confidence(0~1)
 2) 对每道题输出 results：
    - question_content：更清晰、更完整的题干（尽量保留关键条件）
    - student_answer / correct_answer：若能从上下文推断则补全，否则保留原样
    - explanation：简要解题思路（可为空）
    - error_analysis：错因分析（要具体）
-   - suggested_questions：3~5 个“同类型训练点”或“举一反三方向”（短句）
+   - suggested_questions：3~5 个"同类型训练点"或"举一反三方向"（短句）
    - chapter：优先从候选 chapters 选择；如确实需要新增，用 "NEW:xxx"（新增总数不超过 {max_new_chapters}）
    - knowledge_points：优先从候选 knowledge_points 选择 1~3 个；如确实需要新增，用 "NEW:xxx"（新增总数不超过 {max_new_kps}）
    - tags：2~6 个短标签
@@ -491,7 +519,7 @@ async def deep_enrich_ocr_items(
 
 严格输出 JSON：
 {{
-  "detected_subject": "history|geography|other",
+  "detected_subject": "chinese|english|morality",
   "confidence": 0.0,
   "results": [
     {{
@@ -913,14 +941,18 @@ async def call_router_llm_json(
         except Exception:
             return None
     return None
+
 class QuestionIntakeOCRAgent(BaseAgent):
     """
     错题录入OCR Agent
     专门用于"录入错题"功能，支持图片和文字两种格式
+    支持学科: 语文(chinese)、英语(english)、道法(morality)
     """
 
     def __init__(self):
-        super().__init__(subjects=settings.SUBJECTS)
+        # 只支持语文、英语、道法三个学科
+        supported_subjects = ["chinese", "english", "morality"]
+        super().__init__(subjects=supported_subjects)
         self._graph = None
 
     def get_graph(self, initial_state: Optional[Dict[str, Any]] = None):
@@ -950,7 +982,7 @@ class QuestionIntakeOCRAgent(BaseAgent):
             input_type: 输入类型 ('image' 或 'text')
             user_id: 用户ID
             task_id: 任务ID
-            subject: 学科
+            subject: 学科 (chinese, english, morality)
             difficulty: 难度
             image_file: 图片文件对象（图片模式）
             image_path: 图片路径（图片模式）
@@ -966,7 +998,7 @@ class QuestionIntakeOCRAgent(BaseAgent):
                 "task_id": task_id,
                 "question_id": None,
                 "success": False,
-                "errors": [f"Subject '{subject}' not supported by TONY module. Supported: {settings.SUBJECTS}"],
+                "errors": [f"Subject '{subject}' not supported by TONY module. Supported: {self.subjects}"],
             }
 
         # 构建初始状态字典（使用 Dict 而不是 QuestionIntakeState，因为我们需要添加自定义字段）
@@ -1091,7 +1123,7 @@ def create_intake_ocr_graph(initial_state: Optional[Dict[str, Any]] = None):
                 # 合并初始状态和当前状态，确保关键字段不丢失
                 merged_state = {**initial_state, **state}
                 result = await node_func(merged_state)
-                # 重要：对 Dict 状态，确保“累计状态”不会被丢失（LangGraph 默认 reducer 行为在不同版本可能不一致）
+                # 重要：对 Dict 状态，确保"累计状态"不会被丢失（LangGraph 默认 reducer 行为在不同版本可能不一致）
                 # 返回：merged_state + node 输出（node 输出优先）
                 if isinstance(result, dict):
                     return {**merged_state, **result}
@@ -1181,7 +1213,7 @@ async def process_input(state: Dict[str, Any]) -> Dict[str, Any]:
 async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     OCR Agent（多模态快）：
-    - 只负责“图片 -> OCR浅层结构化提取”
+    - 只负责"图片 -> OCR浅层结构化提取"
     - 不做深度推理、错因分析、taxonomy 归一化（这些交给后续 Reasoner/Normalizer）
     """
     task_id = state.get("task_id")
@@ -1196,7 +1228,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     image_path = state.get("image_path")
-    subject = state.get("subject", "geography")
+    subject = state.get("subject", "chinese")
     grade = state.get("grade", "")
 
     if not image_path:
@@ -1209,17 +1241,11 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         await ocr_service.initialize()
 
         subject_map = {
-            "history": SubjectType.HISTORY,
-            "geography": SubjectType.GEOGRAPHY,
-            "math": SubjectType.MATH,
-            "physics": SubjectType.PHYSICS,
-            "chemistry": SubjectType.CHEMISTRY,
-            "biology": SubjectType.BIOLOGY,
-            "english": SubjectType.ENGLISH,
             "chinese": SubjectType.CHINESE,
-            "other": SubjectType.OTHER,
+            "english": SubjectType.ENGLISH,
+            "morality": SubjectType.MORALITY,
         }
-        subject_type = subject_map.get(str(subject).lower(), SubjectType.OTHER)
+        subject_type = subject_map.get(str(subject).lower(), SubjectType.CHINESE)
 
         analysis_result = await ocr_service.analyze_exam_image(
             image_path=image_path,
@@ -1250,7 +1276,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 if not q_text:
                     continue
                 qn = _qnum(qi)
-                # 排序 key：优先用题号；若无题号则用模型输出顺序(i+1)，避免把“无题号题目”统一挪到末尾导致顺序错乱
+                # 排序 key：优先用题号；若无题号则用模型输出顺序(i+1)，避免把"无题号题目"统一挪到末尾导致顺序错乱
                 order_key = qn if qn is not None else (i + 1)
                 pairs.append(
                     (
@@ -1360,14 +1386,15 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     input_type = state.get("input_type", "image")
-    subject = state.get("subject", "geography")
+    subject = state.get("subject", "chinese")
     grade = state.get("grade", "")
     user_id = state.get("user_id")
 
     # 构建 taxonomy 提示（动态候选 + seed），用于减少发散
     taxonomy: Dict[str, Dict[str, List[str]]] = {}
     try:
-        for s in ["history", "geography", "other"]:
+        # 只构建语文、英语、道法的分类候选
+        for s in ["chinese", "english", "morality"]:
             taxonomy[s] = await get_dynamic_taxonomy_candidates(
                 user_id=int(user_id or 0),
                 subject=s,
@@ -1378,7 +1405,7 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         taxonomy = {
             s: {"chapters": get_category_candidates(s, grade), "knowledge_points": get_knowledge_point_candidates(s, grade)}
-            for s in ["history", "geography", "other"]
+            for s in ["chinese", "english", "morality"]
         }
 
     if input_type == "image":
@@ -1421,13 +1448,24 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     max_field_error = int(os.getenv("TONY_REASONER_MAX_CHARS_ERROR_ANALYSIS") or "420")
     max_field_sq = int(os.getenv("TONY_REASONER_MAX_CHARS_SUGGESTED_Q") or "60")
 
-    prompt = f"""你是资深教研员与讲题老师。现在要做“深度解析 + 分类提议（允许受控新增）”。
+    # 根据学科调整提示词
+    subject_prompts = {
+        "chinese": "语文错题分析需要关注：字音字形、词语运用、病句辨析、文言文实词虚词、古诗词鉴赏、现代文阅读技巧、写作方法等。",
+        "english": "英语错题分析需要关注：词汇辨析、语法规则、阅读理解策略、写作技巧、听力技巧、完形填空技巧等。",
+        "morality": "道法（道德与法治）错题分析需要关注：法律条文理解、道德原则应用、时事政治分析、国情国策理解等。",
+    }
+    
+    subject_specific_guide = subject_prompts.get(subject, "")
+
+    prompt = f"""你是资深教研员与讲题老师。现在要做"深度解析 + 分类提议（允许受控新增）"。
 
 用户选择学科：{subject}
 年级/学段：{grade or "未知"}
 
+{subject_specific_guide}
+
 请输出：
-1) detected_subject（必须是 ["history","geography","other"] 之一）与 confidence(0~1)
+1) detected_subject（必须是 ["chinese","english","morality"] 之一）与 confidence(0~1)
 2) results：对每道题输出：
    - question_content：更清晰、更完整的题干
    - student_answer / correct_answer：可推断则补全，否则保留原样
@@ -1456,7 +1494,7 @@ OCR/输入原文（供你参考，可忽略噪声）：
 
 严格输出 JSON：
 {{
-  "detected_subject": "history|geography|other",
+  "detected_subject": "chinese|english|morality",
   "confidence": 0.0,
   "results": [{{"index":0,"question_content":"...","student_answer":"...","correct_answer":"...","explanation":"...","error_analysis":"...","suggested_questions":["..."],"chapter":"...","knowledge_points":["..."],"tags":["..."]}}]
 }}"""
@@ -1539,7 +1577,9 @@ OCR/输入原文（供你参考，可忽略噪声）：
     except Exception:
         conf_f = 0.0
 
-    if detected in ("history", "geography", "other") and detected != subject and conf_f >= mismatch_threshold:
+    # 检查学科是否匹配（只支持语文、英语、道法）
+    supported_subjects = ["chinese", "english", "morality"]
+    if detected in supported_subjects and detected != subject and conf_f >= mismatch_threshold:
         msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。"
         if task_id:
             from backend.core.db.session import async_session_maker
@@ -1712,7 +1752,7 @@ async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     items_in = len(items or [])
     logger.info(f"[normalizer_agent] {_ctx(state)} start items_in={items_in}")
 
-    subject = state.get("subject", "geography")
+    subject = state.get("subject", "chinese")
     grade = state.get("grade", "")
     user_id = int(state.get("user_id") or 0)
     difficulty = state.get("difficulty", "medium")
@@ -1932,7 +1972,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
     from backend.core.services.gemini_ocr_service import get_gemini_ocr_service
 
     image_path = state.get("image_path")
-    subject = state.get("subject", "geography")
+    subject = state.get("subject", "chinese")
     task_id = state.get("task_id")
 
     if not image_path:
@@ -1952,17 +1992,11 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
         
         # 映射 subject 字符串到 SubjectType
         subject_map = {
-            "history": SubjectType.HISTORY,
-            "geography": SubjectType.GEOGRAPHY,
-            "math": SubjectType.MATH,
-            "physics": SubjectType.PHYSICS,
-            "chemistry": SubjectType.CHEMISTRY,
-            "biology": SubjectType.BIOLOGY,
-            "english": SubjectType.ENGLISH,
             "chinese": SubjectType.CHINESE,
-            "other": SubjectType.OTHER,
+            "english": SubjectType.ENGLISH,
+            "morality": SubjectType.MORALITY,
         }
-        subject_type = subject_map.get(subject.lower(), SubjectType.OTHER)
+        subject_type = subject_map.get(subject.lower(), SubjectType.CHINESE)
         
         # 调用 analyze_exam_image 方法
         analysis_result = await ocr_service.analyze_exam_image(
@@ -1998,7 +2032,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                     if s.startswith(p):
                         s = s[len(p):].lstrip(":：.。 )）")
                 # remove whitespace and common punctuation
-                drop = " \t\r\n,，.。;；:：、|/\\·•*（）()[]【】{}<>《》“”\"'"
+                drop = " \t\r\n,，.。;；:：、|/\\·•*（）()[]【】{}<>《》\"'"
                 s = "".join(ch for ch in s if ch not in drop)
                 return s
 
@@ -2103,7 +2137,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                 # 判定优先级：老师批改/自标正确答案 > 模型推断答案 > 分数兜底 > unknown
                 decided_by = None
                 inferred_is_correct = None
-                # 0) 如果卷面有明确的“对/错”符号（如红色√/×），它优先级最高
+                # 0) 如果卷面有明确的"对/错"符号（如红色√/×），它优先级最高
                 if teacher_marked_is_correct is True or teacher_marked_is_correct is False:
                     inferred_is_correct = bool(teacher_marked_is_correct)
                     decided_by = "teacher_mark"
@@ -2160,7 +2194,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                             "question_type": (qi.question_type or "").strip(),
                             "knowledge_points": qi.knowledge_points or [],
                             "error_analysis": (qi.error_analysis or "").strip(),
-                            # 不要默认 False（会导致“无法判断”也被判错）；优先用答案比对/得分推断
+                            # 不要默认 False（会导致"无法判断"也被判错）；优先用答案比对/得分推断
                             "is_correct": inferred_is_correct,
                             "score": getattr(qi, "score", 0.0),
                             "max_score": getattr(qi, "max_score", 0.0),
@@ -2196,9 +2230,9 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
             bucket = normalize_grade_bucket(grade)
 
             # 动态 taxonomy：优先从 DB（该用户历史数据）抽取候选，再用 seed 兜底
-            # 这样无需手工穷举所有类型，同时通过“NEW门控+归一化”避免分类爆炸
+            # 这样无需手工穷举所有类型，同时通过"NEW门控+归一化"避免分类爆炸
             taxonomy = {}
-            for s in ["history", "geography", "other"]:
+            for s in ["chinese", "english", "morality"]:
                 try:
                     taxonomy[s] = await get_dynamic_taxonomy_candidates(
                         user_id=int(state.get("user_id") or 0),
@@ -2222,21 +2256,21 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                 for i, it in enumerate(extracted_items[:20])
             ]
 
-            classify_prompt = f"""你是教研员，负责“学科判定 + 分类归一化”。一张图片可能包含多道题。
+            classify_prompt = f"""你是教研员，负责"学科判定 + 分类归一化"。一张图片可能包含多道题。
 
 用户选择学科：{subject}
 年级/学段：{grade or "未知"}（已归一化：{bucket}）
 
 请完成两件事：
-1) 判定图片内容最匹配的学科 detected_subject，必须是 ["history","geography","other"] 之一，并给出置信度 confidence (0~1)。
-2) 对每道题做分类（允许“受控新增”，避免人工穷举）：
+1) 判定图片内容最匹配的学科 detected_subject，必须是 ["chinese","english","morality"] 之一，并给出置信度 confidence (0~1)。
+2) 对每道题做分类（允许"受控新增"，避免人工穷举）：
    - chapter：优先从该学科 chapters 候选中选择 1 个；如确实需要新增，请输出 "NEW:你的新分类"（要短且概括）
    - knowledge_points：优先从该学科 knowledge_points 候选中选择 1~3 个；如确实需要新增，请用 "NEW:xxx"
    - tags：2~6 个中文短词（尽量从题干抽取，不要太碎）
 
 新增规则（反碎片化）：
 - 如果与候选语义接近，必须选候选，不要 NEW
-- NEW 的分类要“能覆盖一类题”，避免过细（如不要直接用题干原句）
+- NEW 的分类要"能覆盖一类题"，避免过细（如不要直接用题干原句）
 
 分类候选（请严格从候选中选择，避免自造过多新类别）：
 {json.dumps(taxonomy, ensure_ascii=False)}
@@ -2246,7 +2280,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
 
 请严格输出 JSON（不要输出其它文字）：
 {{
-  "detected_subject": "history|geography|other",
+  "detected_subject": "chinese|english|morality",
   "confidence": 0.0,
   "results": [
     {{"index": 0, "chapter": "...", "knowledge_points": ["..."], "tags": ["..."]}}
@@ -2270,7 +2304,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                 detected = detected.strip().lower()
 
             # 学科不匹配：给出明确提示并失败（置信度阈值可微调）
-            if detected in ("history", "geography", "other") and detected != subject and conf_f >= 0.75:
+            if detected in ("chinese", "english", "morality") and detected != subject and conf_f >= 0.75:
                 msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或更换图片。"
                 logger.warning(f"[ocr_extract] subject mismatch: {msg}")
                 if task_id:
@@ -2452,7 +2486,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"[llm_summarize] Task {state.get('task_id')}: Summarizing text input")
 
     text_data = state.get("text_data", {})
-    subject = state.get("subject", "geography")
+    subject = state.get("subject", "chinese")
 
     if not text_data:
         return {
@@ -2466,7 +2500,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
         bucket = normalize_grade_bucket(grade)
 
         taxonomy = {}
-        for s in ["history", "geography", "other"]:
+        for s in ["chinese", "english", "morality"]:
             try:
                 taxonomy[s] = await get_dynamic_taxonomy_candidates(
                     user_id=int(state.get("user_id") or 0),
@@ -2481,10 +2515,21 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
                     "knowledge_points": get_knowledge_point_candidates(s, grade),
                 }
 
-        prompt = f"""你是一个专业的学习助手与教研员。请对以下错题信息进行总结和结构化处理，并完成“学科判定 + 分类归一化”，便于错题本检索（按知识点/按题目类型）。
+        # 根据学科调整提示词
+        subject_prompts = {
+            "chinese": "语文错题分析需要关注：字音字形、词语运用、病句辨析、文言文实词虚词、古诗词鉴赏、现代文阅读技巧、写作方法等。",
+            "english": "英语错题分析需要关注：词汇辨析、语法规则、阅读理解策略、写作技巧、听力技巧、完形填空技巧等。",
+            "morality": "道法（道德与法治）错题分析需要关注：法律条文理解、道德原则应用、时事政治分析、国情国策理解等。",
+        }
+        
+        subject_specific_guide = subject_prompts.get(subject, "")
+
+        prompt = f"""你是一个专业的学习助手与教研员。请对以下错题信息进行总结和结构化处理，并完成"学科判定 + 分类归一化"，便于错题本检索（按知识点/按题目类型）。
 
 原始输入：
 {json.dumps(text_data, ensure_ascii=False, indent=2)}
+
+{subject_specific_guide}
 
 请提取并总结以下信息：
 1. **题目内容**: 清晰、完整的题目描述
@@ -2494,11 +2539,11 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
 5. **题目类型**: 选择题/填空题/解答题等
 6. **题目类型/章节（chapter）**: 优先从候选 chapters 中选择 1 个；如确实需要新增，请用 "NEW:你的新分类"（要短且概括）
 7. **标签**: 2~6个 tags（中文短词，用于检索）
-8. **学科判定**: detected_subject 必须是 ["history","geography","other"] 之一，并输出 confidence(0~1)
+8. **学科判定**: detected_subject 必须是 ["chinese","english","morality"] 之一，并输出 confidence(0~1)
 
 请以JSON格式返回，格式如下：
 {{
-  "detected_subject": "history|geography|other",
+  "detected_subject": "chinese|english|morality",
   "confidence": 0.0,
   "question_content": "总结后的题目内容",
   "student_answer": "学生答案",
@@ -2532,7 +2577,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             conf_f = 0.0
 
-        if detected in ("history", "geography", "other") and detected != subject and conf_f >= 0.75:
+        if detected in ("chinese", "english", "morality") and detected != subject and conf_f >= 0.75:
             msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或修改描述。"
             logger.warning(f"[llm_summarize] subject mismatch: {msg}")
             return {
@@ -2649,7 +2694,7 @@ async def parse_structure(state: Dict[str, Any]) -> Dict[str, Any]:
 
     structured_data = state.get("structured_data", {})
     structured_data_list: List[Dict[str, Any]] = []
-    subject = state.get("subject", "geography")
+    subject = state.get("subject", "chinese")
     difficulty = state.get("difficulty", "medium")
 
     # 多题：如果 OCR 阶段提供了 ocr_items，则优先生成 structured_data_list
@@ -2762,7 +2807,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # 如果 task_id 也是 None 或不在缓存中，尝试从缓存中找到匹配的初始状态
         # 优先通过 subject 和 difficulty 匹配，如果都匹配不上，使用最后一个缓存条目
-        subject_hint = state.get("subject") or state.get("structured_data", {}).get("subject", "geography")
+        subject_hint = state.get("subject") or state.get("structured_data", {}).get("subject", "chinese")
         difficulty_hint = state.get("difficulty") or state.get("structured_data", {}).get("difficulty", "medium")
         
         logger.info(f"[save_question] Searching cache by subject={subject_hint}, difficulty={difficulty_hint}")
@@ -2806,7 +2851,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
     
     structured_data = state.get("structured_data", {})
     structured_data_list = state.get("structured_data_list") if isinstance(state.get("structured_data_list"), list) else None
-    subject = state.get("subject", "geography")
+    subject = state.get("subject", "chinese")
     difficulty = state.get("difficulty", "medium")
     grade = state.get("grade", "")
 
@@ -2855,7 +2900,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 subject_enum = SubjectEnum(subject)
             except ValueError:
-                subject_enum = SubjectEnum.OTHER
+                subject_enum = SubjectEnum.CHINESE
 
             try:
                 difficulty_enum = DifficultyEnum(difficulty)
@@ -2917,7 +2962,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                 # 原始输入/总结（图片/文字模式都支持）
                 if state.get("original_input") is not None:
                     question_data["original_input"] = state.get("original_input")
-                # summarized_input：为避免新增 DB 字段，用 JSON 存“答案来源/判定依据”
+                # summarized_input：为避免新增 DB 字段，用 JSON 存"答案来源/判定依据"
                 try:
                     meta = {
                         "answer_sources": {
@@ -3007,4 +3052,3 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             "current_step": "save_question",
             "progress": 60.0,
         }
-
