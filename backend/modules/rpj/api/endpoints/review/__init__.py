@@ -1,3 +1,3 @@
-"""RPJ module - Review endpoints subpackage."""
+"""WZM module - Review endpoints subpackage."""
 
 

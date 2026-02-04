@@ -1,5 +1,5 @@
 """
-Stats endpoints package (rpj module)
+Stats endpoints package (wzm module)
 """
 
 

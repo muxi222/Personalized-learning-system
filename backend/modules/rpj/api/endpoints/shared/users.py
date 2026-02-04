@@ -1,9 +1,10 @@
-"""RPJ - Users API（学生实现版 / Stub）
+"""WZM - Users API（学生实现版 / Stub）
 
 仅保留主要入口 endpoints 的定义，删除具体实现。
 参考：`backend/modules/tony/api/endpoints/shared/users.py`
 """
 
+import os
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.db.session import get_db
 from backend.core.schemas.user import UserCreate, UserResponse, UserLogin, Token
-from backend.modules.rpj.api.deps import get_current_user_id
+from backend.modules.wzm.api.deps import get_current_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

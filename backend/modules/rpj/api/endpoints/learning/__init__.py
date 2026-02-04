@@ -1,3 +1,3 @@
-"""RPJ module - Learning endpoints subpackage."""
+"""WZM module - Learning endpoints subpackage."""
 
 

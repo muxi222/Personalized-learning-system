@@ -1,3 +1,3 @@
-"""RPJ module - Learning agents subpackage."""
+"""WZM module - Learning agents subpackage."""
 
 

@@ -1,6 +1,6 @@
 """
-RPJ Module - FastAPI Application Entry Point
-语文、英语、道法模块
+WZM Module - FastAPI Application Entry Point
+化学模块
 """
 
 import logging
@@ -62,21 +62,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     description=f"""
-    ## RPJ模块 - 语文、英语、道法学科
+    ## WZM模块 - 化学学科
 
     智能错题分析与举一反三推荐系统
 
     ### 支持学科:
-    - 📚 语文 (Chinese) - 字词句篇、文言文、现代文阅读、写作
-    - 🌐 英语 (English) - 词汇语法、阅读理解、写作、听力
-    - ⚖️ 道法 (Morality) - 道德与法治、时事政治、国情国策
+    - 化学
 
     ### 主要功能:
-    - 📝 错题录入与管理（支持图片OCR和文字输入）
-    - 🔍 AI智能错因分析与分类
+    - 📝 错题录入与管理
+    - 🔍 AI智能错因分析
     - 💡 举一反三题目推荐
-    - 📊 学习进度追踪与知识点统计
-    - 🏷️ 智能标签与分类管理
+    - 📊 学习进度追踪
 
     ### API文档:
     - Swagger UI: `/docs`
@@ -176,60 +173,10 @@ async def root():
     根路径 - 欢迎信息
     """
     return {
-        "message": f"欢迎使用{settings.APP_NAME} - 语文、英语、道法错题智能分析系统",
+        "message": f"Welcome to {settings.APP_NAME}",
         "module": settings.MODULE_NAME,
         "subjects": settings.SUBJECTS,
         "version": settings.APP_VERSION,
         "docs": "/docs",
         "api": settings.API_V1_PREFIX,
-        "features": [
-            "错题图片OCR识别",
-            "文字错题智能分析",
-            "知识点自动分类",
-            "举一反三题目推荐",
-            "学习进度追踪"
-        ]
-    }
-
-# 新增模块信息端点
-@app.get("/module-info", tags=["Module"])
-async def get_module_info():
-    """
-    获取模块详细信息
-    """
-    subject_details = {
-        "chinese": {
-            "name": "语文",
-            "description": "包含现代文阅读、文言文阅读、古诗词鉴赏、语言文字运用、写作等",
-            "supported_features": ["OCR识别", "错因分析", "知识点分类", "写作指导"]
-        },
-        "english": {
-            "name": "英语",
-            "description": "包含词汇语法、阅读理解、完形填空、写作表达、听力训练等",
-            "supported_features": ["OCR识别", "语法分析", "词汇推荐", "写作批改"]
-        },
-        "morality": {
-            "name": "道法",
-            "description": "包含道德品质、法律基础、心理健康、国情国策、时事政治等",
-            "supported_features": ["案例分析", "法律条文理解", "时事分析", "价值观引导"]
-        }
-    }
-    
-    return {
-        "module_name": settings.MODULE_NAME,
-        "module_description": "语文、英语、道法错题智能分析模块",
-        "version": settings.APP_VERSION,
-        "subjects": [
-            {
-                "id": subject,
-                **subject_details.get(subject, {"name": subject, "description": "", "supported_features": []})
-            }
-            for subject in settings.SUBJECTS
-        ],
-        "api_endpoints": {
-            "question_management": f"{settings.API_V1_PREFIX}/questions",
-            "ocr_intake": f"{settings.API_V1_PREFIX}/questions/ocr",
-            "task_tracking": f"{settings.API_V1_PREFIX}/tasks",
-            "image_management": f"{settings.API_V1_PREFIX}/image-files"
-        }
     }

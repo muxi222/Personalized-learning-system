@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Batch fix imports for RPJ module agents
+Batch fix imports for WZM module agents
 """
 import os
 import re
@@ -34,10 +34,10 @@ replacements = [
     (r'from \.\.schemas\.', 'from backend.core.schemas.'),
 
     # Core config → Module config
-    (r'from \.\.core\.config import', 'from backend.modules.rpj.config import'),
+    (r'from \.\.core\.config import', 'from backend.modules.wzm.config import'),
 
     # Celery app
-    (r'from \.\.core\.celery_app import', 'from backend.modules.rpj.celery_app import'),
+    (r'from \.\.core\.celery_app import', 'from backend.modules.wzm.celery_app import'),
 ]
 
 for filename in agent_files:

@@ -1,9 +1,10 @@
-"""RPJ - Learning API（学生实现版 / Stub）
+"""WZM - Learning API（学生实现版 / Stub）
 
 仅保留主要入口 endpoints 的定义，删除具体实现。
 参考：`backend/modules/tony/api/endpoints/learning/learning.py`
 """
 
+import os
 import logging
 from typing import Optional
 
@@ -11,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.db.session import get_db
-from backend.modules.rpj.api.deps import get_current_user_id
+from backend.modules.wzm.api.deps import get_current_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,14 +46,4 @@ async def get_learning_summary(subject: Optional[str] = Query(None), db: AsyncSe
 async def submit_learning_feedback(subject: Optional[str] = Query(None), db: AsyncSession = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     """TODO(student): 学习建议/统计入口。"""
     raise HTTPException(status_code=501, detail="Not Implemented: submit_learning_feedback")
-
-@router.get("/progress")
-async def get_learning_progress(subject: Optional[str] = Query(None), db: AsyncSession = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    """TODO(student): 学习建议/统计入口。"""
-    raise HTTPException(status_code=501, detail="Not Implemented: get_learning_progress")
-
-@router.get("/weak-points/detailed")
-async def get_weak_points_detailed(subject: Optional[str] = Query(None), db: AsyncSession = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    """TODO(student): 学习建议/统计入口。"""
-    raise HTTPException(status_code=501, detail="Not Implemented: get_weak_points_detailed")
 

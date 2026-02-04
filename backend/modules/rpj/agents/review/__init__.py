@@ -1,3 +1,3 @@
-"""RPJ module - Review agents subpackage (reserved)."""
+"""WZM module - Review agents subpackage (reserved)."""
 
 

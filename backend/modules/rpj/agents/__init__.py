@@ -1,7 +1,7 @@
 """
-RPJ Module - Agents Package
+WZM Module - Agents Package
 
-Agent implementations for RPJ module (Chinese, English, Morality subjects)
+Agent implementations for WZM module (History, Geography, Other subjects)
 """
 
 from .intake.question_intake_agent import QuestionIntakeAgent

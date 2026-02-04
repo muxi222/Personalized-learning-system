@@ -40,7 +40,7 @@ UPLOAD_DIR = "./data/uploads"
 
 # 中文学科名称到英文的映射（WZY模块专用）
 SUBJECT_NAME_MAP = {
-    "数学": "maths",
+    "数学": "math",
     "物理": "physics"
 }
 
@@ -58,7 +58,7 @@ def build_image_file_content_url(image_id: int) -> str:
     用 image_files.id 生成图片访问 URL（与 question.id 不同维度，避免混用）。
     """
     base = _public_base()
-    return f"{base}/api/{settings.MODULE_NAME}/v1/image-files/{image_id}/content"
+    return f"{base}/api/v1/image-files/{image_id}/content"
 
 
 def build_fallback_question_image_url(question_id: int, image_index: int) -> str:
@@ -178,7 +178,7 @@ async def create_question_intake_ocr(
     file: Optional[UploadFile] = File(None),
     text_data: Optional[str] = Form(None),
     input_type: str = Form(..., description="输入类型: 'image' 或 'text'"),
-    subject: str = Form("maths"),
+    subject: str = Form("math"),
     grade: str = Form("", description="学段/年级（可选，例如：初中/高中/高一/初三）"),
     difficulty: str = Form("medium"),
     background_tasks: BackgroundTasks = None,

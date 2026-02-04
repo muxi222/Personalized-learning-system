@@ -1,3 +1,3 @@
-"""RPJ module - Intake endpoints subpackage."""
+"""WZM module - Intake endpoints subpackage."""
 
 

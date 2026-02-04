@@ -1,3 +1,3 @@
-"""RPJ module - Shared endpoints subpackage."""
+"""WZM module - Shared endpoints subpackage."""
 
 

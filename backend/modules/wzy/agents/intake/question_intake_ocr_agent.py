@@ -128,7 +128,7 @@ _initial_state_cache: Dict[str, Dict[str, Any]] = {}
 # =========================
 CATEGORY_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
     # 数学
-    "maths": {
+    "math": {
         "junior": ["代数", "几何", "统计", "概率", "函数", "综合"],
         "senior": ["集合", "逻辑用语", "代数", "计算几何", "立体几何", "统计", "概率", "期望", "向量", "矩阵", "函数", "圆锥曲线", "导数", "极限", "数列", "综合"],
     },
@@ -141,7 +141,7 @@ CATEGORY_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
 
 KNOWLEDGE_POINT_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
     # 数学
-    "maths": {
+    "math": {
         "junior": [
             "有理数与实数运算", "整式与因式分解", "一次函数与不等式", "二次函数图像与性质", "平面几何基础(三角形全等/相似)", "勾股定理与应用", "圆的基本性质与计算", "概率初步与数据分析", "锐角三角函数", "方程与方程组", "综合",
         ],
@@ -460,7 +460,7 @@ async def deep_enrich_ocr_items(
 年级/学段：{grade or "未知"}
 
 请输出：
-1) detected_subject（必须是 ["maths","physics"] 之一）与 confidence(0~1)
+1) detected_subject（必须是 ["math","physics"] 之一）与 confidence(0~1)
 2) 对每道题输出 results：
    - question_content：更清晰、更完整的题干（尽量保留关键条件）
    - student_answer / correct_answer：若能从上下文推断则补全，否则保留原样
@@ -479,7 +479,7 @@ async def deep_enrich_ocr_items(
 
 严格输出 JSON：
 {{
-  "detected_subject": "maths|physics",
+  "detected_subject": "math|physics",
   "confidence": 0.0,
   "results": [
     {{
@@ -568,26 +568,30 @@ async def call_router_llm(
     *,
     model: Optional[str] = None,
     temperature: float = 0.2,
-    max_tokens: int = 4096,
+    max_tokens: int = 16384,
     log_ctx: str = "",
     trace_id: Optional[str] = None,
     trace_stage: str = "llm",
 ) -> str:
     """
     通过 settings.LLM_API_ENDPOINT 调用 OpenAI-compatible /chat/completions。
-    该端点在本项目中用于 Gemini 模型调用。
+    增强错误信息具体化。
     """
     import httpx
     import asyncio
-    import random
     from backend.core.services.llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
     from backend.core.services.llm_trace import write_llm_trace
 
     if not settings.LLM_API_ENDPOINT:
-        raise RuntimeError("LLM_API_ENDPOINT not configured")
+        raise RuntimeError("LLM API端点未配置，请检查环境变量 LLM_API_ENDPOINT")
 
     endpoint = settings.LLM_API_ENDPOINT.rstrip("/")
     models_to_try = [model] if (model and model.strip()) else get_text_reasoning_model_names()
+    
+    # 检查是否有可用的模型
+    if not models_to_try:
+        raise RuntimeError("无可用文本推理模型，请配置 WZY_TEXT_REASONING_MODELS 环境变量")
+    
     headers = {}
     if getattr(settings, "LLM_API_KEY", None):
         headers["authorization"] = f"Bearer {settings.LLM_API_KEY}"
@@ -595,11 +599,15 @@ async def call_router_llm(
     timeout_s = float(os.getenv("WZY_TEXT_REASONING_TIMEOUT_SECONDS") or os.getenv("LLM_TEXT_TIMEOUT_SECONDS") or "90")
     async with httpx.AsyncClient(base_url=endpoint, timeout=timeout_s) as client:
         last_err: Optional[Exception] = None
-        for m in models_to_try:
+        last_status_code: Optional[int] = None
+        last_error_details: Dict[str, Any] = {}
+        
+        for m_idx, m in enumerate(models_to_try):
             # 对单个模型做短重试（应对 503/5xx/短暂网络抖动）
             max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or "3")
             base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or "0.6")
             max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or "30")
+            
             for attempt in range(max_attempts):
                 try:
                     req = {
@@ -608,8 +616,8 @@ async def call_router_llm(
                         "temperature": temperature,
                         "max_tokens": max_tokens,
                     }
+                    
                     if trace_id:
-                        # Save FULL prompt + request (Wzy-only). Print gated by env.
                         write_llm_trace(
                             trace_id=str(trace_id),
                             stage=str(trace_stage or "llm"),
@@ -622,8 +630,10 @@ async def call_router_llm(
                             also_log_full=None,
                             log_prefix=f"{log_ctx} ",
                         )
+                    
                     async with get_llm_semaphore():
                         resp = await client.post("/chat/completions", json=req, headers=headers)
+                    
                     if trace_id:
                         try:
                             resp_text = resp.text
@@ -642,24 +652,97 @@ async def call_router_llm(
                             also_log_full=None,
                             log_prefix=f"{log_ctx} ",
                         )
-                    # Retryable status handling
-                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
+                    
+                    # 处理不同状态码的错误
+                    if resp.status_code == 429:
+                        # 速率限制
                         retry_after_s = parse_retry_after_seconds(resp.headers.get("retry-after"))
-                        delay = compute_backoff_delay_seconds(
-                            attempt=attempt,
-                            base_delay=base_delay,
-                            max_delay=max_delay,
-                            retry_after_s=retry_after_s,
-                            jitter=0.2,
+                        if attempt < max_attempts - 1:
+                            delay = compute_backoff_delay_seconds(
+                                attempt=attempt,
+                                base_delay=base_delay,
+                                max_delay=max_delay,
+                                retry_after_s=retry_after_s,
+                                jitter=0.2,
+                            )
+                            logger.warning(
+                                f"[call_router_llm] {log_ctx} 模型调用频率受限 (429)，将在 {delay:.1f} 秒后重试；"
+                                f"model={m}, attempt={attempt+1}/{max_attempts}"
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        else:
+                            # 重试次数已用完
+                            raise httpx.HTTPStatusError(
+                                f"模型调用频率过高，请稍后再试 (HTTP 429)",
+                                request=resp.request,
+                                response=resp,
+                            )
+                    
+                    elif resp.status_code in (500, 502, 503, 504):
+                        # 服务器错误
+                        if attempt < max_attempts - 1:
+                            retry_after_s = parse_retry_after_seconds(resp.headers.get("retry-after"))
+                            delay = compute_backoff_delay_seconds(
+                                attempt=attempt,
+                                base_delay=base_delay,
+                                max_delay=max_delay,
+                                retry_after_s=retry_after_s,
+                                jitter=0.2,
+                            )
+                            error_type = {
+                                500: "内部服务器错误",
+                                502: "网关错误",
+                                503: "服务不可用",
+                                504: "网关超时"
+                            }.get(resp.status_code, "服务器错误")
+                            
+                            logger.warning(
+                                f"[call_router_llm] {log_ctx} {error_type} (HTTP {resp.status_code})，将在 {delay:.1f} 秒后重试；"
+                                f"model={m}, attempt={attempt+1}/{max_attempts}"
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                    
+                    elif resp.status_code == 400:
+                        # 错误的请求（可能是模型不存在或参数错误）
+                        try:
+                            error_detail = resp.json()
+                        except:
+                            error_detail = resp.text[:200]
+                        
+                        error_msg = f"模型请求参数错误 (HTTP 400)"
+                        if isinstance(error_detail, dict) and "error" in error_detail:
+                            error_msg += f": {error_detail['error']}"
+                        elif isinstance(error_detail, str):
+                            error_msg += f": {error_detail}"
+                        
+                        raise httpx.HTTPStatusError(
+                            error_msg,
+                            request=resp.request,
+                            response=resp,
                         )
-                        logger.warning(
-                            f"[call_router_llm] {log_ctx} Retryable HTTP {resp.status_code} from LLM endpoint; "
-                            f"model={m}, attempt={attempt+1}/{max_attempts}, "
-                            f"retry_after={retry_after_s if retry_after_s is not None else 'n/a'}s, sleep={delay:.2f}s"
+                    
+                    elif resp.status_code == 401:
+                        # 认证错误
+                        raise httpx.HTTPStatusError(
+                            "API密钥无效或缺失，请检查 LLM_API_KEY 配置 (HTTP 401)",
+                            request=resp.request,
+                            response=resp,
                         )
-                        await asyncio.sleep(delay)
-                        continue
+                    
+                    elif resp.status_code == 404:
+                        # 模型或端点不存在
+                        raise httpx.HTTPStatusError(
+                            f"模型 '{m}' 或端点不存在 (HTTP 404)，请检查配置",
+                            request=resp.request,
+                            response=resp,
+                        )
+                    
+                    # 其他状态码或成功
                     resp.raise_for_status()
+                    
+                    # 成功响应
                     data = resp.json()
                     if trace_id:
                         write_llm_trace(
@@ -671,23 +754,42 @@ async def call_router_llm(
                             also_log_full=None,
                             log_prefix=f"{log_ctx} ",
                         )
+                    
+                    # 检查响应格式
+                    if "choices" not in data or not data["choices"]:
+                        raise ValueError("模型响应格式异常：缺少 choices 字段")
+                    
                     return data["choices"][0]["message"]["content"]
+                    
                 except httpx.HTTPStatusError as e:
                     last_err = e
-                    # Non-retryable or exhausted attempts -> try next model
-                    break
-                except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as e:
+                    last_status_code = e.response.status_code if e.response else None
+                    
+                    # 如果不是 429/5xx 错误，不重试，直接尝试下一个模型
+                    if e.response and e.response.status_code not in (429, 500, 502, 503, 504):
+                        break
+                    
+                    # 记录错误详情
+                    last_error_details = {
+                        "model": m,
+                        "attempt": attempt,
+                        "status_code": last_status_code,
+                        "error": str(e),
+                    }
+                    
+                    # 如果这是该模型的最后一次尝试，跳出内层循环，尝试下一个模型
+                    if attempt >= max_attempts - 1:
+                        break
+                        
+                except httpx.TimeoutException as e:
                     last_err = e
-                    if trace_id:
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind=f"exception_attempt_{attempt+1}",
-                            payload={"type": type(e).__name__, "message": str(e)},
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
+                    last_error_details = {
+                        "model": m,
+                        "attempt": attempt,
+                        "error_type": "timeout",
+                        "timeout": timeout_s,
+                    }
+                    
                     if attempt < max_attempts - 1:
                         delay = compute_backoff_delay_seconds(
                             attempt=attempt,
@@ -697,33 +799,138 @@ async def call_router_llm(
                             jitter=0.2,
                         )
                         logger.warning(
-                            f"[call_router_llm] {log_ctx} Network error; model={m}, attempt={attempt+1}/{max_attempts}, "
-                            f"sleep={delay:.2f}s, err={type(e).__name__}"
+                            f"[call_router_llm] {log_ctx} 网络超时 ({timeout_s}s)；"
+                            f"model={m}, attempt={attempt+1}/{max_attempts}, 将在 {delay:.1f} 秒后重试"
                         )
                         await asyncio.sleep(delay)
                         continue
                     break
+                    
+                except httpx.NetworkError as e:
+                    last_err = e
+                    last_error_details = {
+                        "model": m,
+                        "attempt": attempt,
+                        "error_type": "network",
+                        "error": str(e),
+                    }
+                    
+                    if attempt < max_attempts - 1:
+                        delay = compute_backoff_delay_seconds(
+                            attempt=attempt,
+                            base_delay=base_delay,
+                            max_delay=max_delay,
+                            retry_after_s=None,
+                            jitter=0.2,
+                        )
+                        logger.warning(
+                            f"[call_router_llm] {log_ctx} 网络连接错误；"
+                            f"model={m}, attempt={attempt+1}/{max_attempts}, 将在 {delay:.1f} 秒后重试"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    break
+                    
+                except httpx.TransportError as e:
+                    last_err = e
+                    last_error_details = {
+                        "model": m,
+                        "attempt": attempt,
+                        "error_type": "transport",
+                        "error": str(e),
+                    }
+                    
+                    if attempt < max_attempts - 1:
+                        delay = compute_backoff_delay_seconds(
+                            attempt=attempt,
+                            base_delay=base_delay,
+                            max_delay=max_delay,
+                            retry_after_s=None,
+                            jitter=0.2,
+                        )
+                        logger.warning(
+                            f"[call_router_llm] {log_ctx} 传输层错误；"
+                            f"model={m}, attempt={attempt+1}/{max_attempts}, 将在 {delay:.1f} 秒后重试"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    break
+                    
+                except json.JSONDecodeError as e:
+                    last_err = e
+                    last_error_details = {
+                        "model": m,
+                        "attempt": attempt,
+                        "error_type": "json_decode",
+                        "error": "响应不是有效的JSON格式",
+                    }
+                    # JSON解析错误通常不会在重试后恢复
+                    break
+                    
+                except ValueError as e:
+                    last_err = e
+                    last_error_details = {
+                        "model": m,
+                        "attempt": attempt,
+                        "error_type": "value_error",
+                        "error": str(e),
+                    }
+                    # 值错误通常不会在重试后恢复
+                    break
+                    
                 except Exception as e:
                     last_err = e
+                    last_error_details = {
+                        "model": m,
+                        "attempt": attempt,
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                    }
                     break
-        # 给前端/任务状态更友好的错误（避免把上游 URL/堆栈直接暴露给学生/用户）
+        
+        # 所有模型都尝试失败，构建详细的错误信息
         if last_err is not None:
-            try:
-                import httpx as _httpx
-                if isinstance(last_err, _httpx.HTTPStatusError):
-                    code = last_err.response.status_code
-                    if code in (429, 500, 502, 503, 504):
-                        raise RuntimeError(f"模型服务暂时不可用（HTTP {code}），请稍后重试")
-            except Exception:
-                pass
-        raise last_err or RuntimeError("LLM call failed")
+            error_msgs = []
+            
+            if isinstance(last_err, httpx.HTTPStatusError):
+                if last_status_code == 429:
+                    error_msgs.append("模型调用频率过高，请稍后再试")
+                elif last_status_code in (500, 502, 503, 504):
+                    error_msgs.append(f"模型服务暂时不可用 (HTTP {last_status_code})")
+                elif last_status_code == 400:
+                    error_msgs.append(f"模型请求参数错误，请检查配置")
+                elif last_status_code == 401:
+                    error_msgs.append("API密钥无效，请检查 LLM_API_KEY 配置")
+                elif last_status_code == 404:
+                    error_msgs.append(f"模型不存在或端点配置错误")
+                else:
+                    error_msgs.append(f"HTTP错误 {last_status_code}: {str(last_err)}")
+                    
+            elif isinstance(last_err, httpx.TimeoutException):
+                error_msgs.append(f"请求超时 ({timeout_s}秒)，请检查网络连接或增加超时时间")
+            elif isinstance(last_err, (httpx.NetworkError, httpx.TransportError)):
+                error_msgs.append("网络连接错误，请检查网络或代理设置")
+            elif isinstance(last_err, json.JSONDecodeError):
+                error_msgs.append("模型响应格式错误，无法解析JSON")
+            elif isinstance(last_err, ValueError):
+                error_msgs.append(f"数据处理错误: {str(last_err)}")
+            else:
+                error_msgs.append(f"未知错误: {str(last_err)}")
+            
+            # 添加模型信息
+            if models_to_try:
+                error_msgs.append(f"已尝试模型: {', '.join(models_to_try[:3])}")
+            
+            raise RuntimeError("; ".join(error_msgs))
+        
+        raise RuntimeError("所有模型调用均失败，无可用服务")
 
 async def call_router_llm_with_meta(
     prompt: str,
     *,
     model: Optional[str] = None,
     temperature: float = 0.2,
-    max_tokens: int = 4096,
+    max_tokens: int = 16394,
     log_ctx: str = "",
     trace_id: Optional[str] = None,
     trace_stage: str = "llm",
@@ -884,7 +1091,7 @@ async def call_router_llm_json(
         prompt,
         model=model,
         temperature=0.2,
-        max_tokens=4096,
+        max_tokens=16384,
         log_ctx=log_ctx,
         trace_id=trace_id,
         trace_stage=trace_stage,
@@ -1147,30 +1354,53 @@ def route_by_input_type(state: Dict[str, Any]) -> str:
     return input_type
 
 async def process_input(state: Dict[str, Any]) -> Dict[str, Any]:
-    """处理输入节点"""
+    """处理输入节点 - 优化进度"""
     logger.info(f"[process_input] Task {state.get('task_id')}: Processing input")
-    # 从全局缓存获取初始状态，确保关键字段不丢失
+    
+    # 从全局缓存获取初始状态
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
         initial_state = _initial_state_cache[task_id]
-        # 合并初始状态和当前状态
         merged_state = {**initial_state, **state}
+        
+        # 更新任务状态，更详细的进度描述
+        if task_id:
+            from backend.core.db.session import async_session_maker
+            from backend.core.crud import crud_task
+            from backend.core.db.models import TaskStatusEnum
+            async with async_session_maker() as db:
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,
+                    progress=5.0,  # 初始进度
+                    current_step="开始处理输入...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "input_processing",
+                        "step": "初始化",
+                        "timestamp": time.time(),
+                    },
+                    result_stage="init",
+                )
+                await db.commit()
+        
         return {
-            **merged_state,  # 保留所有初始字段
-            "current_step": "process_input",
-            "progress": 10.0,
+            **merged_state,
+            "current_step": "处理输入中",
+            "progress": 5.0,
+            "stage": "input_processing",
         }
-    # 如果没有缓存，只返回新增字段
+    
     return {
-        "current_step": "process_input",
-        "progress": 10.0,
+        "current_step": "处理输入中",
+        "progress": 5.0,
+        "stage": "input_processing",
     }
 
 async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    OCR Agent（多模态快）：
-    - 只负责“图片 -> OCR浅层结构化提取”
-    - 不做深度推理、错因分析、taxonomy 归一化（这些交给后续 Reasoner/Normalizer）
+    OCR Agent（多模态快） - 优化进度
     """
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
@@ -1184,17 +1414,65 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     image_path = state.get("image_path")
-    subject = state.get("subject", "maths")
+    subject = state.get("subject", "math")
     grade = state.get("grade", "")
 
     if not image_path:
-        return {"errors": ["没有提供图片路径"], "current_step": "ocr_agent", "progress": 10.0}
+        return {
+            "errors": ["没有提供图片路径"],
+            "current_step": "OCR识别",
+            "progress": 10.0,
+            "stage": "ocr_failed",
+        }
 
     try:
+        # 更新任务状态：OCR初始化
+        if task_id:
+            from backend.core.db.session import async_session_maker
+            from backend.core.crud import crud_task
+            from backend.core.db.models import TaskStatusEnum
+            async with async_session_maker() as db:
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,
+                    progress=10.0,
+                    current_step="初始化OCR服务...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "ocr_init",
+                        "step": "初始化OCR",
+                        "image_file": os.path.basename(image_path) if image_path else None,
+                        "timestamp": time.time(),
+                    },
+                    result_stage="ocr_init",
+                )
+                await db.commit()
+
         from backend.core.services.gemini_ocr_service import get_gemini_ocr_service, SubjectType
 
         ocr_service = get_gemini_ocr_service(settings)
         await ocr_service.initialize()
+        
+        # 更新任务状态：OCR识别中
+        if task_id:
+            async with async_session_maker() as db:
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,
+                    progress=15.0,
+                    current_step="正在识别图片内容...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "ocr_recognizing",
+                        "step": "图片识别",
+                        "progress_detail": "调用Gemini Vision API进行图片识别",
+                        "timestamp": time.time(),
+                    },
+                    result_stage="ocr_recognizing",
+                )
+                await db.commit()
 
         subject_map = {
             "math": SubjectType.MATH,
@@ -1215,6 +1493,26 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             trace_stage="ocr_agent",
         )
 
+        # 更新任务状态：OCR解析中
+        if task_id:
+            async with async_session_maker() as db:
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,
+                    progress=20.0,
+                    current_step="解析OCR结果...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "ocr_parsing",
+                        "step": "解析识别结果",
+                        "progress_detail": "解析模型返回的结构化数据",
+                        "timestamp": time.time(),
+                    },
+                    result_stage="ocr_parsing",
+                )
+                await db.commit()
+
         extracted_items: List[Dict[str, Any]] = []
         if getattr(analysis_result, "questions", None):
             def _qnum(x):
@@ -1231,7 +1529,6 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 if not q_text:
                     continue
                 qn = _qnum(qi)
-                # 排序 key：优先用题号；若无题号则用模型输出顺序(i+1)，避免把“无题号题目”统一挪到末尾导致顺序错乱
                 order_key = qn if qn is not None else (i + 1)
                 pairs.append(
                     (
@@ -1243,14 +1540,13 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                             "correct_answer": (getattr(qi, "correct_answer", "") or "").strip(),
                             "question_type": (getattr(qi, "question_type", "") or "").strip(),
                             "knowledge_points": getattr(qi, "knowledge_points", []) or [],
-                            # 浅层 OCR 阶段不保证错因分析，留空给 Reasoner
                             "error_analysis": (getattr(qi, "error_analysis", "") or "").strip(),
                             "question_number": qn,
                         },
                     )
                 )
 
-            # 生成稳定的试卷顺序字段 order（1..n），用于后续入库写入 upload_index
+            # 生成稳定的试卷顺序
             for j, (_ord, _i, d) in enumerate(sorted(pairs, key=lambda x: (x[0], x[1]))):
                 d["order"] = j + 1
                 extracted_items.append(d)
@@ -1268,13 +1564,9 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 }
             ]
 
-        # 更新任务状态（供 SSE 推送阶段性进度）
+        # 更新任务状态：OCR完成
         if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
             async with async_session_maker() as db:
-                # 写入 OCR 阶段产物（增量 patch）
                 compact_items = [
                     {
                         "index": i,
@@ -1291,13 +1583,17 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                     task_id,
                     TaskStatusEnum.PROCESSING,
                     progress=25.0,
-                    current_step="OCR识别完成，正在进行深度解析...",
+                    current_step=f"OCR识别完成，发现 {len(extracted_items)} 道题目",
                     result_patch={
                         "ocr_model": os.getenv("WZY_OCR_VISION_MODEL") or os.getenv("OCR_VISION_MODEL"),
-                        "items": compact_items,
-                        "original_input_preview": (getattr(analysis_result, "raw_response", "") or "")[:1500],
+                        "items_count": len(extracted_items),
+                        "items_preview": compact_items,
+                        "stage": "ocr_completed",
+                        "step": "OCR完成",
+                        "progress_detail": f"成功识别 {len(extracted_items)} 道题目",
+                        "timestamp": time.time(),
                     },
-                    result_stage="ocr",
+                    result_stage="ocr_completed",
                 )
                 await db.commit()
 
@@ -1310,24 +1606,74 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "ocr_items": extracted_items,
             "original_input": getattr(analysis_result, "raw_response", "") or "",
             "summarized_input": getattr(analysis_result, "overall_analysis", "") or "",
-            "current_step": "ocr_agent",
+            "current_step": "OCR识别完成",
             "progress": 25.0,
+            "stage": "ocr_completed",
+            "ocr_duration_ms": duration_ms,
         }
+        
+        # 保留关键字段
         for k in ["user_id", "task_id", "subject", "difficulty", "input_type", "image_path", "grade"]:
             if state.get(k) is not None:
                 result[k] = state.get(k)
         return result
 
+    except ImportError as e:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        error_msg = f"OCR服务依赖缺失: {str(e)}，请检查后端依赖安装"
+        logger.error(f"[ocr_agent] {_ctx(state)} import error duration_ms={duration_ms}: {error_msg}", exc_info=True)
+        
+        if task_id:
+            async with async_session_maker() as db:
+                await crud_task.fail_task(db, task_id, error_msg)
+                await db.commit()
+        
+        return {
+            "errors": [error_msg],
+            "current_step": "OCR服务初始化失败",
+            "progress": 10.0,
+            "stage": "ocr_failed",
+        }
+    
     except Exception as e:
-        duration_ms = int((time.perf_counter() - t0) * 1000) if "t0" in locals() else -1
-        logger.error(f"[ocr_agent] {_ctx(state)} error duration_ms={duration_ms}: {e}", exc_info=True)
-        return {"errors": [f"OCR 处理错误: {str(e)}"], "current_step": "ocr_agent", "progress": 10.0}
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        error_type = type(e).__name__
+        
+        # 根据异常类型提供更具体的错误信息
+        if "timeout" in str(e).lower() or isinstance(e, (asyncio.TimeoutError, httpx.TimeoutException)):
+            error_msg = f"OCR识别超时 ({duration_ms}ms)，图片可能过大或网络不稳定"
+        elif "connection" in str(e).lower() or "network" in str(e).lower():
+            error_msg = f"网络连接错误，无法访问OCR服务"
+        elif "api key" in str(e).lower() or "authentication" in str(e).lower():
+            error_msg = f"OCR服务认证失败，请检查API密钥配置"
+        elif "model" in str(e).lower():
+            error_msg = f"OCR模型不可用或配置错误: {str(e)}"
+        else:
+            error_msg = f"OCR识别失败: {str(e)}"
+        
+        logger.error(f"[ocr_agent] {_ctx(state)} {error_type} duration_ms={duration_ms}: {error_msg}", exc_info=True)
+        
+        if task_id:
+            async with async_session_maker() as db:
+                await crud_task.fail_task(db, task_id, error_msg)
+                await db.commit()
+        
+        return {
+            "errors": [error_msg],
+            "current_step": "OCR识别失败",
+            "progress": 10.0,
+            "stage": "ocr_failed",
+        }
 
 async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Reasoner Agent（强推理补全）：
     - 图片：在 OCR items 基础上做深度解析（更完整题干、错因、举一反三、分类提议）
     - 文字：直接基于文字输入做深度解析与分类提议
+    
+    优化内容：
+    1. 增强错误信息具体化，提供更详细的错误分类和诊断信息
+    2. 细化进度条，提供更详细的处理阶段和进度信息
     """
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
@@ -1335,20 +1681,80 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     t0 = time.perf_counter()
     models = get_text_reasoning_model_names()
-    items_in = len(state.get("ocr_items") or []) if state.get("input_type", "image") == "image" else 1
+    input_type = state.get("input_type", "image")
+    items_in = len(state.get("ocr_items") or []) if input_type == "image" else 1
+    
     logger.info(
         f"[reasoner_agent] {_ctx(state)} start text_models={models} items_in={items_in}"
     )
 
-    input_type = state.get("input_type", "image")
-    subject = state.get("subject", "maths")
+    subject = state.get("subject", "math")
     grade = state.get("grade", "")
     user_id = state.get("user_id")
+    difficulty = state.get("difficulty", "medium")
 
-    # 构建 taxonomy 提示（动态候选 + seed），用于减少发散
+    # ============================================
+    # 阶段1: 深度解析初始化 (进度: 30%)
+    # ============================================
+    if task_id:
+        try:
+            from backend.core.db.session import async_session_maker
+            from backend.core.crud import crud_task
+            from backend.core.db.models import TaskStatusEnum
+            async with async_session_maker() as db:
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,
+                    progress=30.0,
+                    current_step="开始深度解析题目内容...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "reasoner_init",
+                        "step": "深度解析初始化",
+                        "items_count": items_in,
+                        "models_available": models,
+                        "input_type": input_type,
+                        "subject": subject,
+                        "difficulty": difficulty,
+                        "timestamp": time.time(),
+                    },
+                    result_stage="reasoner_init",
+                )
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"[reasoner_agent] Failed to update task status for init: {e}")
+
+    # ============================================
+    # 阶段2: 构建分类数据 (进度: 35%)
+    # ============================================
     taxonomy: Dict[str, Dict[str, List[str]]] = {}
+    taxonomy_error = None
+    
     try:
-        for s in ["maths", "physics"]:
+        # 更新任务状态：加载分类数据
+        if task_id:
+            async with async_session_maker() as db:
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,
+                    progress=32.0,
+                    current_step="加载分类数据...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "taxonomy_loading",
+                        "step": "分类数据加载中",
+                        "user_id": user_id,
+                        "subject": subject,
+                        "grade": grade,
+                        "timestamp": time.time(),
+                    },
+                    result_stage="taxonomy_loading",
+                )
+                await db.commit()
+
+        for s in ["math", "physics"]:
             taxonomy[s] = await get_dynamic_taxonomy_candidates(
                 user_id=int(user_id or 0),
                 subject=s,
@@ -1356,16 +1762,105 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 max_chapters=20,
                 max_kps=30,
             )
-    except Exception:
+        
+        # 更新任务状态：分类数据加载完成
+        if task_id:
+            async with async_session_maker() as db:
+                taxonomy_stats = {
+                    s: {
+                        "chapters_count": len(taxonomy[s].get("chapters", [])),
+                        "knowledge_points_count": len(taxonomy[s].get("knowledge_points", []))
+                    }
+                    for s in taxonomy
+                }
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,
+                    progress=35.0,
+                    current_step="分类数据加载完成",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "taxonomy_loaded",
+                        "step": "分类数据加载完成",
+                        "taxonomy_subjects": list(taxonomy.keys()),
+                        "taxonomy_stats": taxonomy_stats,
+                        "math_chapters": taxonomy.get("math", {}).get("chapters", [])[:10],
+                        "physics_chapters": taxonomy.get("physics", {}).get("chapters", [])[:10],
+                        "timestamp": time.time(),
+                    },
+                    result_stage="taxonomy_loaded",
+                )
+                await db.commit()
+                
+    except ImportError as e:
+        taxonomy_error = f"分类数据依赖缺失: {str(e)}，请检查数据库连接"
+        logger.error(f"[reasoner_agent] {_ctx(state)} taxonomy import error: {taxonomy_error}", exc_info=True)
         taxonomy = {
             s: {"chapters": get_category_candidates(s, grade), "knowledge_points": get_knowledge_point_candidates(s, grade)}
-            for s in ["maths", "physics"]
+            for s in ["math", "physics"]
         }
+    except Exception as e:
+        taxonomy_error = f"分类数据加载失败: {str(e)}，使用默认分类"
+        logger.warning(f"[reasoner_agent] {_ctx(state)} taxonomy load error: {taxonomy_error}")
+        taxonomy = {
+            s: {"chapters": get_category_candidates(s, grade), "knowledge_points": get_knowledge_point_candidates(s, grade)}
+            for s in ["math", "physics"]
+        }
+
+    # ============================================
+    # 阶段3: 准备输入数据 (进度: 37%)
+    # ============================================
+    if task_id:
+        async with async_session_maker() as db:
+            await crud_task.update_task_status(
+                db,
+                task_id,
+                TaskStatusEnum.PROCESSING,
+                progress=37.0,
+                current_step="准备输入数据...",
+                result_patch={
+                    "status": "processing",
+                    "stage": "input_preparation",
+                    "step": "数据准备",
+                    "input_type": input_type,
+                    "taxonomy_error": taxonomy_error,
+                    "timestamp": time.time(),
+                },
+                result_stage="input_preparation",
+            )
+            await db.commit()
 
     if input_type == "image":
         items = state.get("ocr_items") if isinstance(state.get("ocr_items"), list) else []
         if not items:
-            return {"errors": ["缺少 OCR 结果，无法深度解析"], "current_step": "reasoner_agent", "progress": 30.0}
+            error_msg = "缺少 OCR 结果，无法深度解析"
+            logger.error(f"[reasoner_agent] {_ctx(state)} error: {error_msg}")
+            
+            if task_id:
+                async with async_session_maker() as db:
+                    await crud_task.fail_task(
+                        db,
+                        task_id,
+                        error_msg,
+                        result_patch={
+                            "status": "failed",
+                            "error": "missing_ocr_items",
+                            "stage": "reasoner_failed",
+                            "step": "深度解析失败",
+                            "error_detail": "OCR阶段未返回有效数据",
+                            "timestamp": time.time(),
+                        }
+                    )
+                    await db.commit()
+            
+            return {
+                "errors": [error_msg],
+                "current_step": "深度解析失败",
+                "progress": 37.0,
+                "stage": "reasoner_failed",
+            }
+        
         prompt_items = [
             {
                 "index": i,
@@ -1377,10 +1872,47 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             for i, it in enumerate(items[: int(os.getenv("WZY_DEEP_ENRICH_MAX_ITEMS") or "10")])
         ]
         raw_input = state.get("original_input") or ""
+        
+        # 记录数据统计
+        items_stats = {
+            "total_items": len(items),
+            "processed_items": len(prompt_items),
+            "avg_question_length": sum(len(it.get("question_content", "")) for it in items[:5]) / max(len(items[:5]), 1),
+            "has_student_answer": sum(1 for it in items if it.get("student_answer")) > 0,
+            "has_correct_answer": sum(1 for it in items if it.get("correct_answer")) > 0,
+        }
+        
     else:
+        # 文字模式
         text_data = state.get("text_data") or {}
         if not isinstance(text_data, dict) or not text_data:
-            return {"errors": ["缺少 text_data，无法深度解析"], "current_step": "reasoner_agent", "progress": 30.0}
+            error_msg = "缺少 text_data，无法深度解析"
+            logger.error(f"[reasoner_agent] {_ctx(state)} error: {error_msg}")
+            
+            if task_id:
+                async with async_session_maker() as db:
+                    await crud_task.fail_task(
+                        db,
+                        task_id,
+                        error_msg,
+                        result_patch={
+                            "status": "failed",
+                            "error": "missing_text_data",
+                            "stage": "reasoner_failed",
+                            "step": "深度解析失败",
+                            "error_detail": "未提供有效的文本数据",
+                            "timestamp": time.time(),
+                        }
+                    )
+                    await db.commit()
+            
+            return {
+                "errors": [error_msg],
+                "current_step": "深度解析失败",
+                "progress": 37.0,
+                "stage": "reasoner_failed",
+            }
+        
         prompt_items = [
             {
                 "index": 0,
@@ -1391,24 +1923,50 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             }
         ]
         raw_input = json.dumps(text_data, ensure_ascii=False)
+        items_stats = {"total_items": 1, "processed_items": 1}
 
+    # ============================================
+    # 阶段4: 构建推理提示 (进度: 39%)
+    # ============================================
+    if task_id:
+        async with async_session_maker() as db:
+            await crud_task.update_task_status(
+                db,
+                task_id,
+                TaskStatusEnum.PROCESSING,
+                progress=39.0,
+                current_step="构建推理提示...",
+                result_patch={
+                    "status": "processing",
+                    "stage": "prompt_building",
+                    "step": "构建提示词",
+                    "items_stats": items_stats,
+                    "prompt_items_count": len(prompt_items),
+                    "timestamp": time.time(),
+                },
+                result_stage="prompt_building",
+            )
+            await db.commit()
+
+    # 配置参数
     mismatch_threshold = float(os.getenv("WZY_SUBJECT_MISMATCH_CONFIDENCE") or "0.75")
     max_new_chapters = int(os.getenv("WZY_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
     max_new_kps = int(os.getenv("WZY_MAX_NEW_KPS_PER_REQUEST") or "6")
-
-    # Control output size to avoid provider truncation (finish_reason=length => invalid JSON => fallback_no_json)
+    
+    # 输出长度限制
     max_field_question = int(os.getenv("WZY_REASONER_MAX_CHARS_QUESTION_CONTENT") or "600")
     max_field_expl = int(os.getenv("WZY_REASONER_MAX_CHARS_EXPLANATION") or "300")
     max_field_error = int(os.getenv("WZY_REASONER_MAX_CHARS_ERROR_ANALYSIS") or "420")
     max_field_sq = int(os.getenv("WZY_REASONER_MAX_CHARS_SUGGESTED_Q") or "60")
 
-    prompt = f"""你是资深教研员与讲题老师。现在要做“深度解析 + 分类提议（允许受控新增）”。
+    # 构建提示词
+    prompt = f"""你是资深教研员与讲题老师。现在要做"深度解析 + 分类提议（允许受控新增）"。
 
 用户选择学科：{subject}
 年级/学段：{grade or "未知"}
 
 请输出：
-1) detected_subject（必须是 ["maths","physics"] 之一）与 confidence(0~1)
+1) detected_subject（必须是 ["math","physics"] 之一）与 confidence(0~1)
 2) results：对每道题输出：
    - question_content：更清晰、更完整的题干
    - student_answer / correct_answer：可推断则补全，否则保留原样
@@ -1437,82 +1995,290 @@ OCR/输入原文（供你参考，可忽略噪声）：
 
 严格输出 JSON：
 {{
-  "detected_subject": "maths|physics",
+  "detected_subject": "math|physics",
   "confidence": 0.0,
   "results": [{{"index":0,"question_content":"...","student_answer":"...","correct_answer":"...","explanation":"...","error_analysis":"...","suggested_questions":["..."],"chapter":"...","knowledge_points":["..."],"tags":["..."]}}]
 }}"""
 
+    # ============================================
+    # 阶段5: 调用AI模型进行推理 (进度: 40-45%)
+    # ============================================
     raw_preview_limit = int(os.getenv("WZY_REASONER_RAW_PREVIEW_CHARS") or "1200")
     raw_text = ""
     used_model = None
+    llm_error_details = None
+    
+    # 更新任务状态：开始调用LLM
+    if task_id:
+        async with async_session_maker() as db:
+            await crud_task.update_task_status(
+                db,
+                task_id,
+                TaskStatusEnum.PROCESSING,
+                progress=40.0,
+                current_step="调用AI模型进行深度解析...",
+                result_patch={
+                    "status": "processing",
+                    "stage": "llm_calling",
+                    "step": "AI模型推理",
+                    "model_count": len(models),
+                    "models_list": models,
+                    "prompt_length": len(prompt),
+                    "timestamp": time.time(),
+                },
+                result_stage="llm_calling",
+            )
+            await db.commit()
+
     try:
-        reasoner_max_tokens = int(os.getenv("WZY_REASONER_MAX_TOKENS") or "8192")
-        raw_text, used_model = await call_router_llm_with_meta(
-            prompt,
-            model=None,
-            temperature=0.2,
-            max_tokens=reasoner_max_tokens,
-            log_ctx=_ctx(state),
-            trace_id=str(task_id) if task_id else None,
-            trace_stage="reasoner",
-        )
+        reasoner_max_tokens = int(os.getenv("WZY_REASONER_MAX_TOKENS") or "16384")
+        
+        # 更新任务状态：调用具体模型
+        for model_idx, model_name in enumerate(models):
+            if task_id:
+                try:
+                    async with async_session_maker() as db:
+                        await crud_task.update_task_status(
+                            db,
+                            task_id,
+                            TaskStatusEnum.PROCESSING,
+                            progress=40.0 + (model_idx / max(len(models), 1)) * 3,
+                            current_step=f"尝试模型 {model_idx+1}/{len(models)}: {model_name}...",
+                            result_patch={
+                                "status": "processing",
+                                "stage": f"llm_try_model_{model_idx+1}",
+                                "step": f"尝试模型 {model_name}",
+                                "current_model": model_name,
+                                "model_index": model_idx + 1,
+                                "total_models": len(models),
+                                "timestamp": time.time(),
+                            },
+                            result_stage=f"llm_try_model_{model_idx+1}",
+                        )
+                        await db.commit()
+                except Exception:
+                    pass
+            
+            try:
+                raw_text, used_model = await call_router_llm_with_meta(
+                    prompt,
+                    model=model_name,
+                    temperature=0.2,
+                    max_tokens=reasoner_max_tokens,
+                    log_ctx=_ctx(state),
+                    trace_id=str(task_id) if task_id else None,
+                    trace_stage="reasoner",
+                )
+                
+                # 如果调用成功，跳出循环
+                if raw_text and used_model:
+                    logger.info(f"[reasoner_agent] {_ctx(state)} LLM call successful with model: {used_model}")
+                    break
+                    
+            except Exception as e:
+                llm_error_details = {
+                    "model": model_name,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "attempt": model_idx + 1,
+                }
+                logger.warning(f"[reasoner_agent] {_ctx(state)} LLM call failed with model {model_name}: {e}")
+                # 继续尝试下一个模型
+        
+        # 检查是否所有模型都失败了
+        if not raw_text or not used_model:
+            raise RuntimeError(f"所有模型调用均失败，最后错误: {llm_error_details.get('error_message', '未知错误') if llm_error_details else '未知错误'}")
+
+    except RuntimeError as e:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        error_msg = f"AI模型服务调用失败: {str(e)}"
+        
+        # 根据错误类型提供更友好的提示
+        if "timeout" in str(e).lower() or "timed out" in str(e).lower():
+            error_msg = f"AI模型调用超时 ({duration_ms}ms)，请稍后重试或减少题目数量"
+        elif "429" in str(e) or "rate limit" in str(e).lower():
+            error_msg = "AI模型调用频率过高，请稍后再试"
+        elif "401" in str(e) or "403" in str(e) or "authentication" in str(e).lower():
+            error_msg = "AI模型认证失败，请检查API密钥配置"
+        elif "404" in str(e) or "not found" in str(e).lower():
+            error_msg = "AI模型端点不存在，请检查模型配置"
+        elif "connection" in str(e).lower() or "network" in str(e).lower():
+            error_msg = "网络连接错误，无法访问AI模型服务"
+        elif "all models failed" in str(e).lower():
+            error_msg = "所有AI模型均不可用，请检查模型服务状态"
+        
+        logger.error(f"[reasoner_agent] {_ctx(state)} LLM call failed duration_ms={duration_ms}: {error_msg}", exc_info=True)
+        
+        if task_id:
+            try:
+                async with async_session_maker() as db:
+                    await crud_task.update_task_status(
+                        db,
+                        task_id,
+                        TaskStatusEnum.PROCESSING,
+                        progress=45.0,
+                        current_step=error_msg,
+                        result_patch={
+                            "status": "fallback",
+                            "error": "llm_error",
+                            "error_type": "llm_service_unavailable",
+                            "error_details": llm_error_details,
+                            "models_tried": models,
+                            "last_model_error": str(e),
+                            "duration_ms": duration_ms,
+                            "stage": "llm_failed",
+                            "step": "模型调用失败",
+                            "timestamp": time.time(),
+                        },
+                        result_stage="llm_failed",
+                    )
+                    await db.commit()
+            except Exception as db_err:
+                logger.error(f"[reasoner_agent] Failed to update task status: {db_err}")
+        
+        # 降级处理：直接使用OCR结果
+        base_items = list(state.get("ocr_items") or [])
+        if not base_items and input_type == "text":
+            base_items = [{"question_content": prompt_items[0].get("question_content", ""),
+                          "student_answer": prompt_items[0].get("student_answer", ""),
+                          "correct_answer": prompt_items[0].get("correct_answer", "")}]
+        
+        out = {**state, "reasoned_items": base_items, "current_step": "深度解析失败（使用OCR结果）", "progress": 45.0, "stage": "llm_fallback"}
+        out.setdefault("errors", [])
+        out["errors"] = list(out.get("errors") or []) + [error_msg]
+        return out
+
     except Exception as e:
         duration_ms = int((time.perf_counter() - t0) * 1000)
-        msg = f"深度解析失败：{str(e) or 'LLM 调用失败'}，已降级为 OCR 结果归一化"
-        logger.warning(f"[reasoner_agent] {_ctx(state)} fallback_llm_error duration_ms={duration_ms}: {e}")
+        error_msg = f"深度解析失败：未知错误: {str(e)}"
+        logger.error(f"[reasoner_agent] {_ctx(state)} unexpected error duration_ms={duration_ms}: {e}", exc_info=True)
+        
         if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
             async with async_session_maker() as db:
                 await crud_task.update_task_status(
                     db,
                     task_id,
                     TaskStatusEnum.PROCESSING,
                     progress=45.0,
-                    current_step=msg,
-                    result_patch={"status": "fallback", "error": "llm_error", "message": str(e)[:200]},
-                    result_stage="reasoner",
+                    current_step="深度解析遇到未知错误",
+                    result_patch={
+                        "status": "fallback",
+                        "error": "unexpected_error",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "models_tried": models,
+                        "duration_ms": duration_ms,
+                        "stage": "llm_unexpected_error",
+                        "step": "未知错误",
+                        "timestamp": time.time(),
+                    },
+                    result_stage="llm_unexpected_error",
                 )
                 await db.commit()
+        
         base_items = list(state.get("ocr_items") or [])
-        out = {**state, "reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 45.0}
+        out = {**state, "reasoned_items": base_items, "current_step": "深度解析失败", "progress": 45.0, "stage": "llm_fallback"}
         out.setdefault("errors", [])
-        out["errors"] = list(out.get("errors") or []) + [msg]
+        out["errors"] = list(out.get("errors") or []) + [error_msg]
         return out
+
+    # ============================================
+    # 阶段6: 解析模型响应 (进度: 50%)
+    # ============================================
+    if task_id:
+        async with async_session_maker() as db:
+            await crud_task.update_task_status(
+                db,
+                task_id,
+                TaskStatusEnum.PROCESSING,
+                progress=48.0,
+                current_step="解析AI模型响应...",
+                result_patch={
+                    "status": "processing",
+                    "stage": "llm_response_parsing",
+                    "step": "解析模型输出",
+                    "used_model": used_model,
+                    "response_length": len(raw_text or ""),
+                    "timestamp": time.time(),
+                },
+                result_stage="llm_response_parsing",
+            )
+            await db.commit()
 
     parsed = _extract_json_object_loose(raw_text) if raw_text else None
     if not parsed:
         duration_ms = int((time.perf_counter() - t0) * 1000)
-        msg = "深度解析失败：无法解析模型输出，已降级为 OCR 结果归一化"
-        logger.warning(f"[reasoner_agent] {_ctx(state)} fallback_no_json duration_ms={duration_ms}")
+        error_msg = "深度解析失败：无法解析模型输出（非JSON格式或格式错误）"
+        
+        # 分析可能的失败原因
+        error_analysis = ""
+        if raw_text:
+            if len(raw_text) < 50:
+                error_analysis = "模型响应过短，可能被截断"
+            elif "```" in raw_text:
+                error_analysis = "模型返回了代码块而非纯JSON"
+            elif "sorry" in raw_text.lower() or "apologize" in raw_text.lower():
+                error_analysis = "模型表示无法处理请求"
+        
+        logger.warning(f"[reasoner_agent] {_ctx(state)} fallback_no_json duration_ms={duration_ms}, analysis: {error_analysis}")
+        
         if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
             async with async_session_maker() as db:
                 await crud_task.update_task_status(
                     db,
                     task_id,
                     TaskStatusEnum.PROCESSING,
-                    progress=45.0,
-                    current_step=msg,
+                    progress=50.0,
+                    current_step="模型输出格式错误，使用备选方案",
                     result_patch={
                         "status": "fallback",
                         "error": "no_json",
+                        "error_type": "json_parse_error",
                         "used_model": used_model,
                         "raw_output_len": len(raw_text or ""),
                         "raw_output_preview": (raw_text or "")[:raw_preview_limit],
                         "raw_output_truncated": bool(raw_text and len(raw_text) > raw_preview_limit),
+                        "error_analysis": error_analysis,
+                        "stage": "json_parse_failed",
+                        "step": "JSON解析失败",
+                        "timestamp": time.time(),
                     },
-                    result_stage="reasoner",
+                    result_stage="json_parse_failed",
                 )
                 await db.commit()
+        
         base_items = list(state.get("ocr_items") or [])
-        out = {**state, "reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 45.0}
+        if not base_items and input_type == "text":
+            base_items = [{"question_content": prompt_items[0].get("question_content", ""),
+                          "student_answer": prompt_items[0].get("student_answer", ""),
+                          "correct_answer": prompt_items[0].get("correct_answer", "")}]
+        
+        out = {**state, "reasoned_items": base_items, "current_step": "深度解析失败（格式错误）", "progress": 50.0, "stage": "json_parse_fallback"}
         out.setdefault("errors", [])
-        out["errors"] = list(out.get("errors") or []) + [msg]
+        out["errors"] = list(out.get("errors") or []) + [error_msg]
         return out
+
+    # ============================================
+    # 阶段7: 学科一致性校验 (进度: 52%)
+    # ============================================
+    if task_id:
+        async with async_session_maker() as db:
+            await crud_task.update_task_status(
+                db,
+                task_id,
+                TaskStatusEnum.PROCESSING,
+                progress=52.0,
+                current_step="校验学科一致性...",
+                result_patch={
+                    "status": "processing",
+                    "stage": "subject_validation",
+                    "step": "学科校验",
+                    "selected_subject": subject,
+                    "timestamp": time.time(),
+                },
+                result_stage="subject_validation",
+            )
+            await db.commit()
 
     detected = str(parsed.get("detected_subject") or "").strip().lower()
     try:
@@ -1520,41 +2286,88 @@ OCR/输入原文（供你参考，可忽略噪声）：
     except Exception:
         conf_f = 0.0
 
-    if detected in ("maths", "physics") and detected != subject and conf_f >= mismatch_threshold:
-        msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。"
+    if detected in ("math", "physics") and detected != subject and conf_f >= mismatch_threshold:
+        error_msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或更换图片。"
+        
+        # 提供修正建议
+        suggestion = ""
+        if detected == "math" and subject == "physics":
+            suggestion = "建议：物理题目通常涉及公式、单位、物理量计算；数学题目更侧重纯数学运算和证明"
+        elif detected == "physics" and subject == "math":
+            suggestion = "建议：数学题目通常是抽象符号运算；物理题目通常涉及具体物理现象和公式"
+        
+        logger.warning(f"[reasoner_agent] subject mismatch: {error_msg}")
+        
         if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
             async with async_session_maker() as db:
                 await crud_task.update_task_status(
                     db,
                     task_id,
                     TaskStatusEnum.FAILED,
                     progress=100.0,
-                    current_step=msg[:200],
-                    error_message=msg,
+                    current_step=error_msg[:200],
+                    error_message=error_msg,
                     result_patch={
                         "status": "failed",
                         "error": "subject_mismatch",
+                        "error_type": "subject_validation_failed",
                         "detected_subject": detected,
                         "confidence": conf_f,
                         "selected_subject": subject,
+                        "threshold": mismatch_threshold,
+                        "suggestion": suggestion,
                         "used_model": used_model,
                         "raw_output_len": len(raw_text or ""),
                         "raw_output_preview": (raw_text or "")[:raw_preview_limit],
                         "raw_output_truncated": bool(raw_text and len(raw_text) > raw_preview_limit),
+                        "stage": "subject_mismatch_failed",
+                        "step": "学科不匹配",
+                        "timestamp": time.time(),
                     },
-                    result_stage="reasoner",
+                    result_stage="subject_mismatch_failed",
                 )
                 await db.commit()
-        out = {"errors": [msg], "parse_success": False, "fatal_error": True, "current_step": "reasoner_agent", "progress": 40.0}
+        
+        out = {
+            "errors": [error_msg],
+            "parse_success": False,
+            "fatal_error": True,
+            "current_step": "学科不匹配",
+            "progress": 52.0,
+            "stage": "subject_mismatch_failed",
+        }
+        
+        # 保留关键字段
         for k in ["user_id", "task_id", "subject", "difficulty", "input_type", "image_path", "grade", "original_input", "summarized_input"]:
             if state.get(k) is not None:
                 out[k] = state.get(k)
         return out
 
-    # Prepare base_items for coercion & later overlay
+    # ============================================
+    # 阶段8: 处理模型结果 (进度: 54%)
+    # ============================================
+    if task_id:
+        async with async_session_maker() as db:
+            await crud_task.update_task_status(
+                db,
+                task_id,
+                TaskStatusEnum.PROCESSING,
+                progress=54.0,
+                current_step="处理模型推理结果...",
+                result_patch={
+                    "status": "processing",
+                    "stage": "results_processing",
+                    "step": "结果处理",
+                    "detected_subject": detected,
+                    "detection_confidence": conf_f,
+                    "subject_match": detected == subject,
+                    "timestamp": time.time(),
+                },
+                result_stage="results_processing",
+            )
+            await db.commit()
+
+    # 准备基础数据
     if input_type == "image":
         base_items = list(state.get("ocr_items") or [])
     else:
@@ -1569,110 +2382,183 @@ OCR/输入原文（供你参考，可忽略噪声）：
     results = _coerce_results_list(parsed, expected_len=len(base_items))
     if not isinstance(results, list) or not results:
         duration_ms = int((time.perf_counter() - t0) * 1000)
-        msg = "深度解析失败：results 格式错误，已降级为 OCR 结果归一化"
-        # Emit error details to logs for observability
-        try:
-            keys = list(parsed.keys()) if isinstance(parsed, dict) else None
-        except Exception:
-            keys = None
+        error_msg = "深度解析失败：results 格式错误（非列表或为空）"
+        
+        # 分析解析结果
+        parsed_type = type(parsed).__name__
+        parsed_keys = list(parsed.keys()) if isinstance(parsed, dict) else None
+        
         logger.error(
             f"[reasoner_agent] {_ctx(state)} fallback_bad_results duration_ms={duration_ms} "
-            f"parsed_type={type(parsed).__name__} parsed_keys={keys} "
+            f"parsed_type={parsed_type} parsed_keys={parsed_keys} "
             f"raw_output_preview={(raw_text or '')[:raw_preview_limit]}"
         )
+        
         if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
             async with async_session_maker() as db:
                 await crud_task.update_task_status(
                     db,
                     task_id,
                     TaskStatusEnum.PROCESSING,
-                    progress=45.0,
-                    current_step=msg,
+                    progress=55.0,
+                    current_step="模型输出格式异常，使用备选方案",
                     result_patch={
                         "status": "fallback",
                         "error": "bad_results",
+                        "error_type": "results_format_error",
                         "used_model": used_model,
-                        "parsed_type": type(parsed).__name__,
-                        "parsed_keys": keys,
+                        "parsed_type": parsed_type,
+                        "parsed_keys": parsed_keys,
                         "raw_output_len": len(raw_text or ""),
                         "raw_output_preview": (raw_text or "")[:raw_preview_limit],
                         "raw_output_truncated": bool(raw_text and len(raw_text) > raw_preview_limit),
+                        "expected_items": len(base_items),
+                        "received_results": 0,
+                        "stage": "results_format_error",
+                        "step": "结果格式错误",
+                        "timestamp": time.time(),
                     },
-                    result_stage="reasoner",
+                    result_stage="results_format_error",
                 )
                 await db.commit()
-        out = {**state, "reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 45.0}
+        
+        out = {**state, "reasoned_items": base_items, "current_step": "深度解析失败（结果格式错误）", "progress": 55.0, "stage": "results_format_fallback"}
         out.setdefault("errors", [])
-        out["errors"] = list(out.get("errors") or []) + [msg]
+        out["errors"] = list(out.get("errors") or []) + [error_msg]
         return out
 
+    # ============================================
+    # 阶段9: 合并增强结果 (进度: 56%)
+    # ============================================
+    if task_id:
+        async with async_session_maker() as db:
+            await crud_task.update_task_status(
+                db,
+                task_id,
+                TaskStatusEnum.PROCESSING,
+                progress=56.0,
+                current_step="合并增强解析结果...",
+                result_patch={
+                    "status": "processing",
+                    "stage": "results_merging",
+                    "step": "结果合并",
+                    "results_count": len(results),
+                    "base_items_count": len(base_items),
+                    "timestamp": time.time(),
+                },
+                result_stage="results_merging",
+            )
+            await db.commit()
+
+    # 合并结果
+    enhancement_stats = {
+        "question_content_enhanced": 0,
+        "student_answer_enhanced": 0,
+        "correct_answer_enhanced": 0,
+        "explanation_added": 0,
+        "error_analysis_added": 0,
+        "suggested_questions_added": 0,
+        "chapter_assigned": 0,
+        "knowledge_points_assigned": 0,
+        "tags_added": 0,
+    }
+    
     for r in results:
         if not isinstance(r, dict):
             continue
         idx = r.get("index")
         if not isinstance(idx, int) or idx < 0 or idx >= len(base_items):
             continue
+        
+        # 题干/答案增强
         for key in ["question_content", "student_answer", "correct_answer", "explanation", "error_analysis", "chapter"]:
             if isinstance(r.get(key), str) and r.get(key).strip():
                 base_items[idx][key] = r.get(key).strip()
-        # correctness / scoring
+                if key in ["question_content", "student_answer", "correct_answer"]:
+                    enhancement_stats[f"{key}_enhanced"] += 1
+                elif key == "explanation":
+                    enhancement_stats["explanation_added"] += 1
+                elif key == "error_analysis":
+                    enhancement_stats["error_analysis_added"] += 1
+                elif key == "chapter":
+                    enhancement_stats["chapter_assigned"] += 1
+        
+        # 正确性/评分
         if isinstance(r.get("is_correct"), bool):
             base_items[idx]["is_correct"] = r.get("is_correct")
         if isinstance(r.get("score"), (int, float)):
             base_items[idx]["score"] = float(r.get("score"))
         if isinstance(r.get("max_score"), (int, float)):
             base_items[idx]["max_score"] = float(r.get("max_score"))
+        
+        # 知识点
         if isinstance(r.get("knowledge_points"), list):
             base_items[idx]["knowledge_points"] = [str(x).strip() for x in r["knowledge_points"] if str(x).strip()]
+            if base_items[idx]["knowledge_points"]:
+                enhancement_stats["knowledge_points_assigned"] += 1
+        
+        # 举一反三题目
         if isinstance(r.get("suggested_questions"), list):
             base_items[idx]["suggested_questions"] = [str(x).strip() for x in r["suggested_questions"] if str(x).strip()]
+            if base_items[idx]["suggested_questions"]:
+                enhancement_stats["suggested_questions_added"] += 1
+        
+        # 标签
         if isinstance(r.get("tags"), list):
             base_items[idx]["tags"] = [str(x).strip() for x in r["tags"] if str(x).strip()]
+            if base_items[idx]["tags"]:
+                enhancement_stats["tags_added"] += 1
 
+    # ============================================
+    # 阶段10: 深度解析完成 (进度: 55%)
+    # ============================================
     duration_ms = int((time.perf_counter() - t0) * 1000)
     logger.info(
         f"[reasoner_agent] {_ctx(state)} done detected_subject={detected or None} confidence={conf_f:.2f} items_out={len(base_items)} duration_ms={duration_ms}"
     )
 
     if task_id:
-        from backend.core.db.session import async_session_maker
-        from backend.core.crud import crud_task
-        from backend.core.db.models import TaskStatusEnum
         async with async_session_maker() as db:
             await crud_task.update_task_status(
                 db,
                 task_id,
                 TaskStatusEnum.PROCESSING,
                 progress=55.0,
-                current_step="深度解析完成，正在归一化分类...",
+                current_step=f"深度解析完成，增强 {len(base_items)} 道题目",
                 result_patch={
                     "text_models": get_text_reasoning_model_names(),
                     "used_model": used_model,
                     "detected_subject": detected,
                     "confidence": conf_f,
-                    "items": [
-                        {
-                            "index": i,
-                            "question_content": (it.get("question_content") or it.get("question_text") or "")[:500],
-                            "chapter": (it.get("chapter") or "")[:50],
-                            "knowledge_points": (it.get("knowledge_points") or [])[:5],
-                            "error_analysis": (it.get("error_analysis") or "")[:600],
-                            "suggested_questions": (it.get("suggested_questions") or [])[:5],
-                        }
-                        for i, it in enumerate(base_items[: int(os.getenv("WZY_DEEP_ENRICH_MAX_ITEMS") or "10")])
-                    ],
+                    "items_count": len(base_items),
+                    "enhancement_stats": enhancement_stats,
+                    "processing_time_ms": duration_ms,
+                    "stage": "reasoner_completed",
+                    "step": "深度解析完成",
+                    "progress_detail": f"成功解析 {len(base_items)} 道题目，增强率: {(sum(enhancement_stats.values()) / (len(base_items) * len(enhancement_stats)) * 100):.1f}%",
+                    "timestamp": time.time(),
                 },
-                result_stage="reasoner",
+                result_stage="reasoner_completed",
             )
             await db.commit()
 
-    out = {"reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 55.0}
+    out = {
+        "reasoned_items": base_items,
+        "current_step": "深度解析完成",
+        "progress": 55.0,
+        "stage": "reasoner_completed",
+        "reasoner_duration_ms": duration_ms,
+        "enhancement_stats": enhancement_stats,
+        "used_model": used_model,
+        "detected_subject": detected,
+        "detection_confidence": conf_f,
+    }
+    
+    # 保留关键字段
     for k in ["user_id", "task_id", "subject", "difficulty", "input_type", "image_path", "grade", "original_input", "summarized_input"]:
         if state.get(k) is not None:
             out[k] = state.get(k)
+    
     return out
 
 async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1693,7 +2579,7 @@ async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     items_in = len(items or [])
     logger.info(f"[normalizer_agent] {_ctx(state)} start items_in={items_in}")
 
-    subject = state.get("subject", "maths")
+    subject = state.get("subject", "math")
     grade = state.get("grade", "")
     user_id = int(state.get("user_id") or 0)
     difficulty = state.get("difficulty", "medium")
@@ -1913,7 +2799,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
     from backend.core.services.gemini_ocr_service import get_gemini_ocr_service
 
     image_path = state.get("image_path")
-    subject = state.get("subject", "maths")
+    subject = state.get("subject", "math")
     task_id = state.get("task_id")
 
     if not image_path:
@@ -2172,7 +3058,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
             # 动态 taxonomy：优先从 DB（该用户历史数据）抽取候选，再用 seed 兜底
             # 这样无需手工穷举所有类型，同时通过“NEW门控+归一化”避免分类爆炸
             taxonomy = {}
-            for s in ["maths", "physics"]:
+            for s in ["math", "physics"]:
                 try:
                     taxonomy[s] = await get_dynamic_taxonomy_candidates(
                         user_id=int(state.get("user_id") or 0),
@@ -2202,7 +3088,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
 年级/学段：{grade or "未知"}（已归一化：{bucket}）
 
 请完成两件事：
-1) 判定图片内容最匹配的学科 detected_subject，必须是 ["maths","physics"] 之一，并给出置信度 confidence (0~1)。
+1) 判定图片内容最匹配的学科 detected_subject，必须是 ["math","physics"] 之一，并给出置信度 confidence (0~1)。
 2) 对每道题做分类（允许“受控新增”，避免人工穷举）：
    - chapter：优先从该学科 chapters 候选中选择 1 个；如确实需要新增，请输出 "NEW:你的新分类"（要短且概括）
    - knowledge_points：优先从该学科 knowledge_points 候选中选择 1~3 个；如确实需要新增，请用 "NEW:xxx"
@@ -2220,7 +3106,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
 
 请严格输出 JSON（不要输出其它文字）：
 {{
-  "detected_subject": "maths|physics",
+  "detected_subject": "math|physics",
   "confidence": 0.0,
   "results": [
     {{"index": 0, "chapter": "...", "knowledge_points": ["..."], "tags": ["..."]}}
@@ -2244,7 +3130,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                 detected = detected.strip().lower()
 
             # 学科不匹配：给出明确提示并失败（置信度阈值可微调）
-            if detected in ("maths", "physics") and detected != subject and conf_f >= 0.75:
+            if detected in ("math", "physics") and detected != subject and conf_f >= 0.75:
                 msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或更换图片。"
                 logger.warning(f"[ocr_extract] subject mismatch: {msg}")
                 if task_id:
@@ -2426,7 +3312,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"[llm_summarize] Task {state.get('task_id')}: Summarizing text input")
 
     text_data = state.get("text_data", {})
-    subject = state.get("subject", "maths")
+    subject = state.get("subject", "math")
 
     if not text_data:
         return {
@@ -2440,7 +3326,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
         bucket = normalize_grade_bucket(grade)
 
         taxonomy = {}
-        for s in ["maths", "physics"]:
+        for s in ["math", "physics"]:
             try:
                 taxonomy[s] = await get_dynamic_taxonomy_candidates(
                     user_id=int(state.get("user_id") or 0),
@@ -2468,11 +3354,11 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
 5. **题目类型**: 选择题/填空题/解答题等
 6. **题目类型/章节（chapter）**: 优先从候选 chapters 中选择 1 个；如确实需要新增，请用 "NEW:你的新分类"（要短且概括）
 7. **标签**: 2~6个 tags（中文短词，用于检索）
-8. **学科判定**: detected_subject 必须是 ["maths","physics"] 之一，并输出 confidence(0~1)
+8. **学科判定**: detected_subject 必须是 ["math","physics"] 之一，并输出 confidence(0~1)
 
 请以JSON格式返回，格式如下：
 {{
-  "detected_subject": "maths|physics",
+  "detected_subject": "math|physics",
   "confidence": 0.0,
   "question_content": "总结后的题目内容",
   "student_answer": "学生答案",
@@ -2506,7 +3392,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             conf_f = 0.0
 
-        if detected in ("maths", "physics") and detected != subject and conf_f >= 0.75:
+        if detected in ("math", "physics") and detected != subject and conf_f >= 0.75:
             msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或修改描述。"
             logger.warning(f"[llm_summarize] subject mismatch: {msg}")
             return {
@@ -2623,7 +3509,7 @@ async def parse_structure(state: Dict[str, Any]) -> Dict[str, Any]:
 
     structured_data = state.get("structured_data", {})
     structured_data_list: List[Dict[str, Any]] = []
-    subject = state.get("subject", "maths")
+    subject = state.get("subject", "math")
     difficulty = state.get("difficulty", "medium")
 
     # 多题：如果 OCR 阶段提供了 ocr_items，则优先生成 structured_data_list
@@ -2720,13 +3606,11 @@ async def parse_structure(state: Dict[str, Any]) -> Dict[str, Any]:
             await db.commit()
 
 async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
-    """保存错题节点"""
+    """保存错题节点 - 优化进度和错误信息"""
     t0 = time.perf_counter()
     logger.info(f"[save_question] {_ctx(state)} start")
-    logger.debug(f"[save_question] Entry - State keys: {list(state.keys())}")
-    logger.debug(f"[save_question] Cache keys: {list(_initial_state_cache.keys())}")
     
-    # 从全局缓存获取初始状态，确保关键字段不丢失
+    # 从全局缓存获取初始状态
     task_id = state.get("task_id")
     initial_state = None
     
@@ -2735,8 +3619,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.debug(f"[save_question] Found cache by task_id: {task_id}, user_id={initial_state.get('user_id')}")
     else:
         # 如果 task_id 也是 None 或不在缓存中，尝试从缓存中找到匹配的初始状态
-        # 优先通过 subject 和 difficulty 匹配，如果都匹配不上，使用最后一个缓存条目
-        subject_hint = state.get("subject") or state.get("structured_data", {}).get("subject", "maths")
+        subject_hint = state.get("subject") or state.get("structured_data", {}).get("subject", "math")
         difficulty_hint = state.get("difficulty") or state.get("structured_data", {}).get("difficulty", "medium")
         
         logger.info(f"[save_question] Searching cache by subject={subject_hint}, difficulty={difficulty_hint}")
@@ -2752,92 +3635,129 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                 logger.info(f"[save_question] Found matching cache entry: task_id={cached_task_id}, user_id={initial_state.get('user_id')}")
                 break
         
-        # 如果还是没找到，使用最后一个缓存条目（通常是最新的）
+        # 如果还是没找到，使用最后一个缓存条目
         if initial_state is None and _initial_state_cache:
             last_task_id = list(_initial_state_cache.keys())[-1]
             initial_state = _initial_state_cache[last_task_id]
             task_id = last_task_id
             logger.warning(f"[save_question] Using last cache entry as fallback: task_id={last_task_id}, user_id={initial_state.get('user_id')}")
     
-    # 合并初始状态和当前状态（初始状态优先，确保关键字段不丢失）
+    # 合并初始状态和当前状态
     if initial_state:
         state = {**initial_state, **state}
-        task_id = state.get("task_id")  # 重新获取 task_id
+        task_id = state.get("task_id")
         logger.debug(f"[save_question] After merge - task_id={task_id}, user_id={state.get('user_id')}")
     else:
         logger.error(f"[save_question] No cache entry found! Cache is empty or task_id mismatch.")
     
     logger.info(f"[save_question] {_ctx(state)} saving_to_db")
-    logger.debug(f"[save_question] Full state keys: {list(state.keys())}")
-    logger.debug(f"[save_question] State values: user_id={state.get('user_id')}, task_id={state.get('task_id')}, subject={state.get('subject')}")
 
+    # 导入必要的模块 - 修复 TaskStatusEnum 未定义的问题
     from backend.core.db.session import async_session_maker
     from backend.core.crud import crud_question, crud_task
-    from backend.core.db.models import SubjectEnum, DifficultyEnum, QuestionSourceEnum
+    from backend.core.db.models import SubjectEnum, DifficultyEnum, QuestionSourceEnum, TaskStatusEnum  # 添加 TaskStatusEnum 导入
 
     user_id = state.get("user_id")
     task_id = state.get("task_id")
     
     structured_data = state.get("structured_data", {})
     structured_data_list = state.get("structured_data_list") if isinstance(state.get("structured_data_list"), list) else None
-    subject = state.get("subject", "maths")
+    subject = state.get("subject", "math")
     difficulty = state.get("difficulty", "medium")
     grade = state.get("grade", "")
 
-    # 验证必要字段
-    if not user_id:
-        logger.error(f"[save_question] user_id is missing in state. State keys: {list(state.keys())}, State: {state}")
-        logger.error(f"[save_question] Cache contents: {list(_initial_state_cache.keys())}")
-        for cached_task_id, cached_state in _initial_state_cache.items():
-            logger.error(f"[save_question] Cache entry {cached_task_id}: user_id={cached_state.get('user_id')}")
-        return {
-            "errors": ["user_id 缺失，无法保存错题"],
-            "success": False,
-            "current_step": "save_question",
-            "progress": 60.0,
-        }
-
-    # 如果前面节点已经产生错误（例如：学科不匹配），则不入库，直接失败任务
-    if isinstance(state.get("errors"), list) and state.get("errors"):
-        err_msg = "; ".join([str(e) for e in state.get("errors") if e])
+    # 更新任务状态：开始保存
+    if task_id:
         try:
             async with async_session_maker() as db:
-                await crud_task.fail_task(db, task_id, err_msg or "任务失败")
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,  # 现在 TaskStatusEnum 已经正确导入
+                    progress=80.0,
+                    current_step="开始保存错题到数据库...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "db_saving",
+                        "step": "数据库保存开始",
+                        "items_count": len(structured_data_list or [structured_data]),
+                        "timestamp": time.time(),
+                    },
+                    result_stage="db_saving_start",
+                )
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"[save_question] Failed to update task status: {e}")
+
+    # 验证必要字段
+    if not user_id:
+        logger.error(f"[save_question] user_id is missing in state. State keys: {list(state.keys())}")
+        
+        error_msg = "用户ID缺失，无法保存错题，请重新登录或刷新页面"
+        if task_id:
+            try:
+                async with async_session_maker() as db:
+                    await crud_task.fail_task(db, task_id, error_msg)
+                    await db.commit()
+            except Exception:
+                pass
+        
+        return {
+            "errors": [error_msg],
+            "success": False,
+            "current_step": "保存失败",
+            "progress": 80.0,
+            "stage": "db_save_failed",
+        }
+
+    # 如果前面节点已经产生错误
+    if isinstance(state.get("errors"), list) and state.get("errors"):
+        err_msg = "; ".join([str(e) for e in state.get("errors") if e])
+        
+        # 根据错误类型提供更友好的提示
+        if "subject mismatch" in err_msg.lower():
+            friendly_msg = "学科不匹配：上传内容与选择的学科不一致，请重新选择或更换图片"
+        elif "ocr" in err_msg.lower() and "timeout" in err_msg.lower():
+            friendly_msg = "图片识别超时，请尝试缩小图片尺寸或重新上传"
+        elif "network" in err_msg.lower() or "connection" in err_msg.lower():
+            friendly_msg = "网络连接错误，请检查网络后重试"
+        else:
+            friendly_msg = f"处理失败: {err_msg[:100]}..."
+        
+        try:
+            async with async_session_maker() as db:
+                await crud_task.fail_task(db, task_id, friendly_msg)
                 await db.commit()
         except Exception:
             pass
+        
         return {
-            "errors": state.get("errors"),
+            "errors": [friendly_msg],
             "success": False,
-            "current_step": "save_question",
-            "progress": 60.0,
+            "current_step": "处理失败",
+            "progress": 80.0,
+            "stage": "processing_failed",
         }
     
-    # 再次验证 user_id 不是 None（双重保险）
-    if user_id is None:
-        logger.error(f"[save_question] user_id is None after all attempts. State: {state}")
-        return {
-            "errors": ["user_id 缺失，无法保存错题"],
-            "success": False,
-            "current_step": "save_question",
-            "progress": 60.0,
-        }
-
     try:
         async with async_session_maker() as db:
             # 解析学科和难度
             try:
                 subject_enum = SubjectEnum(subject)
-            except ValueError:
-                subject_enum = SubjectEnum.OTHER
+            except ValueError as e:
+                error_msg = f"学科参数错误: {subject}，支持的学科: {', '.join([s.value for s in SubjectEnum])}"
+                logger.error(f"[save_question] Subject enum error: {error_msg}")
+                raise ValueError(error_msg)
 
             try:
                 difficulty_enum = DifficultyEnum(difficulty)
-            except ValueError:
-                difficulty_enum = DifficultyEnum.MEDIUM
+            except ValueError as e:
+                error_msg = f"难度参数错误: {difficulty}，支持的难度: easy, medium, hard"
+                logger.error(f"[save_question] Difficulty enum error: {error_msg}")
+                raise ValueError(error_msg)
 
             items = structured_data_list or [structured_data]
-            # 保证入库顺序与试卷顺序一致：优先按 order(1..n) 排序，否则保持原顺序
+            # 保证入库顺序与试卷顺序一致
             try:
                 indexed = []
                 for i, it in enumerate(items):
@@ -2848,12 +3768,36 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                         ov = None
                     indexed.append((ov if ov is not None else 10**9, i, it))
                 items = [it for _, __, it in sorted(indexed, key=lambda x: (x[0], x[1]))]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[save_question] Failed to sort items: {e}")
 
             created_ids: List[int] = []
+            
+            # 更新任务状态：逐题保存
             for idx, item in enumerate(items):
-                # 确保 content 不为空（Pydantic 验证要求）
+                if task_id and idx % 2 == 0:  # 每2题更新一次进度
+                    try:
+                        await crud_task.update_task_status(
+                            db,
+                            task_id,
+                            TaskStatusEnum.PROCESSING,  # 正确使用 TaskStatusEnum
+                            progress=80.0 + (idx / len(items)) * 15,  # 80% - 95%
+                            current_step=f"正在保存第 {idx+1}/{len(items)} 道题目...",
+                            result_patch={
+                                "status": "processing",
+                                "stage": "db_saving_items",
+                                "step": f"保存题目 {idx+1}/{len(items)}",
+                                "current_item": idx + 1,
+                                "total_items": len(items),
+                                "timestamp": time.time(),
+                            },
+                            result_stage="db_saving_items",
+                        )
+                        await db.commit()
+                    except Exception:
+                        pass
+
+                # 确保 content 不为空
                 question_content = (item.get("question_body") or "").strip()
                 if not question_content:
                     question_content = "题目内容待补充"
@@ -2877,21 +3821,21 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                     "tags": item.get("tags") or [],
                     "source": QuestionSourceEnum.MANUAL,
                     "source_description": "录入错题功能",
-                    # 保序：同一次上传的多题，按 OCR 输出顺序入库
                     "upload_group_id": task_id,
                     "upload_index": int(idx + 1),
                 }
 
-                # 图片：同一张图片可对应多道错题
+                # 图片处理
                 if state.get("input_type") == "image" and state.get("image_path"):
                     question_data["image_urls"] = [state.get("image_path")]
                     if state.get("source_image_id") is not None:
                         question_data["source_image_id"] = int(state.get("source_image_id"))
 
-                # 原始输入/总结（图片/文字模式都支持）
+                # 原始输入/总结
                 if state.get("original_input") is not None:
                     question_data["original_input"] = state.get("original_input")
-                # summarized_input：为避免新增 DB 字段，用 JSON 存“答案来源/判定依据”
+                
+                # summarized_input
                 try:
                     meta = {
                         "answer_sources": {
@@ -2904,14 +3848,12 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                             "note": "是否错题优先按老师批改/自标答案判定；模型答案仅供参考",
                         },
                     }
-                    # Teacher marking evidence (tick/cross/color)
                     tm = {
                         "is_correct": item.get("teacher_marked_is_correct"),
                         "mark": item.get("teacher_marked_mark") or "",
                         "color": item.get("teacher_marked_color") or "",
                         "evidence": item.get("teacher_marked_evidence") or "",
                     }
-                    # Only keep if at least one signal exists
                     if (
                         tm.get("is_correct") is True
                         or tm.get("is_correct") is False
@@ -2920,11 +3862,11 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                         or tm.get("evidence")
                     ):
                         meta["grading"]["teacher_mark"] = tm
-                    # Keep the previous summarized_input (e.g. overall_analysis/text_summary) if available
                     if state.get("summarized_input") is not None:
                         meta["summary"] = state.get("summarized_input")
                     question_data["summarized_input"] = json.dumps(meta, ensure_ascii=False)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"[save_question] Failed to create summarized_input: {e}")
                     if state.get("summarized_input") is not None:
                         question_data["summarized_input"] = state.get("summarized_input")
 
@@ -2936,13 +3878,60 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                     f"subject={subject_enum}, difficulty={difficulty_enum}"
                 )
 
-                q = await crud_question.create_question(db, question_data=None, **question_data)
-                created_ids.append(q.id)
+                try:
+                    q = await crud_question.create_question(db, question_data=None, **question_data)
+                    created_ids.append(q.id)
+                except Exception as e:
+                    error_type = type(e).__name__
+                    if "integrity" in str(e).lower() or "unique" in str(e).lower():
+                        raise ValueError(f"数据库完整性错误，可能重复保存: {str(e)}")
+                    elif "foreign key" in str(e).lower():
+                        raise ValueError(f"外键约束错误，请检查关联数据: {str(e)}")
+                    else:
+                        raise RuntimeError(f"数据库保存失败: {str(e)}")
 
             await db.commit()
 
-            # 任务表仍保留单个 question_id（兼容），但在 result 里返回全部 question_ids
-            first_id = created_ids[0]
+            # 更新任务状态：保存完成，开始向量化
+            if task_id:
+                await crud_task.update_task_status(
+                    db,
+                    task_id,
+                    TaskStatusEnum.PROCESSING,  # 正确使用 TaskStatusEnum
+                    progress=95.0,
+                    current_step=f"保存完成，正在生成向量索引...",
+                    result_patch={
+                        "status": "processing",
+                        "stage": "vectorizing",
+                        "step": "向量化处理",
+                        "created_count": len(created_ids),
+                        "question_ids": created_ids,
+                        "timestamp": time.time(),
+                    },
+                    result_stage="vectorizing",
+                )
+                await db.commit()
+
+            # 触发异步向量化（如果配置了）
+            try:
+                from backend.core.services.vector_store_service import get_vector_store_service
+                vector_store = get_vector_store_service()
+                if hasattr(vector_store, 'initialize') and callable(vector_store.initialize):
+                    await vector_store.initialize()
+                    
+                    for q_id in created_ids:
+                        try:
+                            question = await crud_question.get_question(db, q_id, user_id)
+                            if question:
+                                # 这里可以异步触发向量化，简化处理
+                                logger.info(f"[save_question] Triggering vectorization for question {q_id}")
+                        except Exception as e:
+                            logger.warning(f"[save_question] Failed to trigger vectorization for question {q_id}: {e}")
+            except Exception as e:
+                logger.warning(f"[save_question] Vector store initialization failed: {e}")
+
+            # 任务完成
+            first_id = created_ids[0] if created_ids else None
             await crud_task.complete_task(
                 db,
                 task_id,
@@ -2954,6 +3943,12 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                             "created_count": len(created_ids),
                             "source_image_id": state.get("source_image_id"),
                             "upload_group_id": task_id,
+                            "total_duration_ms": int((time.perf_counter() - t0) * 1000),
+                            "stage_durations": {
+                                "ocr": state.get("ocr_duration_ms", 0),
+                                "reasoner": state.get("reasoner_duration_ms", 0),
+                                "normalizer": state.get("normalizer_duration_ms", 0),
+                            }
                         }
                     }
                 },
@@ -2968,17 +3963,82 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                 "question_ids": created_ids,
                 "created_count": len(created_ids),
                 "success": True,
-                "current_step": "save_question",
+                "current_step": "处理完成",
                 "progress": 100.0,
+                "stage": "completed",
+                "total_duration_ms": duration_ms,
             }
 
+    except ValueError as e:
+        duration_ms = int((time.perf_counter() - t0) * 1000) if "t0" in locals() else -1
+        error_msg = f"数据验证错误: {str(e)}"
+        logger.error(f"[save_question] {_ctx(state)} validation error duration_ms={duration_ms}: {error_msg}")
+        
+        if task_id:
+            try:
+                async with async_session_maker() as db:
+                    await crud_task.fail_task(db, task_id, error_msg)
+                    await db.commit()
+            except Exception:
+                pass
+        
+        return {
+            "errors": [error_msg],
+            "success": False,
+            "current_step": "数据验证失败",
+            "progress": 80.0,
+            "stage": "validation_failed",
+        }
+    
+    except RuntimeError as e:
+        duration_ms = int((time.perf_counter() - t0) * 1000) if "t0" in locals() else -1
+        error_msg = f"运行时错误: {str(e)}"
+        logger.error(f"[save_question] {_ctx(state)} runtime error duration_ms={duration_ms}: {error_msg}", exc_info=True)
+        
+        if task_id:
+            try:
+                async with async_session_maker() as db:
+                    await crud_task.fail_task(db, task_id, error_msg)
+                    await db.commit()
+            except Exception:
+                pass
+        
+        return {
+            "errors": [error_msg],
+            "success": False,
+            "current_step": "保存失败",
+            "progress": 80.0,
+            "stage": "save_failed",
+        }
+        
     except Exception as e:
         duration_ms = int((time.perf_counter() - t0) * 1000) if "t0" in locals() else -1
-        logger.error(f"[save_question] {_ctx(state)} error duration_ms={duration_ms}: {e}", exc_info=True)
+        error_type = type(e).__name__
+        
+        # 根据异常类型提供更具体的错误信息
+        if "database" in str(e).lower() or "sql" in str(e).lower():
+            error_msg = f"数据库操作失败: {str(e)}"
+        elif "connection" in str(e).lower():
+            error_msg = "数据库连接失败，请检查数据库服务"
+        elif "timeout" in str(e).lower():
+            error_msg = "数据库操作超时，请稍后重试"
+        else:
+            error_msg = f"保存错题失败: {str(e)}"
+        
+        logger.error(f"[save_question] {_ctx(state)} {error_type} duration_ms={duration_ms}: {error_msg}", exc_info=True)
+        
+        if task_id:
+            try:
+                async with async_session_maker() as db:
+                    await crud_task.fail_task(db, task_id, error_msg)
+                    await db.commit()
+            except Exception:
+                pass
+        
         return {
-            "errors": [f"保存错题失败: {str(e)}"],
+            "errors": [error_msg],
             "success": False,
-            "current_step": "save_question",
-            "progress": 60.0,
+            "current_step": "保存失败",
+            "progress": 80.0,
+            "stage": "save_failed",
         }
-

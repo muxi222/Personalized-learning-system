@@ -1,5 +1,5 @@
 """
-RPJ Module - Celery Application
+WZM Module - Celery Application
 处理异步任务(Agent处理等)
 """
 

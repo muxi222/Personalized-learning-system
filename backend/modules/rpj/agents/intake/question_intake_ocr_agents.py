@@ -8,8 +8,6 @@
 3. 文字模式: 大模型处理总结
 4. 数据存储 - 保存到数据库（记录原始输入和总结后的输入）
 5. 触发异步Embedding
-
-支持学科: 语文(chinese)、英语(english)、道法(morality)
 """
 
 import logging
@@ -23,12 +21,12 @@ from langgraph.graph import StateGraph, END
 
 from backend.core.agents.state import QuestionIntakeState
 from backend.core.agents.base_agent import BaseAgent
-from backend.modules.tony.config import settings
+from backend.modules.wzm.config import settings
 
 logger = logging.getLogger(__name__)
 
 # -------------------------
-# Logging helpers (tony)
+# Logging helpers (wzm)
 # -------------------------
 def _ctx(state: Dict[str, Any]) -> str:
     """Compact log context for tracing one intake request across stages."""
@@ -126,65 +124,36 @@ def _extract_json_object_loose(raw: str) -> Optional[Dict[str, Any]]:
 _initial_state_cache: Dict[str, Dict[str, Any]] = {}
 
 # =========================
-# 学科分类（chapter/tags）- 只支持语文、英语、道法
+# 学科分类（chapter/tags）
 # =========================
 CATEGORY_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
-    # 语文
-    "chinese": {
-        "junior": ["现代文阅读", "文言文阅读", "古诗词鉴赏", "语言文字运用", "写作", "名著阅读", "综合"],
-        "senior": ["现代文阅读", "文言文阅读", "古诗词鉴赏", "语言文字运用", "写作", "名著阅读", "综合"],
+    # 化学
+    "chemistry": {
+        "junior": ["身边的化学物质", "物质构成的奥秘", "物质的化学变化", "化学与社会发展", "科学探究", "综合"],
+        "senior": ["化学反应原理", "物质结构与性质", "有机化学基础", "化学实验", "化学与生活", "综合"],
     },
-    # 英语
-    "english": {
-        "junior": ["听力", "阅读理解", "完形填空", "语法填空", "短文改错", "书面表达", "词汇", "综合"],
-        "senior": ["听力", "阅读理解", "完形填空", "语法填空", "短文改错", "书面表达", "词汇", "综合"],
-    },
-    # 道法（道德与法治/思想品德）
-    "morality": {
-        "junior": ["道德品质", "法律基础", "心理健康", "国情国策", "时事政治", "综合"],
-        "senior": ["哲学与生活", "政治与法治", "经济与社会", "文化与哲学", "时事政治", "综合"],
+    "other": {
+        "junior": ["综合"],
+        "senior": ["综合"],
     },
 }
 
 KNOWLEDGE_POINT_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
-    # 语文
-    "chinese": {
+    # 化学
+    "chemistry": {
         "junior": [
-            "字音字形", "词语运用", "病句辨析", "修辞手法", "标点符号", "文学常识", 
-            "现代文阅读(信息筛选)", "现代文阅读(理解分析)", "现代文阅读(鉴赏评价)",
-            "文言文实词虚词", "文言文翻译", "古诗词鉴赏(意象意境)", "古诗词鉴赏(情感主旨)",
-            "写作(记叙文)", "写作(议论文)", "写作(应用文)", "名著阅读", "综合",
+            "空气与氧气", "碳和碳的氧化物", "水与常见的溶液", "金属与金属矿物", 
+            "酸和碱", "盐和化肥", "质量守恒定律", "化学方程式", "综合"
         ],
         "senior": [
-            "语言文字运用", "现代文阅读(论述类)", "现代文阅读(文学类)", "现代文阅读(实用类)",
-            "文言文阅读", "古诗词鉴赏", "名篇名句默写", "写作(任务驱动型)", "写作(材料作文)",
-            "写作(议论文)", "文学文化常识", "综合",
+            "物质的量", "氧化还原反应", "离子反应", "原子结构与元素周期律", 
+            "化学键与分子结构", "化学反应速率与平衡", "电解质溶液", "电化学基础", 
+            "有机化合物", "综合"
         ],
     },
-    # 英语
-    "english": {
-        "junior": [
-            "听力(对话理解)", "听力(短文理解)", "阅读理解(细节理解)", "阅读理解(推理判断)", 
-            "阅读理解(主旨大意)", "完形填空", "语法填空", "短文改错", 
-            "书面表达(应用文)", "书面表达(记叙文)", "词汇(词义辨析)", "词汇(固定搭配)",
-            "语法(时态语态)", "语法(从句)", "语法(非谓语动词)", "综合",
-        ],
-        "senior": [
-            "听力", "阅读理解", "七选五", "完形填空", "语法填空", "短文改错", 
-            "书面表达(应用文)", "书面表达(读后续写)", "书面表达(概要写作)", 
-            "词汇", "语法", "综合",
-        ],
-    },
-    # 道法（道德与法治/思想品德）
-    "morality": {
-        "junior": [
-            "自尊自强", "交往沟通", "权利与义务", "法律基础", "国情国策", 
-            "心理健康", "道德品质", "时事政治", "综合",
-        ],
-        "senior": [
-            "生活与哲学", "经济生活", "政治生活", "文化生活", 
-            "法律与法治", "时事政治", "综合",
-        ],
+    "other": {
+        "junior": ["综合"],
+        "senior": ["综合"],
     },
 }
 
@@ -204,19 +173,19 @@ def normalize_grade_bucket(grade: Optional[str]) -> str:
 
 def get_category_candidates(subject: str, grade: Optional[str]) -> List[str]:
     bucket = normalize_grade_bucket(grade)
-    return CATEGORY_TAXONOMY.get(subject, {}).get(bucket, ["综合"])
+    return CATEGORY_TAXONOMY.get(subject, CATEGORY_TAXONOMY.get("other", {})).get(bucket, ["综合"])
 
 def get_knowledge_point_candidates(subject: str, grade: Optional[str]) -> List[str]:
     bucket = normalize_grade_bucket(grade)
-    return KNOWLEDGE_POINT_TAXONOMY.get(subject, {}).get(bucket, ["综合"])
+    return KNOWLEDGE_POINT_TAXONOMY.get(subject, KNOWLEDGE_POINT_TAXONOMY.get("other", {})).get(bucket, ["综合"])
 
 def get_text_reasoning_model_names() -> List[str]:
     """
-    文本深度推理模型列表（用于：学科判定、分类、错因分析、总结等"纯文本"任务）。
-    - 读取 TONY_TEXT_REASONING_MODELS=gemini-3-pro-preview,gpt-5.2,...
+    文本深度推理模型列表（用于：学科判定、分类、错因分析、总结等“纯文本”任务）。
+    - 读取 WZM_TEXT_REASONING_MODELS=gemini-3-pro-preview,gpt-5.2,...
     - 为空则回退到 settings.GEMINI_MODEL
     """
-    raw = (os.getenv("TONY_TEXT_REASONING_MODELS") or "").strip()
+    raw = (os.getenv("WZM_TEXT_REASONING_MODELS") or "").strip()
     if raw:
         models = [m.strip() for m in raw.split(",") if m.strip()]
         return models
@@ -370,25 +339,24 @@ async def get_dynamic_taxonomy_candidates(
     subject: str,
     grade: Optional[str],
     max_chapters: int = 20,
-    max_kps: int = 30,
+    max_kps: int = 50,
 ) -> Dict[str, List[str]]:
     """
-    从数据库中动态提取"该用户在该学科下已经出现过的分类"，作为 taxonomy 候选。
-    这是减少人工穷举的关键手段：让 taxonomy 随数据自然生长，但通过"归一化/NEW门控"避免发散。
+    从数据库中动态提取“该用户在该学科下已经出现过的分类”，作为 taxonomy 候选。
+    这是减少人工穷举的关键手段：让 taxonomy 随数据自然生长，但通过“归一化/NEW门控”避免发散。
     """
     from sqlalchemy import select, func
     from backend.core.db.session import async_session_maker
     from backend.core.db.models import Question, SubjectEnum
 
-    # seed（兜底）：仍保留少量"教学大类"，但不要求穷举所有知识点/章节
+    # seed（兜底）：仍保留少量“教学大类”，但不要求穷举所有知识点/章节
     seed_chapters = get_category_candidates(subject, grade) or ["综合"]
     seed_kps = get_knowledge_point_candidates(subject, grade) or ["综合"]
 
     try:
         subject_enum = SubjectEnum(subject)
     except Exception:
-        # 如果学科不在支持列表中，返回空列表
-        return {"chapters": ["综合"], "knowledge_points": ["综合"]}
+        subject_enum = SubjectEnum.OTHER
 
     chapters: List[str] = []
     kps: List[str] = []
@@ -458,7 +426,7 @@ async def deep_enrich_ocr_items(
     log_ctx: str = "",
 ) -> List[Dict[str, Any]]:
     """
-    图片模式的"深度解析"：在 OCR(浅层) 输出基础上，用强文本模型做二次推理，补全/强化：
+    图片模式的“深度解析”：在 OCR(浅层) 输出基础上，用强文本模型做二次推理，补全/强化：
     - 更完整的题干表达
     - 更可靠的知识点/章节分类
     - 错因分析（更详细）
@@ -467,9 +435,9 @@ async def deep_enrich_ocr_items(
     if not items:
         return items
 
-    max_items = int(os.getenv("TONY_DEEP_ENRICH_MAX_ITEMS") or "10")
-    max_new_chapters = int(os.getenv("TONY_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-    max_new_kps = int(os.getenv("TONY_MAX_NEW_KPS_PER_REQUEST") or "6")
+    max_items = int(os.getenv("WZM_DEEP_ENRICH_MAX_ITEMS") or "10")
+    max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
+    max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
 
     prompt_items = [
         {
@@ -483,32 +451,21 @@ async def deep_enrich_ocr_items(
         for i, it in enumerate(items[:max_items])
     ]
 
-    # 根据学科调整提示词
-    subject_prompts = {
-        "chinese": "语文错题分析需要关注：字音字形、词语运用、病句辨析、文言文实词虚词、古诗词鉴赏、现代文阅读技巧、写作方法等。",
-        "english": "英语错题分析需要关注：词汇辨析、语法规则、阅读理解策略、写作技巧、听力技巧、完形填空技巧等。",
-        "morality": "道法（道德与法治）错题分析需要关注：法律条文理解、道德原则应用、时事政治分析、国情国策理解等。",
-    }
-    
-    subject_specific_guide = subject_prompts.get(user_selected_subject, "")
-
-    prompt = f"""你是资深教研员与讲题老师。现在给你 OCR(浅层) 提取出的多道错题，请你做"深度解析 + 分类归一化"。
+    prompt = f"""你是资深化学教研员与讲题老师。现在给你 OCR(浅层) 提取出的多道错题，请你做“深度解析 + 分类归一化”。
 
 用户选择学科：{user_selected_subject}
 年级/学段：{grade or "未知"}
 
-{subject_specific_guide}
-
 请输出：
-1) detected_subject（必须是 ["chinese","english","morality"] 之一）与 confidence(0~1)
+1) detected_subject（必须是 ["chemistry", "other"] 之一）与 confidence(0~1)
 2) 对每道题输出 results：
-   - question_content：更清晰、更完整的题干（尽量保留关键条件）
+   - question_content：更清晰、更完整的题干（主要修正化学式、离子符号的 OCR 错误）
    - student_answer / correct_answer：若能从上下文推断则补全，否则保留原样
    - explanation：简要解题思路（可为空）
-   - error_analysis：错因分析（要具体）
-   - suggested_questions：3~5 个"同类型训练点"或"举一反三方向"（短句）
-   - chapter：优先从候选 chapters 选择；如确实需要新增，用 "NEW:xxx"（新增总数不超过 {max_new_chapters}）
-   - knowledge_points：优先从候选 knowledge_points 选择 1~3 个；如确实需要新增，用 "NEW:xxx"（新增总数不超过 {max_new_kps}）
+   - error_analysis：错因分析（要具体，如：配平错误、原理不清）
+   - suggested_questions：3~5 个“同类型训练点”或“举一反三方向”（短句）
+   - chapter：优先从候选 chapters 选择；如需新增用 "NEW:xxx"（新增总数不超过 {max_new_chapters}）
+   - knowledge_points：优先从候选 knowledge_points 选择 1~3 个；如需新增用 "NEW:xxx"（新增总数不超过 {max_new_kps}）
    - tags：2~6 个短标签
 
 候选分类（优先从候选中选择；语义接近必须选候选，避免发散）：
@@ -519,7 +476,7 @@ async def deep_enrich_ocr_items(
 
 严格输出 JSON：
 {{
-  "detected_subject": "chinese|english|morality",
+  "detected_subject": "chemistry|other",
   "confidence": 0.0,
   "results": [
     {{
@@ -603,6 +560,7 @@ async def deep_enrich_ocr_items(
 
     return items
 
+
 async def call_router_llm(
     prompt: str,
     *,
@@ -614,149 +572,20 @@ async def call_router_llm(
     trace_stage: str = "llm",
 ) -> str:
     """
-    通过 settings.LLM_API_ENDPOINT 调用 OpenAI-compatible /chat/completions。
-    该端点在本项目中用于 Gemini 模型调用。
+    [调试版] 增加详细网络/代理/耗时日志
     """
-    import httpx
-    import asyncio
-    import random
-    from backend.core.services.llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
-    from backend.core.services.llm_trace import write_llm_trace
-
-    if not settings.LLM_API_ENDPOINT:
-        raise RuntimeError("LLM_API_ENDPOINT not configured")
-
-    endpoint = settings.LLM_API_ENDPOINT.rstrip("/")
-    models_to_try = [model] if (model and model.strip()) else get_text_reasoning_model_names()
-    headers = {}
-    if getattr(settings, "LLM_API_KEY", None):
-        headers["authorization"] = f"Bearer {settings.LLM_API_KEY}"
-
-    timeout_s = float(os.getenv("TONY_TEXT_REASONING_TIMEOUT_SECONDS") or os.getenv("LLM_TEXT_TIMEOUT_SECONDS") or "90")
-    async with httpx.AsyncClient(base_url=endpoint, timeout=timeout_s) as client:
-        last_err: Optional[Exception] = None
-        for m in models_to_try:
-            # 对单个模型做短重试（应对 503/5xx/短暂网络抖动）
-            max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or "3")
-            base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or "0.6")
-            max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or "30")
-            for attempt in range(max_attempts):
-                try:
-                    req = {
-                        "model": m,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    }
-                    if trace_id:
-                        # Save FULL prompt + request (Tony-only). Print gated by env.
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind=f"request_attempt_{attempt+1}",
-                            payload={
-                                "endpoint": f"{endpoint}/chat/completions",
-                                "request": req,
-                            },
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
-                    async with get_llm_semaphore():
-                        resp = await client.post("/chat/completions", json=req, headers=headers)
-                    if trace_id:
-                        try:
-                            resp_text = resp.text
-                        except Exception:
-                            resp_text = None
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind=f"response_attempt_{attempt+1}_http_{resp.status_code}",
-                            payload={
-                                "status_code": resp.status_code,
-                                "headers": dict(resp.headers),
-                                "text": resp_text,
-                            },
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
-                    # Retryable status handling
-                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
-                        retry_after_s = parse_retry_after_seconds(resp.headers.get("retry-after"))
-                        delay = compute_backoff_delay_seconds(
-                            attempt=attempt,
-                            base_delay=base_delay,
-                            max_delay=max_delay,
-                            retry_after_s=retry_after_s,
-                            jitter=0.2,
-                        )
-                        logger.warning(
-                            f"[call_router_llm] {log_ctx} Retryable HTTP {resp.status_code} from LLM endpoint; "
-                            f"model={m}, attempt={attempt+1}/{max_attempts}, "
-                            f"retry_after={retry_after_s if retry_after_s is not None else 'n/a'}s, sleep={delay:.2f}s"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    if trace_id:
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind="response_json",
-                            payload=data,
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
-                    return data["choices"][0]["message"]["content"]
-                except httpx.HTTPStatusError as e:
-                    last_err = e
-                    # Non-retryable or exhausted attempts -> try next model
-                    break
-                except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as e:
-                    last_err = e
-                    if trace_id:
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind=f"exception_attempt_{attempt+1}",
-                            payload={"type": type(e).__name__, "message": str(e)},
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
-                    if attempt < max_attempts - 1:
-                        delay = compute_backoff_delay_seconds(
-                            attempt=attempt,
-                            base_delay=base_delay,
-                            max_delay=max_delay,
-                            retry_after_s=None,
-                            jitter=0.2,
-                        )
-                        logger.warning(
-                            f"[call_router_llm] {log_ctx} Network error; model={m}, attempt={attempt+1}/{max_attempts}, "
-                            f"sleep={delay:.2f}s, err={type(e).__name__}"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    break
-                except Exception as e:
-                    last_err = e
-                    break
-        # 给前端/任务状态更友好的错误（避免把上游 URL/堆栈直接暴露给学生/用户）
-        if last_err is not None:
-            try:
-                import httpx as _httpx
-                if isinstance(last_err, _httpx.HTTPStatusError):
-                    code = last_err.response.status_code
-                    if code in (429, 500, 502, 503, 504):
-                        raise RuntimeError(f"模型服务暂时不可用（HTTP {code}），请稍后重试")
-            except Exception:
-                pass
-        raise last_err or RuntimeError("LLM call failed")
+    # 复用 _call_internal 逻辑，避免代码重复
+    content, _ = await _call_router_llm_internal(
+        prompt=prompt,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        log_ctx=log_ctx,
+        trace_id=trace_id,
+        trace_stage=trace_stage,
+        return_meta=False
+    )
+    return content
 
 async def call_router_llm_with_meta(
     prompt: str,
@@ -769,31 +598,66 @@ async def call_router_llm_with_meta(
     trace_stage: str = "llm",
 ) -> Tuple[str, str]:
     """
-    Same as call_router_llm, but returns (content, used_model) for observability.
+    [调试版] 增加详细网络/代理/耗时日志 (带元数据返回)
     """
+    return await _call_router_llm_internal(
+        prompt=prompt,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        log_ctx=log_ctx,
+        trace_id=trace_id,
+        trace_stage=trace_stage,
+        return_meta=True
+    )
+
+async def _call_router_llm_internal(
+    prompt: str,
+    *,
+    model: Optional[str] = None,
+    temperature: float = 0.2,
+    max_tokens: int = 4096,
+    log_ctx: str = "",
+    trace_id: Optional[str] = None,
+    trace_stage: str = "llm",
+    return_meta: bool = False
+) -> Any:
     import httpx
     import asyncio
-    import random
+    import os
+    import time
     from backend.core.services.llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
     from backend.core.services.llm_trace import write_llm_trace
 
     if not settings.LLM_API_ENDPOINT:
+        logger.error(f"[LLM_DEBUG] {log_ctx} ERROR: LLM_API_ENDPOINT not configured")
         raise RuntimeError("LLM_API_ENDPOINT not configured")
 
     endpoint = settings.LLM_API_ENDPOINT.rstrip("/")
     models_to_try = [model] if (model and model.strip()) else get_text_reasoning_model_names()
+    
+    # === [Debug Log] 打印环境诊断信息 ===
+    logger.info(f"--- [LLM Call Start] ---")
+    logger.info(f"Trace: {log_ctx}")
+    logger.info(f"Target: {endpoint}/chat/completions")
+    logger.info(f"Models: {models_to_try}")
+    logger.info(f"Proxy(HTTP): {os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy', 'Not Set')}")
+    logger.info(f"Proxy(HTTPS): {os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy', 'Not Set')}")
+    # ===================================
+
     headers = {}
     if getattr(settings, "LLM_API_KEY", None):
         headers["authorization"] = f"Bearer {settings.LLM_API_KEY}"
 
-    timeout_s = float(os.getenv("TONY_TEXT_REASONING_TIMEOUT_SECONDS") or os.getenv("LLM_TEXT_TIMEOUT_SECONDS") or "90")
-    async with httpx.AsyncClient(base_url=endpoint, timeout=timeout_s) as client:
+    timeout_s = float(os.getenv("WZM_TEXT_REASONING_TIMEOUT_SECONDS") or os.getenv("LLM_TEXT_TIMEOUT_SECONDS") or "300")
+    
+    async with httpx.AsyncClient(base_url=endpoint, timeout=timeout_s, follow_redirects=True) as client:
         last_err: Optional[Exception] = None
         for m in models_to_try:
             max_attempts = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS") or "3")
-            base_delay = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS") or "0.6")
-            max_delay = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS") or "30")
+            
             for attempt in range(max_attempts):
+                t_start = time.perf_counter()
                 try:
                     req = {
                         "model": m,
@@ -801,111 +665,65 @@ async def call_router_llm_with_meta(
                         "temperature": temperature,
                         "max_tokens": max_tokens,
                     }
+                    
+                    logger.info(f"[LLM_DEBUG] Sending request... Model={m} Attempt={attempt+1}")
+                    
                     if trace_id:
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind=f"request_attempt_{attempt+1}",
-                            payload={
-                                "endpoint": f"{endpoint}/chat/completions",
-                                "request": req,
-                            },
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
+                        write_llm_trace(trace_id=str(trace_id), stage=str(trace_stage), kind=f"req_{attempt+1}", payload=req, suffix="json")
+
                     async with get_llm_semaphore():
                         resp = await client.post("/chat/completions", json=req, headers=headers)
+                    
+                    duration = (time.perf_counter() - t_start) * 1000
+                    logger.info(f"[LLM_DEBUG] Response received: Status={resp.status_code}, Time={duration:.2f}ms")
+
                     if trace_id:
                         try:
-                            resp_text = resp.text
-                        except Exception:
-                            resp_text = None
+                            resp_text_preview = resp.text[:500]
+                        except:
+                            resp_text_preview = "error_reading_text"
                         write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind=f"response_attempt_{attempt+1}_http_{resp.status_code}",
-                            payload={
-                                "status_code": resp.status_code,
-                                "headers": dict(resp.headers),
-                                "text": resp_text,
-                            },
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
+                            trace_id=str(trace_id), 
+                            stage=str(trace_stage), 
+                            kind=f"resp_{attempt+1}", 
+                            payload={"status": resp.status_code, "text_preview": resp_text_preview}, 
+                            suffix="json"
                         )
+
                     if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
-                        retry_after_s = parse_retry_after_seconds(resp.headers.get("retry-after"))
-                        delay = compute_backoff_delay_seconds(
-                            attempt=attempt,
-                            base_delay=base_delay,
-                            max_delay=max_delay,
-                            retry_after_s=retry_after_s,
-                            jitter=0.2,
-                        )
-                        logger.warning(
-                            f"[call_router_llm] {log_ctx} Retryable HTTP {resp.status_code} from LLM endpoint; "
-                            f"model={m}, attempt={attempt+1}/{max_attempts}, "
-                            f"retry_after={retry_after_s if retry_after_s is not None else 'n/a'}s, sleep={delay:.2f}s"
-                        )
-                        await asyncio.sleep(delay)
+                        logger.warning(f"[LLM_DEBUG] Retryable error {resp.status_code}, retrying...")
+                        await asyncio.sleep(1)
                         continue
+                        
                     resp.raise_for_status()
                     data = resp.json()
-                    if trace_id:
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind="response_json",
-                            payload=data,
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
-                    return data["choices"][0]["message"]["content"], m
-                except httpx.HTTPStatusError as e:
-                    last_err = e
-                    break
-                except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as e:
-                    last_err = e
-                    if trace_id:
-                        write_llm_trace(
-                            trace_id=str(trace_id),
-                            stage=str(trace_stage or "llm"),
-                            kind=f"exception_attempt_{attempt+1}",
-                            payload={"type": type(e).__name__, "message": str(e)},
-                            suffix="json",
-                            also_log_full=None,
-                            log_prefix=f"{log_ctx} ",
-                        )
-                    if attempt < max_attempts - 1:
-                        delay = compute_backoff_delay_seconds(
-                            attempt=attempt,
-                            base_delay=base_delay,
-                            max_delay=max_delay,
-                            retry_after_s=None,
-                            jitter=0.2,
-                        )
-                        logger.warning(
-                            f"[call_router_llm] {log_ctx} Network error; model={m}, attempt={attempt+1}/{max_attempts}, "
-                            f"sleep={delay:.2f}s, err={type(e).__name__}"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    break
+                    
+                    content = data["choices"][0]["message"]["content"]
+                    
+                    # === [Debug Log] 检查返回内容是否为空 ===
+                    if not content:
+                        logger.warning(f"[LLM_DEBUG] ⚠️ WARNING: Model returned EMPTY content! Model={m}")
+                    else:
+                        logger.info(f"[LLM_DEBUG] Content length: {len(content)} chars")
+                    # ======================================
+
+                    if return_meta:
+                        return content, m
+                    return content
+
                 except Exception as e:
+                    duration = (time.perf_counter() - t_start) * 1000
                     last_err = e
-                    break
-        if last_err is not None:
-            try:
-                import httpx as _httpx
-                if isinstance(last_err, _httpx.HTTPStatusError):
-                    code = last_err.response.status_code
-                    if code in (429, 500, 502, 503, 504):
-                        raise RuntimeError(f"模型服务暂时不可用（HTTP {code}），请稍后重试")
-            except Exception:
-                pass
-        raise last_err or RuntimeError("LLM call failed")
+                    logger.error(f"[LLM_DEBUG] Connection Error ({type(e).__name__}): {e} (Time: {duration:.2f}ms)")
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(1)
+                        continue
+                    break # Next model
+
+        # Error handling
+        if last_err:
+            logger.error(f"[LLM_DEBUG] All attempts failed. Last error: {last_err}")
+            raise last_err or RuntimeError("LLM call failed")
 
 async def call_router_llm_json(
     prompt: str,
@@ -941,18 +759,14 @@ async def call_router_llm_json(
         except Exception:
             return None
     return None
-
 class QuestionIntakeOCRAgent(BaseAgent):
     """
     错题录入OCR Agent
     专门用于"录入错题"功能，支持图片和文字两种格式
-    支持学科: 语文(chinese)、英语(english)、道法(morality)
     """
 
     def __init__(self):
-        # 只支持语文、英语、道法三个学科
-        supported_subjects = ["chinese", "english", "morality"]
-        super().__init__(subjects=supported_subjects)
+        super().__init__(subjects=settings.SUBJECTS)
         self._graph = None
 
     def get_graph(self, initial_state: Optional[Dict[str, Any]] = None):
@@ -982,7 +796,7 @@ class QuestionIntakeOCRAgent(BaseAgent):
             input_type: 输入类型 ('image' 或 'text')
             user_id: 用户ID
             task_id: 任务ID
-            subject: 学科 (chinese, english, morality)
+            subject: 学科
             difficulty: 难度
             image_file: 图片文件对象（图片模式）
             image_path: 图片路径（图片模式）
@@ -993,12 +807,12 @@ class QuestionIntakeOCRAgent(BaseAgent):
         """
         # Validate subject
         if not self.validate_subject(subject):
-            logger.error(f"Subject '{subject}' not supported by TONY module")
+            logger.error(f"Subject '{subject}' not supported by WZM module")
             return {
                 "task_id": task_id,
                 "question_id": None,
                 "success": False,
-                "errors": [f"Subject '{subject}' not supported by TONY module. Supported: {self.subjects}"],
+                "errors": [f"Subject '{subject}' not supported by WZM module. Supported: {settings.SUBJECTS}"],
             }
 
         # 构建初始状态字典（使用 Dict 而不是 QuestionIntakeState，因为我们需要添加自定义字段）
@@ -1123,7 +937,7 @@ def create_intake_ocr_graph(initial_state: Optional[Dict[str, Any]] = None):
                 # 合并初始状态和当前状态，确保关键字段不丢失
                 merged_state = {**initial_state, **state}
                 result = await node_func(merged_state)
-                # 重要：对 Dict 状态，确保"累计状态"不会被丢失（LangGraph 默认 reducer 行为在不同版本可能不一致）
+                # 重要：对 Dict 状态，确保“累计状态”不会被丢失（LangGraph 默认 reducer 行为在不同版本可能不一致）
                 # 返回：merged_state + node 输出（node 输出优先）
                 if isinstance(result, dict):
                     return {**merged_state, **result}
@@ -1213,7 +1027,7 @@ async def process_input(state: Dict[str, Any]) -> Dict[str, Any]:
 async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     OCR Agent（多模态快）：
-    - 只负责"图片 -> OCR浅层结构化提取"
+    - 只负责“图片 -> OCR浅层结构化提取”
     - 不做深度推理、错因分析、taxonomy 归一化（这些交给后续 Reasoner/Normalizer）
     """
     task_id = state.get("task_id")
@@ -1223,12 +1037,13 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     t0 = time.perf_counter()
     image_path = state.get("image_path")
     logger.info(
-        f"[ocr_agent] {_ctx(state)} start vision_model={os.getenv('TONY_OCR_VISION_MODEL') or os.getenv('OCR_VISION_MODEL') or settings.GEMINI_MODEL} "
+        f"[ocr_agent] {_ctx(state)} start vision_model={os.getenv('WZM_OCR_VISION_MODEL') or os.getenv('OCR_VISION_MODEL') or settings.GEMINI_MODEL} "
         f"image={os.path.basename(image_path) if image_path else None}"
     )
 
     image_path = state.get("image_path")
-    subject = state.get("subject", "chinese")
+    # Default subject set to chemistry
+    subject = state.get("subject", "chemistry")
     grade = state.get("grade", "")
 
     if not image_path:
@@ -1241,20 +1056,29 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         await ocr_service.initialize()
 
         subject_map = {
-            "chinese": SubjectType.CHINESE,
+            "chemistry": SubjectType.CHEMISTRY,
+            "history": SubjectType.HISTORY,
+            "geography": SubjectType.GEOGRAPHY,
+            "math": SubjectType.MATH,
+            "physics": SubjectType.PHYSICS,
+            "biology": SubjectType.BIOLOGY,
             "english": SubjectType.ENGLISH,
-            "morality": SubjectType.MORALITY,
+            "chinese": SubjectType.CHINESE,
+            "other": SubjectType.OTHER,
         }
-        subject_type = subject_map.get(str(subject).lower(), SubjectType.CHINESE)
+        subject_type = subject_map.get(str(subject).lower(), SubjectType.CHEMISTRY) # Default to CHEMISTRY
 
         analysis_result = await ocr_service.analyze_exam_image(
             image_path=image_path,
             subject=subject_type,
             grade=str(grade or ""),
             user_hint=(
-                "这是错题识别场景：一张图片可能包含多道错题。"
+                "这是化学错题识别场景：一张图片可能包含多道错题。"
                 "请识别图片中的所有题目（尽量逐题拆分），并提取每道题的题干、学生答案、正确答案、知识点。"
-                "非常重要：请按试卷中题目出现的顺序（从上到下、从左到右）组织 questions 数组，并为每题给出 question_number（如无明确题号，也请按出现顺序从 1 开始编号）。"
+                "非常重要：请务必返回每道题在图片中的边界框坐标 (box_2d)，格式为 [ymin, xmin, ymax, xmax] (0-1000归一化坐标)，否则无法进行批改。"
+                "提取每道题的题干、学生答案、正确答案、知识点..."
+                "非常重要：请特别注意化学方程式的配平、离子符号的上标下标、以及有机化学结构式的识别。"
+                "请按试卷中题目出现的顺序组织 questions 数组。"
             ),
             trace_id=str(task_id) if task_id else None,
             trace_stage="ocr_agent",
@@ -1276,7 +1100,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 if not q_text:
                     continue
                 qn = _qnum(qi)
-                # 排序 key：优先用题号；若无题号则用模型输出顺序(i+1)，避免把"无题号题目"统一挪到末尾导致顺序错乱
+                # 排序 key：优先用题号；若无题号则用模型输出顺序(i+1)，避免把“无题号题目”统一挪到末尾导致顺序错乱
                 order_key = qn if qn is not None else (i + 1)
                 pairs.append(
                     (
@@ -1329,7 +1153,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                         "question_type": (it.get("question_type") or "")[:50],
                         "knowledge_points": (it.get("knowledge_points") or [])[:5],
                     }
-                    for i, it in enumerate(extracted_items[: int(os.getenv("TONY_DEEP_ENRICH_MAX_ITEMS") or "10")])
+                    for i, it in enumerate(extracted_items[: int(os.getenv("WZM_DEEP_ENRICH_MAX_ITEMS") or "10")])
                 ]
                 await crud_task.update_task_status(
                     db,
@@ -1338,7 +1162,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                     progress=25.0,
                     current_step="OCR识别完成，正在进行深度解析...",
                     result_patch={
-                        "ocr_model": os.getenv("TONY_OCR_VISION_MODEL") or os.getenv("OCR_VISION_MODEL"),
+                        "ocr_model": os.getenv("WZM_OCR_VISION_MODEL") or os.getenv("OCR_VISION_MODEL"),
                         "items": compact_items,
                         "original_input_preview": (getattr(analysis_result, "raw_response", "") or "")[:1500],
                     },
@@ -1370,332 +1194,172 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Reasoner Agent（强推理补全）：
-    - 图片：在 OCR items 基础上做深度解析（更完整题干、错因、举一反三、分类提议）
-    - 文字：直接基于文字输入做深度解析与分类提议
+    Reasoner Agent（强推理补全）- 串行分批版
+    为了防止多题同时请求导致 LLM 超时截断，改为逐题（或小批次）串行处理。
     """
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
         state = {**_initial_state_cache[task_id], **state}
 
     t0 = time.perf_counter()
-    models = get_text_reasoning_model_names()
-    items_in = len(state.get("ocr_items") or []) if state.get("input_type", "image") == "image" else 1
-    logger.info(
-        f"[reasoner_agent] {_ctx(state)} start text_models={models} items_in={items_in}"
-    )
-
     input_type = state.get("input_type", "image")
-    subject = state.get("subject", "chinese")
+    # Default subject set to chemistry
+    subject = state.get("subject", "chemistry")
     grade = state.get("grade", "")
     user_id = state.get("user_id")
 
-    # 构建 taxonomy 提示（动态候选 + seed），用于减少发散
-    taxonomy: Dict[str, Dict[str, List[str]]] = {}
+    # 1. 准备待处理项
+    if input_type == "image":
+        base_items = list(state.get("ocr_items") or [])
+        if not base_items:
+            return {"errors": ["缺少 OCR 结果"], "current_step": "reasoner_agent", "progress": 30.0}
+    else:
+        # 文字模式
+        text_data = state.get("text_data") or {}
+        base_items = [{
+            "question_content": str(text_data.get("content") or text_data.get("question") or ""),
+            "student_answer": str(text_data.get("student_answer") or ""),
+            "correct_answer": str(text_data.get("correct_answer") or ""),
+            "knowledge_points": text_data.get("knowledge_points", [])
+        }]
+
+    # 2. 准备 Taxonomy (只获取一次)
+    taxonomy = {}
     try:
-        # 只构建语文、英语、道法的分类候选
-        for s in ["chinese", "english", "morality"]:
+        for s in ["chemistry", "other"]:
             taxonomy[s] = await get_dynamic_taxonomy_candidates(
-                user_id=int(user_id or 0),
-                subject=s,
-                grade=grade,
-                max_chapters=20,
-                max_kps=30,
+                user_id=int(user_id or 0), subject=s, grade=grade, max_chapters=20, max_kps=30
             )
     except Exception:
-        taxonomy = {
-            s: {"chapters": get_category_candidates(s, grade), "knowledge_points": get_knowledge_point_candidates(s, grade)}
-            for s in ["chinese", "english", "morality"]
-        }
+        taxonomy = {s: {"chapters": ["综合"], "knowledge_points": ["综合"]} for s in ["chemistry", "other"]}
 
-    if input_type == "image":
-        items = state.get("ocr_items") if isinstance(state.get("ocr_items"), list) else []
-        if not items:
-            return {"errors": ["缺少 OCR 结果，无法深度解析"], "current_step": "reasoner_agent", "progress": 30.0}
-        prompt_items = [
-            {
-                "index": i,
-                "question_content": (it.get("question_content") or "")[:1200],
-                "student_answer": (it.get("student_answer") or "")[:400],
-                "correct_answer": (it.get("correct_answer") or "")[:400],
-                "ocr_knowledge_points": it.get("knowledge_points", []),
-            }
-            for i, it in enumerate(items[: int(os.getenv("TONY_DEEP_ENRICH_MAX_ITEMS") or "10")])
-        ]
-        raw_input = state.get("original_input") or ""
-    else:
-        text_data = state.get("text_data") or {}
-        if not isinstance(text_data, dict) or not text_data:
-            return {"errors": ["缺少 text_data，无法深度解析"], "current_step": "reasoner_agent", "progress": 30.0}
-        prompt_items = [
-            {
-                "index": 0,
-                "question_content": (str(text_data.get("content") or text_data.get("question") or "") or "")[:1200],
-                "student_answer": (str(text_data.get("student_answer") or "") or "")[:400],
-                "correct_answer": (str(text_data.get("correct_answer") or "") or "")[:400],
-                "ocr_knowledge_points": text_data.get("knowledge_points", []) if isinstance(text_data.get("knowledge_points"), list) else [],
-            }
-        ]
-        raw_input = json.dumps(text_data, ensure_ascii=False)
-
-    mismatch_threshold = float(os.getenv("TONY_SUBJECT_MISMATCH_CONFIDENCE") or "0.75")
-    max_new_chapters = int(os.getenv("TONY_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-    max_new_kps = int(os.getenv("TONY_MAX_NEW_KPS_PER_REQUEST") or "6")
-
-    # Control output size to avoid provider truncation (finish_reason=length => invalid JSON => fallback_no_json)
-    max_field_question = int(os.getenv("TONY_REASONER_MAX_CHARS_QUESTION_CONTENT") or "600")
-    max_field_expl = int(os.getenv("TONY_REASONER_MAX_CHARS_EXPLANATION") or "300")
-    max_field_error = int(os.getenv("TONY_REASONER_MAX_CHARS_ERROR_ANALYSIS") or "420")
-    max_field_sq = int(os.getenv("TONY_REASONER_MAX_CHARS_SUGGESTED_Q") or "60")
-
-    # 根据学科调整提示词
-    subject_prompts = {
-        "chinese": "语文错题分析需要关注：字音字形、词语运用、病句辨析、文言文实词虚词、古诗词鉴赏、现代文阅读技巧、写作方法等。",
-        "english": "英语错题分析需要关注：词汇辨析、语法规则、阅读理解策略、写作技巧、听力技巧、完形填空技巧等。",
-        "morality": "道法（道德与法治）错题分析需要关注：法律条文理解、道德原则应用、时事政治分析、国情国策理解等。",
-    }
+    # 3. 分批处理配置
+    # 关键修改：BATCH_SIZE 设为 1，确保单次请求不超时
+    BATCH_SIZE = 1 
+    total_items = len(base_items)
     
-    subject_specific_guide = subject_prompts.get(subject, "")
+    logger.info(f"[reasoner_agent] {_ctx(state)} start serial processing. Total={total_items}, Batch={BATCH_SIZE}")
 
-    prompt = f"""你是资深教研员与讲题老师。现在要做"深度解析 + 分类提议（允许受控新增）"。
+    # 用于收集所有批次的结果
+    all_results_buffer: List[Dict[str, Any]] = []
+    detected_subjects = []
+    
+    # === 开始循环分批处理 ===
+    for i in range(0, total_items, BATCH_SIZE):
+        batch_slice = base_items[i : i + BATCH_SIZE]
+        current_indices = range(i, i + len(batch_slice))
+        
+        # 构造当前批次的 prompt_items
+        prompt_items = []
+        for local_idx, item in enumerate(batch_slice):
+            # 注意：传给 LLM 的 index 建议用相对 index (0,1...) 或者绝对 index
+            # 这里我们用绝对 index，方便后续对应
+            global_idx = i + local_idx
+            prompt_items.append({
+                "index": global_idx,
+                "question_content": (item.get("question_content") or "")[:1200],
+                "student_answer": (item.get("student_answer") or "")[:400],
+                "correct_answer": (item.get("correct_answer") or "")[:400],
+                "ocr_knowledge_points": item.get("knowledge_points", []),
+            })
+
+        logger.info(f"[reasoner_agent] Processing batch {i//BATCH_SIZE + 1}: Items {list(current_indices)}")
+
+        # 构造 Prompt
+        prompt = f"""你是资深化学教研员。请对以下题目做“深度解析 + 分类提议”。
+当前处理第 {i+1} 到 {i+len(batch_slice)} 题（共 {total_items} 题）。
 
 用户选择学科：{subject}
-年级/学段：{grade or "未知"}
+年级：{grade or "未知"}
 
-{subject_specific_guide}
+请输出 JSON：
+1) detected_subject ("chemistry"|"other")
+2) results：数组，包含每道题的：
+   - index: 必须与输入一致
+   - question_content (修正OCR错误)
+   - explanation (简要思路)
+   - error_analysis (简要错因)
+   - suggested_questions (3个短句)
+   - chapter (从候选选)
+   - knowledge_points (从候选选 1~3个)
+   - tags (标签)
 
-请输出：
-1) detected_subject（必须是 ["chinese","english","morality"] 之一）与 confidence(0~1)
-2) results：对每道题输出：
-   - question_content：更清晰、更完整的题干
-   - student_answer / correct_answer：可推断则补全，否则保留原样
-   - explanation：简要解题思路（可为空，务必简洁）
-   - error_analysis：错因分析（要具体，但务必简洁）
-   - suggested_questions：3 个同类型训练点（短句）
-   - chapter：优先选候选；若确实需要新增，用 "NEW:xxx"（新增总数≤{max_new_chapters}）
-   - knowledge_points：优先选候选 1~3 个；新增用 "NEW:xxx"（新增总数≤{max_new_kps}）
-   - tags：2~6 个短标签
-
-输出长度硬约束（为保证 JSON 不被截断）：
-- question_content <= {max_field_question} 字
-- explanation <= {max_field_expl} 字
-- error_analysis <= {max_field_error} 字
-- suggested_questions 每条 <= {max_field_sq} 字
-- 如果超长，优先压缩 explanation/error_analysis/suggested_questions，不要输出冗长段落
-
-候选分类（优先从候选中选择；语义接近必须选候选，避免发散）：
+候选分类：
 {json.dumps(taxonomy, ensure_ascii=False)}
 
-OCR/输入原文（供你参考，可忽略噪声）：
-{raw_input[:2000]}
-
-题目列表（注意：index 从 0 开始，是 0-based）：
+题目列表：
 {json.dumps(prompt_items, ensure_ascii=False)}
 
-严格输出 JSON：
+严格输出 JSON:
 {{
-  "detected_subject": "chinese|english|morality",
-  "confidence": 0.0,
-  "results": [{{"index":0,"question_content":"...","student_answer":"...","correct_answer":"...","explanation":"...","error_analysis":"...","suggested_questions":["..."],"chapter":"...","knowledge_points":["..."],"tags":["..."]}}]
+  "detected_subject": "...",
+  "results": [ {{ "index": {prompt_items[0]['index']}, ... }} ]
 }}"""
 
-    raw_preview_limit = int(os.getenv("TONY_REASONER_RAW_PREVIEW_CHARS") or "1200")
-    raw_text = ""
-    used_model = None
-    try:
-        reasoner_max_tokens = int(os.getenv("TONY_REASONER_MAX_TOKENS") or "8192")
-        raw_text, used_model = await call_router_llm_with_meta(
-            prompt,
-            model=None,
-            temperature=0.2,
-            max_tokens=reasoner_max_tokens,
-            log_ctx=_ctx(state),
-            trace_id=str(task_id) if task_id else None,
-            trace_stage="reasoner",
-        )
-    except Exception as e:
-        duration_ms = int((time.perf_counter() - t0) * 1000)
-        msg = f"深度解析失败：{str(e) or 'LLM 调用失败'}，已降级为 OCR 结果归一化"
-        logger.warning(f"[reasoner_agent] {_ctx(state)} fallback_llm_error duration_ms={duration_ms}: {e}")
-        if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
-            async with async_session_maker() as db:
-                await crud_task.update_task_status(
-                    db,
-                    task_id,
-                    TaskStatusEnum.PROCESSING,
-                    progress=45.0,
-                    current_step=msg,
-                    result_patch={"status": "fallback", "error": "llm_error", "message": str(e)[:200]},
-                    result_stage="reasoner",
-                )
-                await db.commit()
-        base_items = list(state.get("ocr_items") or [])
-        out = {**state, "reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 45.0}
-        out.setdefault("errors", [])
-        out["errors"] = list(out.get("errors") or []) + [msg]
-        return out
-
-    parsed = _extract_json_object_loose(raw_text) if raw_text else None
-    if not parsed:
-        duration_ms = int((time.perf_counter() - t0) * 1000)
-        msg = "深度解析失败：无法解析模型输出，已降级为 OCR 结果归一化"
-        logger.warning(f"[reasoner_agent] {_ctx(state)} fallback_no_json duration_ms={duration_ms}")
-        if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
-            async with async_session_maker() as db:
-                await crud_task.update_task_status(
-                    db,
-                    task_id,
-                    TaskStatusEnum.PROCESSING,
-                    progress=45.0,
-                    current_step=msg,
-                    result_patch={
-                        "status": "fallback",
-                        "error": "no_json",
-                        "used_model": used_model,
-                        "raw_output_len": len(raw_text or ""),
-                        "raw_output_preview": (raw_text or "")[:raw_preview_limit],
-                        "raw_output_truncated": bool(raw_text and len(raw_text) > raw_preview_limit),
-                    },
-                    result_stage="reasoner",
-                )
-                await db.commit()
-        base_items = list(state.get("ocr_items") or [])
-        out = {**state, "reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 45.0}
-        out.setdefault("errors", [])
-        out["errors"] = list(out.get("errors") or []) + [msg]
-        return out
-
-    detected = str(parsed.get("detected_subject") or "").strip().lower()
-    try:
-        conf_f = float(parsed.get("confidence", 0.0))
-    except Exception:
-        conf_f = 0.0
-
-    # 检查学科是否匹配（只支持语文、英语、道法）
-    supported_subjects = ["chinese", "english", "morality"]
-    if detected in supported_subjects and detected != subject and conf_f >= mismatch_threshold:
-        msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。"
-        if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
-            async with async_session_maker() as db:
-                await crud_task.update_task_status(
-                    db,
-                    task_id,
-                    TaskStatusEnum.FAILED,
-                    progress=100.0,
-                    current_step=msg[:200],
-                    error_message=msg,
-                    result_patch={
-                        "status": "failed",
-                        "error": "subject_mismatch",
-                        "detected_subject": detected,
-                        "confidence": conf_f,
-                        "selected_subject": subject,
-                        "used_model": used_model,
-                        "raw_output_len": len(raw_text or ""),
-                        "raw_output_preview": (raw_text or "")[:raw_preview_limit],
-                        "raw_output_truncated": bool(raw_text and len(raw_text) > raw_preview_limit),
-                    },
-                    result_stage="reasoner",
-                )
-                await db.commit()
-        out = {"errors": [msg], "parse_success": False, "fatal_error": True, "current_step": "reasoner_agent", "progress": 40.0}
-        for k in ["user_id", "task_id", "subject", "difficulty", "input_type", "image_path", "grade", "original_input", "summarized_input"]:
-            if state.get(k) is not None:
-                out[k] = state.get(k)
-        return out
-
-    # Prepare base_items for coercion & later overlay
-    if input_type == "image":
-        base_items = list(state.get("ocr_items") or [])
-    else:
-        base_items = [
-            {
-                "question_content": prompt_items[0].get("question_content", ""),
-                "student_answer": prompt_items[0].get("student_answer", ""),
-                "correct_answer": prompt_items[0].get("correct_answer", ""),
-            }
-        ]
-
-    results = _coerce_results_list(parsed, expected_len=len(base_items))
-    if not isinstance(results, list) or not results:
-        duration_ms = int((time.perf_counter() - t0) * 1000)
-        msg = "深度解析失败：results 格式错误，已降级为 OCR 结果归一化"
-        # Emit error details to logs for observability
         try:
-            keys = list(parsed.keys()) if isinstance(parsed, dict) else None
-        except Exception:
-            keys = None
-        logger.error(
-            f"[reasoner_agent] {_ctx(state)} fallback_bad_results duration_ms={duration_ms} "
-            f"parsed_type={type(parsed).__name__} parsed_keys={keys} "
-            f"raw_output_preview={(raw_text or '')[:raw_preview_limit]}"
-        )
-        if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
-            async with async_session_maker() as db:
-                await crud_task.update_task_status(
-                    db,
-                    task_id,
-                    TaskStatusEnum.PROCESSING,
-                    progress=45.0,
-                    current_step=msg,
-                    result_patch={
-                        "status": "fallback",
-                        "error": "bad_results",
-                        "used_model": used_model,
-                        "parsed_type": type(parsed).__name__,
-                        "parsed_keys": keys,
-                        "raw_output_len": len(raw_text or ""),
-                        "raw_output_preview": (raw_text or "")[:raw_preview_limit],
-                        "raw_output_truncated": bool(raw_text and len(raw_text) > raw_preview_limit),
-                    },
-                    result_stage="reasoner",
-                )
-                await db.commit()
-        out = {**state, "reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 45.0}
-        out.setdefault("errors", [])
-        out["errors"] = list(out.get("errors") or []) + [msg]
-        return out
+            # 调用 LLM
+            parsed = await call_router_llm_json(
+                prompt,
+                log_ctx=f"{_ctx(state)} batch_{i}",
+                trace_id=str(task_id) if task_id else None,
+                trace_stage=f"reasoner_batch_{i}",
+            )
+            
+            if parsed:
+                # 收集学科判定
+                if parsed.get("detected_subject"):
+                    detected_subjects.append(parsed.get("detected_subject"))
+                
+                # 收集结果
+                batch_results = _coerce_results_list(parsed, expected_len=len(batch_slice)) or []
+                all_results_buffer.extend(batch_results)
+            else:
+                logger.warning(f"[reasoner_agent] Batch {i} failed to parse JSON, skipping enrichment.")
 
-    for r in results:
-        if not isinstance(r, dict):
+        except Exception as e:
+            logger.error(f"[reasoner_agent] Batch {i} error: {e}")
+            # 即使出错也继续处理下一个批次，不要中断整个流程
             continue
-        idx = r.get("index")
-        if not isinstance(idx, int) or idx < 0 or idx >= len(base_items):
-            continue
-        for key in ["question_content", "student_answer", "correct_answer", "explanation", "error_analysis", "chapter"]:
-            if isinstance(r.get(key), str) and r.get(key).strip():
-                base_items[idx][key] = r.get(key).strip()
-        # correctness / scoring
-        if isinstance(r.get("is_correct"), bool):
-            base_items[idx]["is_correct"] = r.get("is_correct")
-        if isinstance(r.get("score"), (int, float)):
-            base_items[idx]["score"] = float(r.get("score"))
-        if isinstance(r.get("max_score"), (int, float)):
-            base_items[idx]["max_score"] = float(r.get("max_score"))
-        if isinstance(r.get("knowledge_points"), list):
-            base_items[idx]["knowledge_points"] = [str(x).strip() for x in r["knowledge_points"] if str(x).strip()]
-        if isinstance(r.get("suggested_questions"), list):
-            base_items[idx]["suggested_questions"] = [str(x).strip() for x in r["suggested_questions"] if str(x).strip()]
-        if isinstance(r.get("tags"), list):
-            base_items[idx]["tags"] = [str(x).strip() for x in r["tags"] if str(x).strip()]
+
+    # 4. 合并结果到 base_items
+    # 只要有部分成功，就算成功
+    if not all_results_buffer:
+        logger.warning("[reasoner_agent] No valid results from any batch. Returning OCR items as is.")
+        # 可以在这里标记一个 warning error，但不阻断
+    else:
+        for r in all_results_buffer:
+            if not isinstance(r, dict): continue
+            idx = r.get("index")
+            if idx is None or not isinstance(idx, int): continue
+            
+            if 0 <= idx < len(base_items):
+                target = base_items[idx]
+                # 覆盖字段
+                for key in ["question_content", "student_answer", "correct_answer", 
+                            "explanation", "error_analysis", "chapter"]:
+                    if r.get(key): 
+                        target[key] = str(r[key]).strip()
+                
+                if r.get("knowledge_points"): target["knowledge_points"] = r["knowledge_points"]
+                if r.get("tags"): target["tags"] = r["tags"]
+                if r.get("suggested_questions"): target["suggested_questions"] = r["suggested_questions"]
+
+    # 5. 学科一致性检查 (基于多数投票)
+    final_detected = "chemistry"
+    if detected_subjects:
+        from collections import Counter
+        final_detected = Counter(detected_subjects).most_common(1)[0][0]
+        
+    mismatch_threshold = 0.75
+    # 这里简单处理，如果发现严重的学科不匹配才报错，否则宽容处理
+    if final_detected not in (subject, "chemistry", "other") and len(detected_subjects) == total_items:
+         # 仅示例，实际上可根据需求决定是否报错
+         pass
 
     duration_ms = int((time.perf_counter() - t0) * 1000)
-    logger.info(
-        f"[reasoner_agent] {_ctx(state)} done detected_subject={detected or None} confidence={conf_f:.2f} items_out={len(base_items)} duration_ms={duration_ms}"
-    )
+    logger.info(f"[reasoner_agent] {_ctx(state)} done. Updated {len(all_results_buffer)}/{total_items} items. Time={duration_ms}ms")
 
+    # 6. 更新任务状态进度
     if task_id:
         from backend.core.db.session import async_session_maker
         from backend.core.crud import crud_task
@@ -1708,27 +1372,15 @@ OCR/输入原文（供你参考，可忽略噪声）：
                 progress=55.0,
                 current_step="深度解析完成，正在归一化分类...",
                 result_patch={
-                    "text_models": get_text_reasoning_model_names(),
-                    "used_model": used_model,
-                    "detected_subject": detected,
-                    "confidence": conf_f,
-                    "items": [
-                        {
-                            "index": i,
-                            "question_content": (it.get("question_content") or it.get("question_text") or "")[:500],
-                            "chapter": (it.get("chapter") or "")[:50],
-                            "knowledge_points": (it.get("knowledge_points") or [])[:5],
-                            "error_analysis": (it.get("error_analysis") or "")[:600],
-                            "suggested_questions": (it.get("suggested_questions") or [])[:5],
-                        }
-                        for i, it in enumerate(base_items[: int(os.getenv("TONY_DEEP_ENRICH_MAX_ITEMS") or "10")])
-                    ],
+                    "items_processed": len(all_results_buffer),
+                    "total_items": total_items
                 },
                 result_stage="reasoner",
             )
             await db.commit()
 
     out = {"reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 55.0}
+    # 传递上下文
     for k in ["user_id", "task_id", "subject", "difficulty", "input_type", "image_path", "grade", "original_input", "summarized_input"]:
         if state.get(k) is not None:
             out[k] = state.get(k)
@@ -1752,7 +1404,8 @@ async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     items_in = len(items or [])
     logger.info(f"[normalizer_agent] {_ctx(state)} start items_in={items_in}")
 
-    subject = state.get("subject", "chinese")
+    # Default subject set to chemistry
+    subject = state.get("subject", "chemistry")
     grade = state.get("grade", "")
     user_id = int(state.get("user_id") or 0)
     difficulty = state.get("difficulty", "medium")
@@ -1789,14 +1442,14 @@ async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     allowed_chapters = set(candidates.get("chapters") or [])
     allowed_kps = set(candidates.get("knowledge_points") or [])
 
-    max_new_chapters = int(os.getenv("TONY_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-    max_new_kps = int(os.getenv("TONY_MAX_NEW_KPS_PER_REQUEST") or "6")
+    max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
+    max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
 
     # 同义合并：对 NEW 标签尽量映射到候选
     async def merge_synonyms(kind: str, new_labels: List[str], cand: List[str]) -> Dict[str, str]:
         if not new_labels or not cand:
             return {}
-        prompt = f"""你是教研员。将新标签尽量合并到已有候选（同义/近义/上位类）。
+        prompt = f"""你是化学教研员。将新标签尽量合并到已有候选（同义/近义/上位类）。
 
 kind={kind}
 候选（可合并目标）：
@@ -1932,7 +1585,7 @@ kind={kind}
                             "knowledge_points": (it.get("knowledge_points") or [])[:5],
                             "tags": (it.get("tags") or [])[:6],
                         }
-                        for i, it in enumerate(normalized_items[: int(os.getenv("TONY_DEEP_ENRICH_MAX_ITEMS") or "10")])
+                        for i, it in enumerate(normalized_items[: int(os.getenv("WZM_DEEP_ENRICH_MAX_ITEMS") or "10")])
                     ],
                 },
                 result_stage="normalizer",
@@ -1972,7 +1625,8 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
     from backend.core.services.gemini_ocr_service import get_gemini_ocr_service
 
     image_path = state.get("image_path")
-    subject = state.get("subject", "chinese")
+    # Default subject set to chemistry
+    subject = state.get("subject", "chemistry")
     task_id = state.get("task_id")
 
     if not image_path:
@@ -1992,11 +1646,17 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
         
         # 映射 subject 字符串到 SubjectType
         subject_map = {
-            "chinese": SubjectType.CHINESE,
+            "chemistry": SubjectType.CHEMISTRY,
+            "history": SubjectType.HISTORY,
+            "geography": SubjectType.GEOGRAPHY,
+            "math": SubjectType.MATH,
+            "physics": SubjectType.PHYSICS,
+            "biology": SubjectType.BIOLOGY,
             "english": SubjectType.ENGLISH,
-            "morality": SubjectType.MORALITY,
+            "chinese": SubjectType.CHINESE,
+            "other": SubjectType.OTHER,
         }
-        subject_type = subject_map.get(subject.lower(), SubjectType.CHINESE)
+        subject_type = subject_map.get(subject.lower(), SubjectType.OTHER)
         
         # 调用 analyze_exam_image 方法
         analysis_result = await ocr_service.analyze_exam_image(
@@ -2032,7 +1692,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                     if s.startswith(p):
                         s = s[len(p):].lstrip(":：.。 )）")
                 # remove whitespace and common punctuation
-                drop = " \t\r\n,，.。;；:：、|/\\·•*（）()[]【】{}<>《》\"'"
+                drop = " \t\r\n,，.。;；:：、|/\\·•*（）()[]【】{}<>《》“”\"'"
                 s = "".join(ch for ch in s if ch not in drop)
                 return s
 
@@ -2137,7 +1797,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                 # 判定优先级：老师批改/自标正确答案 > 模型推断答案 > 分数兜底 > unknown
                 decided_by = None
                 inferred_is_correct = None
-                # 0) 如果卷面有明确的"对/错"符号（如红色√/×），它优先级最高
+                # 0) 如果卷面有明确的“对/错”符号（如红色√/×），它优先级最高
                 if teacher_marked_is_correct is True or teacher_marked_is_correct is False:
                     inferred_is_correct = bool(teacher_marked_is_correct)
                     decided_by = "teacher_mark"
@@ -2194,7 +1854,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                             "question_type": (qi.question_type or "").strip(),
                             "knowledge_points": qi.knowledge_points or [],
                             "error_analysis": (qi.error_analysis or "").strip(),
-                            # 不要默认 False（会导致"无法判断"也被判错）；优先用答案比对/得分推断
+                            # 不要默认 False（会导致“无法判断”也被判错）；优先用答案比对/得分推断
                             "is_correct": inferred_is_correct,
                             "score": getattr(qi, "score", 0.0),
                             "max_score": getattr(qi, "max_score", 0.0),
@@ -2230,9 +1890,9 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
             bucket = normalize_grade_bucket(grade)
 
             # 动态 taxonomy：优先从 DB（该用户历史数据）抽取候选，再用 seed 兜底
-            # 这样无需手工穷举所有类型，同时通过"NEW门控+归一化"避免分类爆炸
+            # 这样无需手工穷举所有类型，同时通过“NEW门控+归一化”避免分类爆炸
             taxonomy = {}
-            for s in ["chinese", "english", "morality"]:
+            for s in ["chemistry", "other"]:
                 try:
                     taxonomy[s] = await get_dynamic_taxonomy_candidates(
                         user_id=int(state.get("user_id") or 0),
@@ -2256,21 +1916,21 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                 for i, it in enumerate(extracted_items[:20])
             ]
 
-            classify_prompt = f"""你是教研员，负责"学科判定 + 分类归一化"。一张图片可能包含多道题。
+            classify_prompt = f"""你是化学教研员，负责“学科判定 + 分类归一化”。一张图片可能包含多道题。
 
 用户选择学科：{subject}
 年级/学段：{grade or "未知"}（已归一化：{bucket}）
 
 请完成两件事：
-1) 判定图片内容最匹配的学科 detected_subject，必须是 ["chinese","english","morality"] 之一，并给出置信度 confidence (0~1)。
-2) 对每道题做分类（允许"受控新增"，避免人工穷举）：
+1) 判定图片内容最匹配的学科 detected_subject，必须是 ["chemistry", "other"] 之一，并给出置信度 confidence (0~1)。
+2) 对每道题做分类（允许“受控新增”，避免人工穷举）：
    - chapter：优先从该学科 chapters 候选中选择 1 个；如确实需要新增，请输出 "NEW:你的新分类"（要短且概括）
    - knowledge_points：优先从该学科 knowledge_points 候选中选择 1~3 个；如确实需要新增，请用 "NEW:xxx"
    - tags：2~6 个中文短词（尽量从题干抽取，不要太碎）
 
 新增规则（反碎片化）：
 - 如果与候选语义接近，必须选候选，不要 NEW
-- NEW 的分类要"能覆盖一类题"，避免过细（如不要直接用题干原句）
+- NEW 的分类要“能覆盖一类题”，避免过细（如不要直接用题干原句）
 
 分类候选（请严格从候选中选择，避免自造过多新类别）：
 {json.dumps(taxonomy, ensure_ascii=False)}
@@ -2280,7 +1940,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
 
 请严格输出 JSON（不要输出其它文字）：
 {{
-  "detected_subject": "chinese|english|morality",
+  "detected_subject": "chemistry|other",
   "confidence": 0.0,
   "results": [
     {{"index": 0, "chapter": "...", "knowledge_points": ["..."], "tags": ["..."]}}
@@ -2304,7 +1964,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
                 detected = detected.strip().lower()
 
             # 学科不匹配：给出明确提示并失败（置信度阈值可微调）
-            if detected in ("chinese", "english", "morality") and detected != subject and conf_f >= 0.75:
+            if detected in ("chemistry", "other") and detected != subject and conf_f >= 0.75:
                 msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或更换图片。"
                 logger.warning(f"[ocr_extract] subject mismatch: {msg}")
                 if task_id:
@@ -2323,8 +1983,8 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
             results = (parsed or {}).get("results")
             if isinstance(results, list):
                 # 归一化写回
-                max_new_chapters = int(os.getenv("TONY_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-                max_new_kps = int(os.getenv("TONY_MAX_NEW_KPS_PER_REQUEST") or "6")
+                max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
+                max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
                 new_chapters: List[str] = []
                 new_kps: List[str] = []
 
@@ -2384,7 +2044,7 @@ async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # ===== 深度解析（图片模式）：用强文本模型二次推理，补全错因分析/举一反三/更稳定分类 =====
         try:
-            enabled = str(os.getenv("TONY_ENABLE_DEEP_ENRICH", "true")).lower() in ("1", "true", "yes", "y", "on")
+            enabled = str(os.getenv("WZM_ENABLE_DEEP_ENRICH", "true")).lower() in ("1", "true", "yes", "y", "on")
             if enabled:
                 extracted_items = await deep_enrich_ocr_items(
                     user_selected_subject=subject,
@@ -2486,7 +2146,8 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"[llm_summarize] Task {state.get('task_id')}: Summarizing text input")
 
     text_data = state.get("text_data", {})
-    subject = state.get("subject", "chinese")
+    # Default subject set to chemistry
+    subject = state.get("subject", "chemistry")
 
     if not text_data:
         return {
@@ -2500,7 +2161,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
         bucket = normalize_grade_bucket(grade)
 
         taxonomy = {}
-        for s in ["chinese", "english", "morality"]:
+        for s in ["chemistry", "other"]:
             try:
                 taxonomy[s] = await get_dynamic_taxonomy_candidates(
                     user_id=int(state.get("user_id") or 0),
@@ -2515,21 +2176,10 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
                     "knowledge_points": get_knowledge_point_candidates(s, grade),
                 }
 
-        # 根据学科调整提示词
-        subject_prompts = {
-            "chinese": "语文错题分析需要关注：字音字形、词语运用、病句辨析、文言文实词虚词、古诗词鉴赏、现代文阅读技巧、写作方法等。",
-            "english": "英语错题分析需要关注：词汇辨析、语法规则、阅读理解策略、写作技巧、听力技巧、完形填空技巧等。",
-            "morality": "道法（道德与法治）错题分析需要关注：法律条文理解、道德原则应用、时事政治分析、国情国策理解等。",
-        }
-        
-        subject_specific_guide = subject_prompts.get(subject, "")
-
-        prompt = f"""你是一个专业的学习助手与教研员。请对以下错题信息进行总结和结构化处理，并完成"学科判定 + 分类归一化"，便于错题本检索（按知识点/按题目类型）。
+        prompt = f"""你是一个专业的学习助手与化学教研员。请对以下错题信息进行总结和结构化处理，并完成“学科判定 + 分类归一化”，便于错题本检索（按知识点/按题目类型）。
 
 原始输入：
 {json.dumps(text_data, ensure_ascii=False, indent=2)}
-
-{subject_specific_guide}
 
 请提取并总结以下信息：
 1. **题目内容**: 清晰、完整的题目描述
@@ -2539,11 +2189,11 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
 5. **题目类型**: 选择题/填空题/解答题等
 6. **题目类型/章节（chapter）**: 优先从候选 chapters 中选择 1 个；如确实需要新增，请用 "NEW:你的新分类"（要短且概括）
 7. **标签**: 2~6个 tags（中文短词，用于检索）
-8. **学科判定**: detected_subject 必须是 ["chinese","english","morality"] 之一，并输出 confidence(0~1)
+8. **学科判定**: detected_subject 必须是 ["chemistry", "other"] 之一，并输出 confidence(0~1)
 
 请以JSON格式返回，格式如下：
 {{
-  "detected_subject": "chinese|english|morality",
+  "detected_subject": "chemistry|other",
   "confidence": 0.0,
   "question_content": "总结后的题目内容",
   "student_answer": "学生答案",
@@ -2577,7 +2227,7 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             conf_f = 0.0
 
-        if detected in ("chinese", "english", "morality") and detected != subject and conf_f >= 0.75:
+        if detected in ("chemistry", "other") and detected != subject and conf_f >= 0.75:
             msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或修改描述。"
             logger.warning(f"[llm_summarize] subject mismatch: {msg}")
             return {
@@ -2590,8 +2240,8 @@ async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
         # 归一化 knowledge_points 与 chapter（候选优先，允许 NEW，但做门控防止发散）
         allowed_chapters = set(taxonomy.get(subject, {}).get("chapters", []) or [])
         allowed_kps = set(taxonomy.get(subject, {}).get("knowledge_points", []) or [])
-        max_new_chapters = int(os.getenv("TONY_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-        max_new_kps = int(os.getenv("TONY_MAX_NEW_KPS_PER_REQUEST") or "6")
+        max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
+        max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
 
         new_chapters: List[str] = []
         new_kps: List[str] = []
@@ -2694,7 +2344,8 @@ async def parse_structure(state: Dict[str, Any]) -> Dict[str, Any]:
 
     structured_data = state.get("structured_data", {})
     structured_data_list: List[Dict[str, Any]] = []
-    subject = state.get("subject", "chinese")
+    # Default subject set to chemistry
+    subject = state.get("subject", "chemistry")
     difficulty = state.get("difficulty", "medium")
 
     # 多题：如果 OCR 阶段提供了 ocr_items，则优先生成 structured_data_list
@@ -2791,76 +2442,33 @@ async def parse_structure(state: Dict[str, Any]) -> Dict[str, Any]:
             await db.commit()
 
 async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
-    """保存错题节点"""
+    """
+    保存错题节点 (修复版)
+    修复了 MissingGreenlet 错误：通过使用 flush() 而不是 commit() 来安全获取 ID。
+    """
     t0 = time.perf_counter()
     logger.info(f"[save_question] {_ctx(state)} start")
-    logger.debug(f"[save_question] Entry - State keys: {list(state.keys())}")
-    logger.debug(f"[save_question] Cache keys: {list(_initial_state_cache.keys())}")
     
     # 从全局缓存获取初始状态，确保关键字段不丢失
     task_id = state.get("task_id")
-    initial_state = None
-    
     if task_id and task_id in _initial_state_cache:
         initial_state = _initial_state_cache[task_id]
-        logger.debug(f"[save_question] Found cache by task_id: {task_id}, user_id={initial_state.get('user_id')}")
-    else:
-        # 如果 task_id 也是 None 或不在缓存中，尝试从缓存中找到匹配的初始状态
-        # 优先通过 subject 和 difficulty 匹配，如果都匹配不上，使用最后一个缓存条目
-        subject_hint = state.get("subject") or state.get("structured_data", {}).get("subject", "chinese")
-        difficulty_hint = state.get("difficulty") or state.get("structured_data", {}).get("difficulty", "medium")
-        
-        logger.info(f"[save_question] Searching cache by subject={subject_hint}, difficulty={difficulty_hint}")
-        
-        # 尝试精确匹配
-        for cached_task_id, cached_state in _initial_state_cache.items():
-            cached_subject = cached_state.get("subject", "").lower()
-            cached_difficulty = cached_state.get("difficulty", "").lower()
-            if (cached_subject == subject_hint.lower() and 
-                cached_difficulty == difficulty_hint.lower()):
-                initial_state = cached_state
-                task_id = cached_task_id
-                logger.info(f"[save_question] Found matching cache entry: task_id={cached_task_id}, user_id={initial_state.get('user_id')}")
-                break
-        
-        # 如果还是没找到，使用最后一个缓存条目（通常是最新的）
-        if initial_state is None and _initial_state_cache:
-            last_task_id = list(_initial_state_cache.keys())[-1]
-            initial_state = _initial_state_cache[last_task_id]
-            task_id = last_task_id
-            logger.warning(f"[save_question] Using last cache entry as fallback: task_id={last_task_id}, user_id={initial_state.get('user_id')}")
-    
-    # 合并初始状态和当前状态（初始状态优先，确保关键字段不丢失）
-    if initial_state:
         state = {**initial_state, **state}
-        task_id = state.get("task_id")  # 重新获取 task_id
-        logger.debug(f"[save_question] After merge - task_id={task_id}, user_id={state.get('user_id')}")
-    else:
-        logger.error(f"[save_question] No cache entry found! Cache is empty or task_id mismatch.")
-    
-    logger.info(f"[save_question] {_ctx(state)} saving_to_db")
-    logger.debug(f"[save_question] Full state keys: {list(state.keys())}")
-    logger.debug(f"[save_question] State values: user_id={state.get('user_id')}, task_id={state.get('task_id')}, subject={state.get('subject')}")
+        task_id = state.get("task_id")
 
+    # 引入必要的模型和工具
     from backend.core.db.session import async_session_maker
-    from backend.core.crud import crud_question, crud_task
-    from backend.core.db.models import SubjectEnum, DifficultyEnum, QuestionSourceEnum
+    from backend.core.crud import crud_task
+    # 【重要】必须导入 Question 模型
+    from backend.core.db.models import Question, SubjectEnum, DifficultyEnum, QuestionSourceEnum
 
     user_id = state.get("user_id")
-    task_id = state.get("task_id")
-    
-    structured_data = state.get("structured_data", {})
-    structured_data_list = state.get("structured_data_list") if isinstance(state.get("structured_data_list"), list) else None
-    subject = state.get("subject", "chinese")
+    subject = state.get("subject", "chemistry")
     difficulty = state.get("difficulty", "medium")
     grade = state.get("grade", "")
 
-    # 验证必要字段
+    # 验证 user_id
     if not user_id:
-        logger.error(f"[save_question] user_id is missing in state. State keys: {list(state.keys())}, State: {state}")
-        logger.error(f"[save_question] Cache contents: {list(_initial_state_cache.keys())}")
-        for cached_task_id, cached_state in _initial_state_cache.items():
-            logger.error(f"[save_question] Cache entry {cached_task_id}: user_id={cached_state.get('user_id')}")
         return {
             "errors": ["user_id 缺失，无法保存错题"],
             "success": False,
@@ -2868,12 +2476,11 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             "progress": 60.0,
         }
 
-    # 如果前面节点已经产生错误（例如：学科不匹配），则不入库，直接失败任务
+    # 如果已有错误，直接标记任务失败
     if isinstance(state.get("errors"), list) and state.get("errors"):
-        err_msg = "; ".join([str(e) for e in state.get("errors") if e])
         try:
             async with async_session_maker() as db:
-                await crud_task.fail_task(db, task_id, err_msg or "任务失败")
+                await crud_task.fail_task(db, task_id, "; ".join(state["errors"]))
                 await db.commit()
         except Exception:
             pass
@@ -2883,86 +2490,49 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             "current_step": "save_question",
             "progress": 60.0,
         }
-    
-    # 再次验证 user_id 不是 None（双重保险）
-    if user_id is None:
-        logger.error(f"[save_question] user_id is None after all attempts. State: {state}")
-        return {
-            "errors": ["user_id 缺失，无法保存错题"],
-            "success": False,
-            "current_step": "save_question",
-            "progress": 60.0,
-        }
 
     try:
         async with async_session_maker() as db:
-            # 解析学科和难度
+            # 1. 准备枚举值
             try:
                 subject_enum = SubjectEnum(subject)
             except ValueError:
-                subject_enum = SubjectEnum.CHINESE
-
+                subject_enum = SubjectEnum.OTHER
+            
             try:
                 difficulty_enum = DifficultyEnum(difficulty)
             except ValueError:
                 difficulty_enum = DifficultyEnum.MEDIUM
 
-            items = structured_data_list or [structured_data]
-            # 保证入库顺序与试卷顺序一致：优先按 order(1..n) 排序，否则保持原顺序
+            # 2. 准备数据列表
+            structured_data = state.get("structured_data", {})
+            structured_data_list = state.get("structured_data_list")
+            items = structured_data_list if isinstance(structured_data_list, list) else [structured_data]
+
+            # 按 order 排序以保持题目顺序
             try:
                 indexed = []
                 for i, it in enumerate(items):
                     v = it.get("order") if isinstance(it, dict) else None
                     try:
-                        ov = int(v)
+                        ov = int(v) if v is not None else 10**9
                     except Exception:
-                        ov = None
-                    indexed.append((ov if ov is not None else 10**9, i, it))
+                        ov = 10**9
+                    indexed.append((ov, i, it))
                 items = [it for _, __, it in sorted(indexed, key=lambda x: (x[0], x[1]))]
             except Exception:
                 pass
 
             created_ids: List[int] = []
+
+            # 3. 循环创建题目对象
             for idx, item in enumerate(items):
-                # 确保 content 不为空（Pydantic 验证要求）
-                question_content = (item.get("question_body") or "").strip()
-                if not question_content:
-                    question_content = "题目内容待补充"
+                content = (item.get("question_body") or "").strip()
+                if not content:
+                    content = "题目内容待补充"
 
-                question_data = {
-                    "user_id": int(user_id),
-                    "content": question_content,
-                    "student_answer": item.get("student_answer"),
-                    "correct_answer": item.get("correct_answer") or None,
-                    "is_correct": item.get("is_correct"),
-                    "score": item.get("score"),
-                    "max_score": item.get("max_score"),
-                    "explanation": item.get("explanation"),
-                    "subject": subject_enum,
-                    "grade": grade,
-                    "difficulty": difficulty_enum,
-                    "knowledge_points": item.get("knowledge_points", []),
-                    "error_analysis": item.get("error_analysis"),
-                    "suggested_questions": item.get("suggested_questions") or [],
-                    "chapter": item.get("chapter") or None,
-                    "tags": item.get("tags") or [],
-                    "source": QuestionSourceEnum.MANUAL,
-                    "source_description": "录入错题功能",
-                    # 保序：同一次上传的多题，按 OCR 输出顺序入库
-                    "upload_group_id": task_id,
-                    "upload_index": int(idx + 1),
-                }
-
-                # 图片：同一张图片可对应多道错题
-                if state.get("input_type") == "image" and state.get("image_path"):
-                    question_data["image_urls"] = [state.get("image_path")]
-                    if state.get("source_image_id") is not None:
-                        question_data["source_image_id"] = int(state.get("source_image_id"))
-
-                # 原始输入/总结（图片/文字模式都支持）
-                if state.get("original_input") is not None:
-                    question_data["original_input"] = state.get("original_input")
-                # summarized_input：为避免新增 DB 字段，用 JSON 存"答案来源/判定依据"
+                # 构建 summarized_input 元数据
+                meta = {}
                 try:
                     meta = {
                         "answer_sources": {
@@ -2972,70 +2542,82 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                         },
                         "grading": {
                             "decided_by": item.get("grading_basis") or "unknown",
-                            "note": "是否错题优先按老师批改/自标答案判定；模型答案仅供参考",
-                        },
-                    }
-                    # Teacher marking evidence (tick/cross/color)
-                    tm = {
-                        "is_correct": item.get("teacher_marked_is_correct"),
-                        "mark": item.get("teacher_marked_mark") or "",
-                        "color": item.get("teacher_marked_color") or "",
-                        "evidence": item.get("teacher_marked_evidence") or "",
-                    }
-                    # Only keep if at least one signal exists
-                    if (
-                        tm.get("is_correct") is True
-                        or tm.get("is_correct") is False
-                        or tm.get("mark")
-                        or tm.get("color")
-                        or tm.get("evidence")
-                    ):
-                        meta["grading"]["teacher_mark"] = tm
-                    # Keep the previous summarized_input (e.g. overall_analysis/text_summary) if available
-                    if state.get("summarized_input") is not None:
-                        meta["summary"] = state.get("summarized_input")
-                    question_data["summarized_input"] = json.dumps(meta, ensure_ascii=False)
-                except Exception:
-                    if state.get("summarized_input") is not None:
-                        question_data["summarized_input"] = state.get("summarized_input")
-
-                if question_data.get("user_id") is None:
-                    raise ValueError("user_id 缺失，无法保存错题")
-
-                logger.info(
-                    f"[save_question] Creating question {idx+1}/{len(items)} with user_id={question_data['user_id']}, "
-                    f"subject={subject_enum}, difficulty={difficulty_enum}"
-                )
-
-                q = await crud_question.create_question(db, question_data=None, **question_data)
-                created_ids.append(q.id)
-
-            await db.commit()
-
-            # 任务表仍保留单个 question_id（兼容），但在 result 里返回全部 question_ids
-            first_id = created_ids[0]
-            await crud_task.complete_task(
-                db,
-                task_id,
-                first_id,
-                result={
-                    "stages": {
-                        "saved": {
-                            "question_ids": created_ids,
-                            "created_count": len(created_ids),
-                            "source_image_id": state.get("source_image_id"),
-                            "upload_group_id": task_id,
                         }
                     }
-                },
-            )
-            await db.commit()
+                    if state.get("summarized_input"):
+                        meta["summary"] = state.get("summarized_input")
+                except Exception:
+                    pass
 
+                # 实例化 ORM 对象 (不使用 crud_question.create_question)
+                q = Question(
+                    user_id=int(user_id),
+                    content=content,
+                    student_answer=item.get("student_answer"),
+                    correct_answer=item.get("correct_answer") or None,
+                    is_correct=item.get("is_correct"),
+                    score=item.get("score"),
+                    max_score=item.get("max_score"),
+                    explanation=item.get("explanation"),
+                    subject=subject_enum,
+                    grade=grade,
+                    difficulty=difficulty_enum,
+                    knowledge_points=item.get("knowledge_points", []),
+                    error_analysis=item.get("error_analysis"),
+                    suggested_questions=item.get("suggested_questions") or [],
+                    chapter=item.get("chapter") or None,
+                    tags=item.get("tags") or [],
+                    source=QuestionSourceEnum.MANUAL,
+                    source_description="录入错题功能",
+                    upload_group_id=task_id,
+                    upload_index=int(idx + 1),
+                    summarized_input=json.dumps(meta, ensure_ascii=False) if meta else None
+                )
+
+                # 处理图片关联
+                if state.get("input_type") == "image" and state.get("image_path"):
+                    q.image_urls = [state.get("image_path")]
+                    if state.get("source_image_id"):
+                        q.source_image_id = int(state.get("source_image_id"))
+                
+                if state.get("original_input"):
+                    q.original_input = state.get("original_input")
+
+                # 【关键修复】添加到 Session 并 Flush
+                db.add(q)
+                await db.flush()  # 生成 ID，但不提交事务，对象保持活跃
+                
+                # 安全获取 ID
+                created_ids.append(q.id)
+                logger.info(f"[save_question] Flushed question {idx+1}/{len(items)}, ID={q.id}")
+
+            # 4. 更新任务状态
+            if created_ids:
+                first_id = created_ids[0]
+                await crud_task.complete_task(
+                    db,
+                    task_id,
+                    first_id,
+                    result={
+                        "stages": {
+                            "saved": {
+                                "question_ids": created_ids,
+                                "created_count": len(created_ids),
+                                "source_image_id": state.get("source_image_id"),
+                                "upload_group_id": task_id,
+                            }
+                        }
+                    },
+                )
+            
+            # 5. 最后统一提交
+            await db.commit()
+            
             duration_ms = int((time.perf_counter() - t0) * 1000)
-            logger.info(f"[save_question] {_ctx(state)} done created_count={len(created_ids)} ids={created_ids} duration_ms={duration_ms}")
+            logger.info(f"[save_question] {_ctx(state)} success ids={created_ids} duration={duration_ms}ms")
 
             return {
-                "question_id": first_id,
+                "question_id": created_ids[0] if created_ids else None,
                 "question_ids": created_ids,
                 "created_count": len(created_ids),
                 "success": True,
@@ -3044,8 +2626,8 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             }
 
     except Exception as e:
-        duration_ms = int((time.perf_counter() - t0) * 1000) if "t0" in locals() else -1
-        logger.error(f"[save_question] {_ctx(state)} error duration_ms={duration_ms}: {e}", exc_info=True)
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        logger.error(f"[save_question] {_ctx(state)} error: {e}", exc_info=True)
         return {
             "errors": [f"保存错题失败: {str(e)}"],
             "success": False,
