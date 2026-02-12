@@ -1,6 +1,6 @@
 """
 WZY embedding module (student TODO).
 
-Reference: `training/modules/tony/embedding/`
+Reference: `training/modules/wzy/embedding/`
 """
 

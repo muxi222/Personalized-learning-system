@@ -1,0 +1,20 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: wzy-vllm
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: wzy-vllm
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    # TODO: replace with a real metric (QPS/latency) via Prometheus Adapter.
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+

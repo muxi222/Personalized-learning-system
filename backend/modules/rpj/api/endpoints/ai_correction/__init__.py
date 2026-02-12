@@ -1,3 +1,3 @@
-"""WZM module - AI correction endpoints subpackage."""
+"""RPJ module - AI correction endpoints subpackage."""
 
 

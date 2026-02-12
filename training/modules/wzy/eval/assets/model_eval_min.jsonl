@@ -1,4 +1,20 @@
-{"id":"wzy-1","type":"freeform","prompt":"数学：请解释“一元二次方程”的判别式含义，并给 2 道由易到难的练习题（含答案）。","reference":""}
-{"id":"wzy-2","type":"freeform","prompt":"物理：请解释“牛顿第三定律”，并举一个生活例子。","reference":""}
-{"id":"wzy-3","type":"mcq","prompt":"选择题：下列哪个是勾股定理的正确表达？A. a^2=b^2+c^2 B. a=b+c C. a^2+b^2=c^2 D. a^2-b^2=c^2。只输出最终选项字母。","gold":"C","reference":"C"}
-
+{"id":"wzy-1","type":"freeform","prompt":"用初中生能理解的方式解释勾股定理，并给出一个实际应用例子。","reference":""}
+{"id":"wzy-2","type":"mcq","prompt":"选择题：下列哪个数是质数？A. 4 B. 5 C. 6 D. 8。请只输出最终选项字母。","gold":"B","reference":"B"}
+{"id":"wzy-3","type":"freeform","prompt":"用高中生能理解的方式解释导数的概念，并举例说明它在实际问题中的应用。","reference":""}
+{"id":"wzy-4","type":"mcq","prompt":"选择题：函数 f(x) = 2x + 3 在 x=1 处的导数是？A. 2 B. 3 C. 5 D. 0。请只输出最终选项字母。","gold":"A","reference":"A"}
+{"id":"wzy-5","type":"freeform","prompt":"解释如何计算圆的周长，公式是什么？并说明为什么这个公式成立。","reference":""}
+{"id":"wzy-6","type":"mcq","prompt":"选择题：下列哪个几何图形是平行四边形？A. 正方形 B. 梯形 C. 圆形 D. 三角形。请只输出最终选项字母。","gold":"A","reference":"A"}
+{"id":"wzy-7","type":"freeform","prompt":"简述概率中的加法原理，并给出一个简单例子帮助理解。","reference":""}
+{"id":"wzy-8","type":"mcq","prompt":"选择题：sin(90°) 的值是？A. 0 B. 1 C. -1 D. 0.5。请只输出最终选项字母。","gold":"B","reference":"B"}
+{"id":"wzy-9","type":"freeform","prompt":"解释负数相乘的规则，为什么负负得正？用生活例子说明。","reference":""}
+{"id":"wzy-10","type":"mcq","prompt":"选择题：二次方程 ax^2 + bx + c = 0 的判别式是？A. b^2 - 4ac B. b^2 + 4ac C. 2b - 4ac D. b - 4ac。请只输出最终选项字母。","gold":"A","reference":"A"}
+{"id":"wzy-11","type":"freeform","prompt":"用初中生能理解的方式解释牛顿第一定律（惯性定律），并举例说明。","reference":""}
+{"id":"wzy-12","type":"mcq","prompt":"选择题：力的国际单位是？A. 焦耳 B. 牛顿 C. 瓦特 D. 帕斯卡。请只输出最终选项字母。","gold":"B","reference":"B"}
+{"id":"wzy-13","type":"freeform","prompt":"描述光的折射定律，并用一个生活例子（如筷子在水中弯曲）帮助记忆。","reference":""}
+{"id":"wzy-14","type":"mcq","prompt":"选择题：根据能量守恒定律，能量？A. 可以创造 B. 可以消灭 C. 总量不变 D. 只能转换形式。请只输出最终选项字母。","gold":"C","reference":"C"}
+{"id":"wzy-15","type":"freeform","prompt":"解释电磁感应的基本原理，并说明它在发电机中的应用。","reference":""}
+{"id":"wzy-16","type":"mcq","prompt":"选择题：下列哪种简单机械是杠杆？A. 滑轮 B. 斜面 C. 螺丝 D. 所有以上。请只输出最终选项字母。","gold":"D","reference":"D"}
+{"id":"wzy-17","type":"freeform","prompt":"用高中生能理解的方式解释相对论中的质能方程 E=mc^2，并简述其意义。","reference":""}
+{"id":"wzy-18","type":"mcq","prompt":"选择题：欧姆定律的公式是？A. V=IR B. P=IV C. F=ma D. E=mc^2。请只输出最终选项字母。","gold":"A","reference":"A"}
+{"id":"wzy-19","type":"freeform","prompt":"解释热传递的三种方式（传导、对流、辐射），并各举一个例子。","reference":""}
+{"id":"wzy-20","type":"mcq","prompt":"选择题：波的干涉现象中，当两波相位相同时，会发生？A. 相消干涉 B. 相长干涉 C. 无干涉 D. 反射。请只输出最终选项字母。","gold":"B","reference":"B"}

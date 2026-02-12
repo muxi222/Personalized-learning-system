@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
+from .api.endpoints.companion import chat
 from .config import settings
 from .api.router import api_router
 from backend.core.db.session import init_db, close_db
@@ -152,6 +153,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+app.include_router(
+    chat.router,
+    prefix="/api/v1/companion",
+    tags=["Companion Chat"],
+)
 
 # Health check endpoint   
 @app.get("/health", tags=["Health"])

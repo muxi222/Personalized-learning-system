@@ -63,6 +63,7 @@ def build_exam_analysis_prompt(*, subject: str, grade: str, user_hint: Optional[
 5) 识别“学生作答 vs 老师批阅”的规则（尽量提高准确度）：
    - 通常黑色/铅笔/原印刷为学生作答或题干；红色/蓝色等彩色笔迹更可能是老师批改或学生自标
    - student_answer_raw 在选择题中需要仔细识别字母，如"A/a/𝒜/𝒶/𝓐/𝓪"应识别为"A"，"B/b/ℬ/𝓑"应识别为"B"，"C/c/𝒞/𝓒"应识别为"C"，"D/d/𝒟/𝒹/𝓓/𝓭"应被识别为"D"；必须要仔细识别"B"与"D"，请仔细观察其笔画结构：如果是"B"，通常会有上下两个圆弧；如果是"D"，通常只有一个大的右侧圆弧
+   - teacher_marked_answer 是在学生答案旁边的老师答案，一般不会有对号或者叉号在其上面，一般是彩色字迹，需要仔细辨别，如果没有则省略
    - teacher_marked_is_correct 只有在明确看到“√/✓/✔/对”或“×/✗/✘/错”且能对应到该题时才填写；如果你看到一个类似“反向的数字3”或者“带有长尾巴的类似B的符号”，那很可能是一个**“半对符号”（Symbol: ⍻）**，不要将其识别为杂乱的线条，此情况下也应该返回false；不确定就填 null
    - teacher_marked_color 仅在能明显判断颜色时填写（red/blue/black），否则填 unknown 或省略
    - teacher_marked_evidence 用 <=30 字说明你看到的证据（例如“红色√在第2题旁”或“蓝色×在A选项旁”）

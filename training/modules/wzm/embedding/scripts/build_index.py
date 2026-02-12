@@ -64,7 +64,7 @@ def main():
 
     args = parser.parse_args()
 
-    subjects = _parse_subjects(args.subjects, defaults.get("subjects", ["history", "geography", "other"]))
+    subjects = _parse_subjects(args.subjects, defaults.get("subjects", ["chemistry"]))
 
     if args.embedding_backend == "hash":
         backend = load_hashing_backend(dimension=int(args.hash_dim))

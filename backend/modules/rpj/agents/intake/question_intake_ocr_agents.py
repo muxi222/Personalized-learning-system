@@ -1,32 +1,27 @@
 """
-错题录入OCR Agent - Question Intake OCR Agent
-专门用于"录入错题"功能，与现有的 QuestionIntakeAgent 区分
+错题录入OCR Agent - Question Intake OCR Agent (RPJ模块版本)
+专门用于"录入错题"功能，支持语文、英语、政治学科
 
-功能流程:
-1. 接收用户输入 (图片/文字JSON)
-2. 图片模式: OCR识别题目内容
-3. 文字模式: 大模型处理总结
-4. 数据存储 - 保存到数据库（记录原始输入和总结后的输入）
-5. 触发异步Embedding
+RPJ模块支持的学科: chinese, english, politics
 """
 
-import logging
-import json
 import os
+import uuid
+import json
+import logging
 import time
 from typing import Dict, Any, Optional, List, Tuple
 from collections import Counter
 
 from langgraph.graph import StateGraph, END
 
-from backend.core.agents.state import QuestionIntakeState
 from backend.core.agents.base_agent import BaseAgent
-from backend.modules.wzm.config import settings
+from backend.modules.rpj.config import settings
 
 logger = logging.getLogger(__name__)
 
 # -------------------------
-# Logging helpers (wzm)
+# Logging helpers
 # -------------------------
 def _ctx(state: Dict[str, Any]) -> str:
     """Compact log context for tracing one intake request across stages."""
@@ -40,12 +35,6 @@ def _ctx(state: Dict[str, Any]) -> str:
 def _extract_json_object_loose(raw: str) -> Optional[Dict[str, Any]]:
     """
     Best-effort JSON extractor for *either* a JSON object or a JSON array.
-    - If a JSON object is found, return it.
-    - If a JSON array is found (common when model outputs results as a top-level list),
-      wrap it as {"results": [...]} for backward compatibility with callers.
-
-    Models sometimes prepend/append text or code fences, or include stray braces/brackets.
-    This scans for the first parseable top-level JSON object/array.
     """
     if not raw:
         return None
@@ -89,7 +78,6 @@ def _extract_json_object_loose(raw: str) -> Optional[Dict[str, Any]]:
                             if wrapped is not None:
                                 return wrapped
                         except Exception:
-                            # keep scanning; later balanced segment may be valid JSON
                             continue
         return None
 
@@ -108,11 +96,10 @@ def _extract_json_object_loose(raw: str) -> Optional[Dict[str, Any]]:
             return got
         return None
 
-    # If code fences exist, try each fenced segment first (pick the one that parses)
+    # If code fences exist, try each fenced segment first
     if "```" in s:
         s2 = s.replace("```json", "```").replace("```JSON", "```")
         parts = [p.strip() for p in s2.split("```") if p.strip()]
-        # try larger blocks first (more likely to contain the JSON payload)
         for part in sorted(parts, key=len, reverse=True)[:12]:
             got = _parse_any(part)
             if got is not None:
@@ -120,17 +107,27 @@ def _extract_json_object_loose(raw: str) -> Optional[Dict[str, Any]]:
 
     return _parse_any(s)
 
-# 全局变量：保存初始状态，供节点访问（用于解决 LangGraph Dict state 类型的状态传递问题）
+# 全局变量：保存初始状态
 _initial_state_cache: Dict[str, Dict[str, Any]] = {}
 
 # =========================
-# 学科分类（chapter/tags）
+# 学科分类（chapter/tags） - RPJ模块版本
 # =========================
 CATEGORY_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
-    # 化学
-    "chemistry": {
-        "junior": ["身边的化学物质", "物质构成的奥秘", "物质的化学变化", "化学与社会发展", "科学探究", "综合"],
-        "senior": ["化学反应原理", "物质结构与性质", "有机化学基础", "化学实验", "化学与生活", "综合"],
+    # 语文
+    "chinese": {
+        "junior": ["现代文阅读", "古诗文阅读", "语言文字运用", "写作", "名著导读", "综合"],
+        "senior": ["现代文阅读", "古诗文阅读", "语言文字运用", "写作", "名著导读", "综合"],
+    },
+    # 英语
+    "english": {
+        "junior": ["听力", "阅读", "完形填空", "语法填空", "写作", "口语", "综合"],
+        "senior": ["听力", "阅读", "完形填空", "语法填空", "写作", "口语", "综合"],
+    },
+    # 政治
+    "politics": {
+        "junior": ["心理健康", "道德与法治", "国情教育", "综合"],
+        "senior": ["经济生活", "政治生活", "文化生活", "生活与哲学", "综合"],
     },
     "other": {
         "junior": ["综合"],
@@ -139,16 +136,37 @@ CATEGORY_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
 }
 
 KNOWLEDGE_POINT_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
-    # 化学
-    "chemistry": {
+    # 语文
+    "chinese": {
         "junior": [
-            "空气与氧气", "碳和碳的氧化物", "水与常见的溶液", "金属与金属矿物", 
-            "酸和碱", "盐和化肥", "质量守恒定律", "化学方程式", "综合"
+            "字音字形", "词语理解", "句子运用", "修辞手法", "文学常识",
+            "古诗词鉴赏", "文言文阅读", "现代文阅读", "写作技巧", "综合"
         ],
         "senior": [
-            "物质的量", "氧化还原反应", "离子反应", "原子结构与元素周期律", 
-            "化学键与分子结构", "化学反应速率与平衡", "电解质溶液", "电化学基础", 
-            "有机化合物", "综合"
+            "语言文字运用", "现代文阅读", "古诗词鉴赏", "文言文阅读",
+            "名著阅读", "写作技巧", "综合"
+        ],
+    },
+    # 英语
+    "english": {
+        "junior": [
+            "词汇", "语法", "阅读理解", "完形填空", "听力",
+            "口语表达", "写作技巧", "综合"
+        ],
+        "senior": [
+            "词汇", "语法", "阅读理解", "完形填空", "听力",
+            "口语表达", "写作技巧", "综合"
+        ],
+    },
+    # 政治
+    "politics": {
+        "junior": [
+            "个人成长", "人际交往", "社会公德", "法律常识",
+            "国情教育", "综合"
+        ],
+        "senior": [
+            "经济学原理", "政治制度", "文化传承", "哲学思想",
+            "时事政治", "综合"
         ],
     },
     "other": {
@@ -160,7 +178,6 @@ KNOWLEDGE_POINT_TAXONOMY: Dict[str, Dict[str, List[str]]] = {
 def normalize_grade_bucket(grade: Optional[str]) -> str:
     """
     将前端输入的年级/学段归一化为 junior/senior。
-    支持：初中/高中/junior/senior/七八九/高一二三 等模糊输入。
     """
     if not grade:
         return "junior"
@@ -172,26 +189,27 @@ def normalize_grade_bucket(grade: Optional[str]) -> str:
     return "junior"
 
 def get_category_candidates(subject: str, grade: Optional[str]) -> List[str]:
+    """获取章节分类候选列表"""
     bucket = normalize_grade_bucket(grade)
     return CATEGORY_TAXONOMY.get(subject, CATEGORY_TAXONOMY.get("other", {})).get(bucket, ["综合"])
 
 def get_knowledge_point_candidates(subject: str, grade: Optional[str]) -> List[str]:
+    """获取知识点候选列表"""
     bucket = normalize_grade_bucket(grade)
     return KNOWLEDGE_POINT_TAXONOMY.get(subject, KNOWLEDGE_POINT_TAXONOMY.get("other", {})).get(bucket, ["综合"])
 
 def get_text_reasoning_model_names() -> List[str]:
     """
-    文本深度推理模型列表（用于：学科判定、分类、错因分析、总结等“纯文本”任务）。
-    - 读取 WZM_TEXT_REASONING_MODELS=gemini-3-pro-preview,gpt-5.2,...
-    - 为空则回退到 settings.GEMINI_MODEL
+    文本深度推理模型列表
     """
-    raw = (os.getenv("WZM_TEXT_REASONING_MODELS") or "").strip()
+    raw = (os.getenv("RPJ_TEXT_REASONING_MODELS") or "").strip()
     if raw:
         models = [m.strip() for m in raw.split(",") if m.strip()]
         return models
     return [settings.GEMINI_MODEL or "gemini-2.5-flash"]
 
 def _sanitize_label(label: str, *, max_len: int = 30) -> str:
+    """清理标签"""
     s = (label or "").strip()
     if s.lower().startswith("new:"):
         s = s[4:].strip()
@@ -200,21 +218,13 @@ def _sanitize_label(label: str, *, max_len: int = 30) -> str:
         s = s[:max_len].strip()
     return s
 
-
 def _coerce_results_list(
     parsed: Any,
     *,
     expected_len: int,
 ) -> Optional[List[Dict[str, Any]]]:
     """
-    Coerce various model output shapes into the canonical:
-      {"results": [ { "index": int, ... }, ... ]}
-
-    We keep this tolerant because upstream LLM sometimes returns:
-    - results as dict keyed by index
-    - results as JSON string
-    - top-level list (treated as results)
-    - alternative keys like items/data/result
+    Coerce various model output shapes into the canonical format
     """
     if parsed is None:
         return None
@@ -224,7 +234,6 @@ def _coerce_results_list(
         out = [x for x in parsed if isinstance(x, dict)]
         if not out:
             return None
-        # ensure index
         for i, r in enumerate(out):
             if not isinstance(r.get("index"), int):
                 r["index"] = i
@@ -252,14 +261,12 @@ def _coerce_results_list(
                     r["index"] = i
             return out
         if isinstance(obj, dict):
-            # Nested wrapper like {"results": {...}} or {"items": [...]}
             for k in ("results", "items", "data"):
                 inner = obj.get(k)
                 got = _from_any(inner)
                 if got is not None:
                     return got
 
-            # Dict keyed by index -> list
             out: List[Dict[str, Any]] = []
             for k, v in obj.items():
                 if not isinstance(v, dict):
@@ -268,19 +275,16 @@ def _coerce_results_list(
                     try:
                         v["index"] = int(k)
                     except Exception:
-                        # fallback later
                         pass
                 out.append(v)
             if not out:
                 return None
-            # stable order by index then insertion
             def _key(r: Dict[str, Any]) -> tuple[int, int]:
                 idx = r.get("index")
                 if not isinstance(idx, int):
                     idx = 10**9
                 return (idx, id(r))
             out.sort(key=_key)
-            # fill missing indices
             for i, r in enumerate(out):
                 if not isinstance(r.get("index"), int):
                     r["index"] = i
@@ -298,8 +302,7 @@ def _coerce_results_list(
 
     def _maybe_shift_one_based_indices(got: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Some models output 1-based indices (1..n) even when we provide 0-based indices.
-        If we detect 1-based indexing, shift all indices by -1 so they align with base_items.
+        处理1-based索引
         """
         try:
             idxs = [int(r.get("index")) for r in got if isinstance(r.get("index"), int)]
@@ -311,9 +314,6 @@ def _coerce_results_list(
             return got
         min_idx = min(idxs)
         max_idx = max(idxs)
-        # Typical cases:
-        # - expected_len == n and model returns 1..n
-        # - expected_len == 1 and model returns index=1
         if min_idx == 1 and expected_len > 0 and (max_idx == expected_len or max_idx == len(got)):
             for r in got:
                 if isinstance(r.get("index"), int):
@@ -323,12 +323,9 @@ def _coerce_results_list(
     for c in candidates:
         got = _from_any(c)
         if got is not None:
-            # Fix common 1-based indexing before clamping
             got = _maybe_shift_one_based_indices(got)
-            # best-effort clamp to expected size
             if expected_len > 0:
                 got = [r for r in got if isinstance(r.get("index"), int)]
-                # keep only indices within range
                 got = [r for r in got if 0 <= int(r["index"]) < expected_len]
             return got
     return None
@@ -342,14 +339,13 @@ async def get_dynamic_taxonomy_candidates(
     max_kps: int = 50,
 ) -> Dict[str, List[str]]:
     """
-    从数据库中动态提取“该用户在该学科下已经出现过的分类”，作为 taxonomy 候选。
-    这是减少人工穷举的关键手段：让 taxonomy 随数据自然生长，但通过“归一化/NEW门控”避免发散。
+    从数据库中动态提取分类候选
     """
     from sqlalchemy import select, func
     from backend.core.db.session import async_session_maker
     from backend.core.db.models import Question, SubjectEnum
 
-    # seed（兜底）：仍保留少量“教学大类”，但不要求穷举所有知识点/章节
+    # 基础候选
     seed_chapters = get_category_candidates(subject, grade) or ["综合"]
     seed_kps = get_knowledge_point_candidates(subject, grade) or ["综合"]
 
@@ -362,7 +358,7 @@ async def get_dynamic_taxonomy_candidates(
     kps: List[str] = []
 
     async with async_session_maker() as db:
-        # 章节/题目类型：可直接 group by
+        # 获取章节
         stmt_ch = (
             select(Question.chapter, func.count(Question.id))
             .where(
@@ -378,7 +374,7 @@ async def get_dynamic_taxonomy_candidates(
         rows = (await db.execute(stmt_ch)).all()
         chapters = [str(ch).strip() for ch, _cnt in rows if ch and str(ch).strip()]
 
-        # 知识点：JSON list，SQLite 中不好按元素 group by，直接拉取后 Python 计数（用户数据量通常可控）
+        # 获取知识点
         stmt_kp = (
             select(Question.knowledge_points)
             .where(
@@ -397,7 +393,7 @@ async def get_dynamic_taxonomy_candidates(
                         counter[s] += 1
         kps = [kp for kp, _cnt in counter.most_common(max_kps)]
 
-    # 合并 seed + 动态候选
+    # 合并去重
     def uniq(seq: List[str]) -> List[str]:
         out: List[str] = []
         seen = set()
@@ -426,18 +422,22 @@ async def deep_enrich_ocr_items(
     log_ctx: str = "",
 ) -> List[Dict[str, Any]]:
     """
-    图片模式的“深度解析”：在 OCR(浅层) 输出基础上，用强文本模型做二次推理，补全/强化：
-    - 更完整的题干表达
-    - 更可靠的知识点/章节分类
-    - 错因分析（更详细）
-    - 举一反三（suggested_questions）
+    深度解析：在OCR基础上进行二次推理
     """
     if not items:
         return items
 
-    max_items = int(os.getenv("WZM_DEEP_ENRICH_MAX_ITEMS") or "10")
-    max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-    max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
+    max_items = int(os.getenv("RPJ_DEEP_ENRICH_MAX_ITEMS") or "10")
+    max_new_chapters = int(os.getenv("RPJ_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
+    max_new_kps = int(os.getenv("RPJ_MAX_NEW_KPS_PER_REQUEST") or "6")
+
+    # 根据学科构建提示词
+    subject_prompts = {
+        "chinese": "你是资深语文教研员与讲题老师。",
+        "english": "你是资深英语教研员与讲题老师。",
+        "politics": "你是资深政治教研员与讲题老师。",
+    }
+    subject_desc = subject_prompts.get(user_selected_subject, "你是资深教研员与讲题老师。")
 
     prompt_items = [
         {
@@ -451,19 +451,19 @@ async def deep_enrich_ocr_items(
         for i, it in enumerate(items[:max_items])
     ]
 
-    prompt = f"""你是资深化学教研员与讲题老师。现在给你 OCR(浅层) 提取出的多道错题，请你做“深度解析 + 分类归一化”。
+    prompt = f"""{subject_desc}现在给你 OCR(浅层) 提取出的多道错题，请你做"深度解析 + 分类归一化"。
 
 用户选择学科：{user_selected_subject}
 年级/学段：{grade or "未知"}
 
 请输出：
-1) detected_subject（必须是 ["chemistry", "other"] 之一）与 confidence(0~1)
+1) detected_subject（必须是 ["{user_selected_subject}", "other"] 之一）与 confidence(0~1)
 2) 对每道题输出 results：
-   - question_content：更清晰、更完整的题干（主要修正化学式、离子符号的 OCR 错误）
+   - question_content：更清晰、更完整的题干（修正OCR错误）
    - student_answer / correct_answer：若能从上下文推断则补全，否则保留原样
    - explanation：简要解题思路（可为空）
-   - error_analysis：错因分析（要具体，如：配平错误、原理不清）
-   - suggested_questions：3~5 个“同类型训练点”或“举一反三方向”（短句）
+   - error_analysis：错因分析（要具体）
+   - suggested_questions：3~5 个"同类型训练点"或"举一反三方向"（短句）
    - chapter：优先从候选 chapters 选择；如需新增用 "NEW:xxx"（新增总数不超过 {max_new_chapters}）
    - knowledge_points：优先从候选 knowledge_points 选择 1~3 个；如需新增用 "NEW:xxx"（新增总数不超过 {max_new_kps}）
    - tags：2~6 个短标签
@@ -476,7 +476,7 @@ async def deep_enrich_ocr_items(
 
 严格输出 JSON：
 {{
-  "detected_subject": "chemistry|other",
+  "detected_subject": "{user_selected_subject}|other",
   "confidence": 0.0,
   "results": [
     {{
@@ -504,7 +504,7 @@ async def deep_enrich_ocr_items(
     if not isinstance(results, list):
         return items
 
-    # 门控：整个请求中 NEW 的数量受限
+    # NEW门控
     new_chapters: List[str] = []
     new_kps: List[str] = []
 
@@ -524,7 +524,7 @@ async def deep_enrich_ocr_items(
         if isinstance(r.get("tags"), list):
             items[idx]["tags"] = [str(x).strip() for x in r["tags"] if str(x).strip()][:6]
 
-        # 分类归一化（候选优先 + NEW 门控）
+        # 分类归一化
         allowed_chapters = set(taxonomy.get(user_selected_subject, {}).get("chapters", []) or [])
         allowed_kps = set(taxonomy.get(user_selected_subject, {}).get("knowledge_points", []) or [])
 
@@ -560,7 +560,6 @@ async def deep_enrich_ocr_items(
 
     return items
 
-
 async def call_router_llm(
     prompt: str,
     *,
@@ -572,9 +571,8 @@ async def call_router_llm(
     trace_stage: str = "llm",
 ) -> str:
     """
-    [调试版] 增加详细网络/代理/耗时日志
+    调用LLM
     """
-    # 复用 _call_internal 逻辑，避免代码重复
     content, _ = await _call_router_llm_internal(
         prompt=prompt,
         model=model,
@@ -598,7 +596,7 @@ async def call_router_llm_with_meta(
     trace_stage: str = "llm",
 ) -> Tuple[str, str]:
     """
-    [调试版] 增加详细网络/代理/耗时日志 (带元数据返回)
+    调用LLM（带元数据返回）
     """
     return await _call_router_llm_internal(
         prompt=prompt,
@@ -624,9 +622,8 @@ async def _call_router_llm_internal(
 ) -> Any:
     import httpx
     import asyncio
-    import os
     import time
-    from backend.core.services.llm_utils import get_llm_semaphore, parse_retry_after_seconds, compute_backoff_delay_seconds
+    from backend.core.services.llm_utils import get_llm_semaphore
     from backend.core.services.llm_trace import write_llm_trace
 
     if not settings.LLM_API_ENDPOINT:
@@ -636,20 +633,11 @@ async def _call_router_llm_internal(
     endpoint = settings.LLM_API_ENDPOINT.rstrip("/")
     models_to_try = [model] if (model and model.strip()) else get_text_reasoning_model_names()
     
-    # === [Debug Log] 打印环境诊断信息 ===
-    logger.info(f"--- [LLM Call Start] ---")
-    logger.info(f"Trace: {log_ctx}")
-    logger.info(f"Target: {endpoint}/chat/completions")
-    logger.info(f"Models: {models_to_try}")
-    logger.info(f"Proxy(HTTP): {os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy', 'Not Set')}")
-    logger.info(f"Proxy(HTTPS): {os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy', 'Not Set')}")
-    # ===================================
-
     headers = {}
     if getattr(settings, "LLM_API_KEY", None):
         headers["authorization"] = f"Bearer {settings.LLM_API_KEY}"
 
-    timeout_s = float(os.getenv("WZM_TEXT_REASONING_TIMEOUT_SECONDS") or os.getenv("LLM_TEXT_TIMEOUT_SECONDS") or "300")
+    timeout_s = float(os.getenv("RPJ_TEXT_REASONING_TIMEOUT_SECONDS") or "300")
     
     async with httpx.AsyncClient(base_url=endpoint, timeout=timeout_s, follow_redirects=True) as client:
         last_err: Optional[Exception] = None
@@ -666,8 +654,6 @@ async def _call_router_llm_internal(
                         "max_tokens": max_tokens,
                     }
                     
-                    logger.info(f"[LLM_DEBUG] Sending request... Model={m} Attempt={attempt+1}")
-                    
                     if trace_id:
                         write_llm_trace(trace_id=str(trace_id), stage=str(trace_stage), kind=f"req_{attempt+1}", payload=req, suffix="json")
 
@@ -675,7 +661,6 @@ async def _call_router_llm_internal(
                         resp = await client.post("/chat/completions", json=req, headers=headers)
                     
                     duration = (time.perf_counter() - t_start) * 1000
-                    logger.info(f"[LLM_DEBUG] Response received: Status={resp.status_code}, Time={duration:.2f}ms")
 
                     if trace_id:
                         try:
@@ -691,7 +676,6 @@ async def _call_router_llm_internal(
                         )
 
                     if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
-                        logger.warning(f"[LLM_DEBUG] Retryable error {resp.status_code}, retrying...")
                         await asyncio.sleep(1)
                         continue
                         
@@ -700,13 +684,6 @@ async def _call_router_llm_internal(
                     
                     content = data["choices"][0]["message"]["content"]
                     
-                    # === [Debug Log] 检查返回内容是否为空 ===
-                    if not content:
-                        logger.warning(f"[LLM_DEBUG] ⚠️ WARNING: Model returned EMPTY content! Model={m}")
-                    else:
-                        logger.info(f"[LLM_DEBUG] Content length: {len(content)} chars")
-                    # ======================================
-
                     if return_meta:
                         return content, m
                     return content
@@ -714,13 +691,11 @@ async def _call_router_llm_internal(
                 except Exception as e:
                     duration = (time.perf_counter() - t_start) * 1000
                     last_err = e
-                    logger.error(f"[LLM_DEBUG] Connection Error ({type(e).__name__}): {e} (Time: {duration:.2f}ms)")
                     if attempt < max_attempts - 1:
                         await asyncio.sleep(1)
                         continue
-                    break # Next model
+                    break
 
-        # Error handling
         if last_err:
             logger.error(f"[LLM_DEBUG] All attempts failed. Last error: {last_err}")
             raise last_err or RuntimeError("LLM call failed")
@@ -734,7 +709,7 @@ async def call_router_llm_json(
     trace_stage: str = "llm_json",
 ) -> Optional[Dict[str, Any]]:
     """
-    调用 LLM 并尝试解析 JSON（允许返回内容包含围栏/额外文本）。
+    调用 LLM 并尝试解析 JSON
     """
     import re
 
@@ -747,7 +722,6 @@ async def call_router_llm_json(
         trace_id=trace_id,
         trace_stage=trace_stage,
     )
-    # Prefer robust extractor; fallback to simple regex for compatibility
     parsed = _extract_json_object_loose(raw or "")
     if parsed is not None:
         return parsed
@@ -759,10 +733,11 @@ async def call_router_llm_json(
         except Exception:
             return None
     return None
+
 class QuestionIntakeOCRAgent(BaseAgent):
     """
-    错题录入OCR Agent
-    专门用于"录入错题"功能，支持图片和文字两种格式
+    错题录入OCR Agent - RPJ模块版本
+    支持语文、英语、政治学科
     """
 
     def __init__(self):
@@ -770,52 +745,36 @@ class QuestionIntakeOCRAgent(BaseAgent):
         self._graph = None
 
     def get_graph(self, initial_state: Optional[Dict[str, Any]] = None):
-        """获取图实例，支持传入初始状态以解决状态传递问题"""
-        # 每次处理时都创建新的图，这样可以传入初始状态
+        """获取图实例"""
         return create_intake_ocr_graph(initial_state)
 
     async def process(
         self,
-        input_type: str,  # 'image' or 'text'
+        input_type: str,
         user_id: int,
         task_id: str,
         subject: str,
         difficulty: str = "medium",
         grade: str = "",
         source_image_id: Optional[int] = None,
-        # 图片模式参数
         image_file: Optional[Any] = None,
         image_path: Optional[str] = None,
-        # 文字模式参数
         text_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        处理错题录入（录入错题功能专用）
-
-        Args:
-            input_type: 输入类型 ('image' 或 'text')
-            user_id: 用户ID
-            task_id: 任务ID
-            subject: 学科
-            difficulty: 难度
-            image_file: 图片文件对象（图片模式）
-            image_path: 图片路径（图片模式）
-            text_data: 文字JSON数据（文字模式）
-
-        Returns:
-            处理结果，包含question_id等
+        处理错题录入
         """
         # Validate subject
         if not self.validate_subject(subject):
-            logger.error(f"Subject '{subject}' not supported by WZM module")
+            logger.error(f"Subject '{subject}' not supported by RPJ module")
             return {
                 "task_id": task_id,
                 "question_id": None,
                 "success": False,
-                "errors": [f"Subject '{subject}' not supported by WZM module. Supported: {settings.SUBJECTS}"],
+                "errors": [f"Subject '{subject}' not supported by RPJ module. Supported: {settings.SUBJECTS}"],
             }
 
-        # 构建初始状态字典（使用 Dict 而不是 QuestionIntakeState，因为我们需要添加自定义字段）
+        # 构建初始状态
         state_dict = {
             "raw_input": "",
             "user_id": user_id,
@@ -827,7 +786,7 @@ class QuestionIntakeOCRAgent(BaseAgent):
             "subject": subject,
             "difficulty": difficulty,
             "grade": grade,
-            "input_type": input_type,  # 自定义字段用于路由
+            "input_type": input_type,
             "source_image_id": source_image_id,
         }
 
@@ -850,7 +809,6 @@ class QuestionIntakeOCRAgent(BaseAgent):
                     "success": False,
                     "errors": ["文字模式需要提供text_data"],
                 }
-            # 保存原始输入（JSON格式）
             state_dict["original_input"] = json.dumps(text_data, ensure_ascii=False)
             state_dict["text_data"] = text_data
         else:
@@ -863,38 +821,26 @@ class QuestionIntakeOCRAgent(BaseAgent):
 
         # 执行处理流程
         try:
-            # 保存初始状态到全局缓存，供节点访问（解决 LangGraph Dict state 类型的状态传递问题）
+            # 保存初始状态到全局缓存
             _initial_state_cache[task_id] = state_dict.copy()
             
-            # 创建图实例，传入初始状态（使用闭包确保节点能访问到初始状态）
+            # 创建图实例
             graph = self.get_graph(initial_state=state_dict)
             
-            # 使用 astream 并手动合并状态，确保 user_id 等字段不会丢失
-            # 这与 LangGraph 的 Dict[str, Any] state 类型有关，需要手动合并
-            # 参考其他 agent 的实现：始终保留初始状态
+            # 执行图
             final_state = None
             async for state in graph.astream(state_dict):
                 for node_name, node_output in state.items():
                     if isinstance(node_output, dict):
-                        # 合并策略：初始状态 + 累积状态 + 节点输出
-                        # 这样可以确保初始状态中的关键字段（如 user_id, task_id）始终被保留
                         final_state = {**state_dict, **(final_state or {}), **node_output}
             
-            # 如果 final_state 仍然为 None，使用初始状态
             if final_state is None:
                 final_state = state_dict.copy()
             
-            # 最后确保关键字段存在（双重保险）
-            if final_state.get("user_id") is None and state_dict.get("user_id") is not None:
-                final_state["user_id"] = state_dict.get("user_id")
-            if final_state.get("task_id") is None and state_dict.get("task_id") is not None:
-                final_state["task_id"] = state_dict.get("task_id")
-            if final_state.get("subject") is None and state_dict.get("subject") is not None:
-                final_state["subject"] = state_dict.get("subject")
-            if final_state.get("difficulty") is None and state_dict.get("difficulty") is not None:
-                final_state["difficulty"] = state_dict.get("difficulty")
-            if final_state.get("input_type") is None and state_dict.get("input_type") is not None:
-                final_state["input_type"] = state_dict.get("input_type")
+            # 确保关键字段存在
+            for key in ["user_id", "task_id", "subject", "difficulty", "input_type"]:
+                if final_state.get(key) is None and state_dict.get(key) is not None:
+                    final_state[key] = state_dict.get(key)
             
             # 清理缓存
             try:
@@ -902,7 +848,7 @@ class QuestionIntakeOCRAgent(BaseAgent):
             except Exception:
                 pass
             
-            # 从最终状态构建返回结果
+            # 构建返回结果
             return {
                 "task_id": final_state.get("task_id", task_id),
                 "question_id": final_state.get("question_id"),
@@ -926,19 +872,14 @@ class QuestionIntakeOCRAgent(BaseAgent):
 
 def create_intake_ocr_graph(initial_state: Optional[Dict[str, Any]] = None):
     """创建录入错题OCR处理图"""
-    # 使用 Dict[str, Any] 作为状态类型，更灵活
     from typing import Dict, Any
     
     # 如果提供了初始状态，使用闭包让节点能访问到初始状态
     if initial_state:
-        # 创建包装函数，确保节点能访问到初始状态
         def wrap_node(node_func):
             async def wrapped_node(state: Dict[str, Any]) -> Dict[str, Any]:
-                # 合并初始状态和当前状态，确保关键字段不丢失
                 merged_state = {**initial_state, **state}
                 result = await node_func(merged_state)
-                # 重要：对 Dict 状态，确保“累计状态”不会被丢失（LangGraph 默认 reducer 行为在不同版本可能不一致）
-                # 返回：merged_state + node 输出（node 输出优先）
                 if isinstance(result, dict):
                     return {**merged_state, **result}
                 return merged_state
@@ -950,7 +891,6 @@ def create_intake_ocr_graph(initial_state: Optional[Dict[str, Any]] = None):
         normalizer_agent_wrapped = wrap_node(normalizer_agent)
         save_question_wrapped = wrap_node(save_question)
     else:
-        # 如果没有提供初始状态，使用原始函数
         process_input_wrapped = process_input
         ocr_agent_wrapped = ocr_agent
         reasoner_agent_wrapped = reasoner_agent
@@ -980,8 +920,8 @@ def create_intake_ocr_graph(initial_state: Optional[Dict[str, Any]] = None):
     )
 
     graph.add_edge("ocr_agent", "reasoner_agent")
+    
     def route_after_reasoner(state: Dict[str, Any]) -> str:
-        # fatal_error -> stop early (usually subject mismatch)
         if state.get("fatal_error") is True:
             return "end"
         return "continue"
@@ -1007,18 +947,15 @@ def route_by_input_type(state: Dict[str, Any]) -> str:
 async def process_input(state: Dict[str, Any]) -> Dict[str, Any]:
     """处理输入节点"""
     logger.info(f"[process_input] Task {state.get('task_id')}: Processing input")
-    # 从全局缓存获取初始状态，确保关键字段不丢失
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
         initial_state = _initial_state_cache[task_id]
-        # 合并初始状态和当前状态
         merged_state = {**initial_state, **state}
         return {
-            **merged_state,  # 保留所有初始字段
+            **merged_state,
             "current_step": "process_input",
             "progress": 10.0,
         }
-    # 如果没有缓存，只返回新增字段
     return {
         "current_step": "process_input",
         "progress": 10.0,
@@ -1026,9 +963,7 @@ async def process_input(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    OCR Agent（多模态快）：
-    - 只负责“图片 -> OCR浅层结构化提取”
-    - 不做深度推理、错因分析、taxonomy 归一化（这些交给后续 Reasoner/Normalizer）
+    OCR Agent - RPJ版本
     """
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
@@ -1037,13 +972,12 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     t0 = time.perf_counter()
     image_path = state.get("image_path")
     logger.info(
-        f"[ocr_agent] {_ctx(state)} start vision_model={os.getenv('WZM_OCR_VISION_MODEL') or os.getenv('OCR_VISION_MODEL') or settings.GEMINI_MODEL} "
+        f"[ocr_agent] {_ctx(state)} start vision_model={os.getenv('RPJ_OCR_VISION_MODEL') or settings.GEMINI_MODEL} "
         f"image={os.path.basename(image_path) if image_path else None}"
     )
 
     image_path = state.get("image_path")
-    # Default subject set to chemistry
-    subject = state.get("subject", "chemistry")
+    subject = state.get("subject", "chinese")
     grade = state.get("grade", "")
 
     if not image_path:
@@ -1055,31 +989,30 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         ocr_service = get_gemini_ocr_service(settings)
         await ocr_service.initialize()
 
+        # 学科映射
         subject_map = {
-            "chemistry": SubjectType.CHEMISTRY,
-            "history": SubjectType.HISTORY,
-            "geography": SubjectType.GEOGRAPHY,
-            "math": SubjectType.MATH,
-            "physics": SubjectType.PHYSICS,
-            "biology": SubjectType.BIOLOGY,
-            "english": SubjectType.ENGLISH,
             "chinese": SubjectType.CHINESE,
+            "english": SubjectType.ENGLISH,
+            "politics": SubjectType.OTHER,  # 政治暂时使用OTHER
             "other": SubjectType.OTHER,
         }
-        subject_type = subject_map.get(str(subject).lower(), SubjectType.CHEMISTRY) # Default to CHEMISTRY
+        subject_type = subject_map.get(str(subject).lower(), SubjectType.CHINESE)
+
+        # 根据不同学科构建提示词
+        subject_hints = {
+            "chinese": "这是语文错题识别场景：一张图片可能包含多道错题。请识别图片中的所有题目，特别注意文言文、古诗词、现代文阅读、作文等题型。",
+            "english": "这是英语错题识别场景：一张图片可能包含多道错题。请识别图片中的所有题目，特别注意阅读理解、完形填空、语法填空、写作等题型。",
+            "politics": "这是政治错题识别场景：一张图片可能包含多道错题。请识别图片中的所有题目，特别注意选择题、简答题、论述题等题型。",
+        }
+        user_hint = subject_hints.get(subject, "这是错题识别场景：一张图片可能包含多道错题。请识别图片中的所有题目。")
+        user_hint += " 请务必返回每道题在图片中的边界框坐标 (box_2d)，格式为 [ymin, xmin, ymax, xmax] (0-1000归一化坐标)。"
+        user_hint += " 请按试卷中题目出现的顺序组织 questions 数组。"
 
         analysis_result = await ocr_service.analyze_exam_image(
             image_path=image_path,
             subject=subject_type,
             grade=str(grade or ""),
-            user_hint=(
-                "这是化学错题识别场景：一张图片可能包含多道错题。"
-                "请识别图片中的所有题目（尽量逐题拆分），并提取每道题的题干、学生答案、正确答案、知识点。"
-                "非常重要：请务必返回每道题在图片中的边界框坐标 (box_2d)，格式为 [ymin, xmin, ymax, xmax] (0-1000归一化坐标)，否则无法进行批改。"
-                "提取每道题的题干、学生答案、正确答案、知识点..."
-                "非常重要：请特别注意化学方程式的配平、离子符号的上标下标、以及有机化学结构式的识别。"
-                "请按试卷中题目出现的顺序组织 questions 数组。"
-            ),
+            user_hint=user_hint,
             trace_id=str(task_id) if task_id else None,
             trace_stage="ocr_agent",
         )
@@ -1100,7 +1033,6 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 if not q_text:
                     continue
                 qn = _qnum(qi)
-                # 排序 key：优先用题号；若无题号则用模型输出顺序(i+1)，避免把“无题号题目”统一挪到末尾导致顺序错乱
                 order_key = qn if qn is not None else (i + 1)
                 pairs.append(
                     (
@@ -1112,14 +1044,12 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                             "correct_answer": (getattr(qi, "correct_answer", "") or "").strip(),
                             "question_type": (getattr(qi, "question_type", "") or "").strip(),
                             "knowledge_points": getattr(qi, "knowledge_points", []) or [],
-                            # 浅层 OCR 阶段不保证错因分析，留空给 Reasoner
                             "error_analysis": (getattr(qi, "error_analysis", "") or "").strip(),
                             "question_number": qn,
                         },
                     )
                 )
 
-            # 生成稳定的试卷顺序字段 order（1..n），用于后续入库写入 upload_index
             for j, (_ord, _i, d) in enumerate(sorted(pairs, key=lambda x: (x[0], x[1]))):
                 d["order"] = j + 1
                 extracted_items.append(d)
@@ -1137,13 +1067,12 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 }
             ]
 
-        # 更新任务状态（供 SSE 推送阶段性进度）
+        # 更新任务状态
         if task_id:
             from backend.core.db.session import async_session_maker
             from backend.core.crud import crud_task
             from backend.core.db.models import TaskStatusEnum
             async with async_session_maker() as db:
-                # 写入 OCR 阶段产物（增量 patch）
                 compact_items = [
                     {
                         "index": i,
@@ -1153,7 +1082,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                         "question_type": (it.get("question_type") or "")[:50],
                         "knowledge_points": (it.get("knowledge_points") or [])[:5],
                     }
-                    for i, it in enumerate(extracted_items[: int(os.getenv("WZM_DEEP_ENRICH_MAX_ITEMS") or "10")])
+                    for i, it in enumerate(extracted_items[: int(os.getenv("RPJ_DEEP_ENRICH_MAX_ITEMS") or "10")])
                 ]
                 await crud_task.update_task_status(
                     db,
@@ -1162,7 +1091,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                     progress=25.0,
                     current_step="OCR识别完成，正在进行深度解析...",
                     result_patch={
-                        "ocr_model": os.getenv("WZM_OCR_VISION_MODEL") or os.getenv("OCR_VISION_MODEL"),
+                        "ocr_model": os.getenv("RPJ_OCR_VISION_MODEL"),
                         "items": compact_items,
                         "original_input_preview": (getattr(analysis_result, "raw_response", "") or "")[:1500],
                     },
@@ -1194,8 +1123,7 @@ async def ocr_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Reasoner Agent（强推理补全）- 串行分批版
-    为了防止多题同时请求导致 LLM 超时截断，改为逐题（或小批次）串行处理。
+    Reasoner Agent - RPJ版本
     """
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
@@ -1203,12 +1131,11 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     t0 = time.perf_counter()
     input_type = state.get("input_type", "image")
-    # Default subject set to chemistry
-    subject = state.get("subject", "chemistry")
+    subject = state.get("subject", "chinese")
     grade = state.get("grade", "")
     user_id = state.get("user_id")
 
-    # 1. 准备待处理项
+    # 准备待处理项
     if input_type == "image":
         base_items = list(state.get("ocr_items") or [])
         if not base_items:
@@ -1223,37 +1150,34 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "knowledge_points": text_data.get("knowledge_points", [])
         }]
 
-    # 2. 准备 Taxonomy (只获取一次)
+    # 准备 Taxonomy
     taxonomy = {}
     try:
-        for s in ["chemistry", "other"]:
+        # RPJ模块支持的学科
+        rpj_subjects = ["chinese", "english", "politics", "other"]
+        for s in rpj_subjects:
             taxonomy[s] = await get_dynamic_taxonomy_candidates(
                 user_id=int(user_id or 0), subject=s, grade=grade, max_chapters=20, max_kps=30
             )
     except Exception:
-        taxonomy = {s: {"chapters": ["综合"], "knowledge_points": ["综合"]} for s in ["chemistry", "other"]}
+        for s in ["chinese", "english", "politics", "other"]:
+            taxonomy[s] = {"chapters": ["综合"], "knowledge_points": ["综合"]}
 
-    # 3. 分批处理配置
-    # 关键修改：BATCH_SIZE 设为 1，确保单次请求不超时
-    BATCH_SIZE = 1 
+    # 分批处理配置
+    BATCH_SIZE = 1
     total_items = len(base_items)
     
     logger.info(f"[reasoner_agent] {_ctx(state)} start serial processing. Total={total_items}, Batch={BATCH_SIZE}")
 
-    # 用于收集所有批次的结果
     all_results_buffer: List[Dict[str, Any]] = []
     detected_subjects = []
     
-    # === 开始循环分批处理 ===
     for i in range(0, total_items, BATCH_SIZE):
         batch_slice = base_items[i : i + BATCH_SIZE]
         current_indices = range(i, i + len(batch_slice))
         
-        # 构造当前批次的 prompt_items
         prompt_items = []
         for local_idx, item in enumerate(batch_slice):
-            # 注意：传给 LLM 的 index 建议用相对 index (0,1...) 或者绝对 index
-            # 这里我们用绝对 index，方便后续对应
             global_idx = i + local_idx
             prompt_items.append({
                 "index": global_idx,
@@ -1265,15 +1189,23 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
         logger.info(f"[reasoner_agent] Processing batch {i//BATCH_SIZE + 1}: Items {list(current_indices)}")
 
+        # 根据不同学科构建提示词
+        subject_prompts = {
+            "chinese": "你是资深语文教研员。请对以下题目做'深度解析 + 分类提议'。特别注意文言文、古诗词、现代文阅读、作文等题型。",
+            "english": "你是资深英语教研员。请对以下题目做'深度解析 + 分类提议'。特别注意阅读理解、完形填空、语法填空、写作等题型。",
+            "politics": "你是资深政治教研员。请对以下题目做'深度解析 + 分类提议'。特别注意选择题、简答题、论述题等题型。",
+        }
+        subject_prompt = subject_prompts.get(subject, "你是资深教研员。请对以下题目做'深度解析 + 分类提议'。")
+
         # 构造 Prompt
-        prompt = f"""你是资深化学教研员。请对以下题目做“深度解析 + 分类提议”。
+        prompt = f"""{subject_prompt}
 当前处理第 {i+1} 到 {i+len(batch_slice)} 题（共 {total_items} 题）。
 
 用户选择学科：{subject}
 年级：{grade or "未知"}
 
 请输出 JSON：
-1) detected_subject ("chemistry"|"other")
+1) detected_subject ("{subject}"|"other")
 2) results：数组，包含每道题的：
    - index: 必须与输入一致
    - question_content (修正OCR错误)
@@ -1297,7 +1229,6 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 }}"""
 
         try:
-            # 调用 LLM
             parsed = await call_router_llm_json(
                 prompt,
                 log_ctx=f"{_ctx(state)} batch_{i}",
@@ -1306,11 +1237,9 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             
             if parsed:
-                # 收集学科判定
                 if parsed.get("detected_subject"):
                     detected_subjects.append(parsed.get("detected_subject"))
                 
-                # 收集结果
                 batch_results = _coerce_results_list(parsed, expected_len=len(batch_slice)) or []
                 all_results_buffer.extend(batch_results)
             else:
@@ -1318,14 +1247,11 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
         except Exception as e:
             logger.error(f"[reasoner_agent] Batch {i} error: {e}")
-            # 即使出错也继续处理下一个批次，不要中断整个流程
             continue
 
-    # 4. 合并结果到 base_items
-    # 只要有部分成功，就算成功
+    # 合并结果到 base_items
     if not all_results_buffer:
         logger.warning("[reasoner_agent] No valid results from any batch. Returning OCR items as is.")
-        # 可以在这里标记一个 warning error，但不阻断
     else:
         for r in all_results_buffer:
             if not isinstance(r, dict): continue
@@ -1334,7 +1260,6 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             
             if 0 <= idx < len(base_items):
                 target = base_items[idx]
-                # 覆盖字段
                 for key in ["question_content", "student_answer", "correct_answer", 
                             "explanation", "error_analysis", "chapter"]:
                     if r.get(key): 
@@ -1344,22 +1269,19 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
                 if r.get("tags"): target["tags"] = r["tags"]
                 if r.get("suggested_questions"): target["suggested_questions"] = r["suggested_questions"]
 
-    # 5. 学科一致性检查 (基于多数投票)
-    final_detected = "chemistry"
+    # 学科一致性检查
+    final_detected = subject
     if detected_subjects:
         from collections import Counter
         final_detected = Counter(detected_subjects).most_common(1)[0][0]
         
-    mismatch_threshold = 0.75
-    # 这里简单处理，如果发现严重的学科不匹配才报错，否则宽容处理
-    if final_detected not in (subject, "chemistry", "other") and len(detected_subjects) == total_items:
-         # 仅示例，实际上可根据需求决定是否报错
-         pass
+    if final_detected not in (subject, "other") and len(detected_subjects) == total_items:
+        logger.warning(f"[reasoner_agent] Subject mismatch: detected={final_detected}, selected={subject}")
 
     duration_ms = int((time.perf_counter() - t0) * 1000)
     logger.info(f"[reasoner_agent] {_ctx(state)} done. Updated {len(all_results_buffer)}/{total_items} items. Time={duration_ms}ms")
 
-    # 6. 更新任务状态进度
+    # 更新任务状态进度
     if task_id:
         from backend.core.db.session import async_session_maker
         from backend.core.crud import crud_task
@@ -1380,7 +1302,6 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             await db.commit()
 
     out = {"reasoned_items": base_items, "current_step": "reasoner_agent", "progress": 55.0}
-    # 传递上下文
     for k in ["user_id", "task_id", "subject", "difficulty", "input_type", "image_path", "grade", "original_input", "summarized_input"]:
         if state.get(k) is not None:
             out[k] = state.get(k)
@@ -1388,10 +1309,7 @@ async def reasoner_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Normalizer Agent：
-    - taxonomy 归一（候选优先）
-    - NEW 门控
-    - 同义合并（将 NEW 标签尽量映射到已存在候选）
+    Normalizer Agent - RPJ版本
     """
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
@@ -1404,8 +1322,7 @@ async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     items_in = len(items or [])
     logger.info(f"[normalizer_agent] {_ctx(state)} start items_in={items_in}")
 
-    # Default subject set to chemistry
-    subject = state.get("subject", "chemistry")
+    subject = state.get("subject", "chinese")
     grade = state.get("grade", "")
     user_id = int(state.get("user_id") or 0)
     difficulty = state.get("difficulty", "medium")
@@ -1442,14 +1359,14 @@ async def normalizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     allowed_chapters = set(candidates.get("chapters") or [])
     allowed_kps = set(candidates.get("knowledge_points") or [])
 
-    max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-    max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
+    max_new_chapters = int(os.getenv("RPJ_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
+    max_new_kps = int(os.getenv("RPJ_MAX_NEW_KPS_PER_REQUEST") or "6")
 
-    # 同义合并：对 NEW 标签尽量映射到候选
+    # 同义合并
     async def merge_synonyms(kind: str, new_labels: List[str], cand: List[str]) -> Dict[str, str]:
         if not new_labels or not cand:
             return {}
-        prompt = f"""你是化学教研员。将新标签尽量合并到已有候选（同义/近义/上位类）。
+        prompt = f"""你是{subject}教研员。将新标签尽量合并到已有候选（同义/近义/上位类）。
 
 kind={kind}
 候选（可合并目标）：
@@ -1556,7 +1473,6 @@ kind={kind}
                 "knowledge_points": it.get("knowledge_points") or [],
                 "chapter": it.get("chapter") or None,
                 "tags": it.get("tags") or [],
-                # 保序字段（可选）：供 save_question 写入 upload_index
                 "order": it.get("order"),
                 "question_number": it.get("question_number"),
                 "subject": subject,
@@ -1585,7 +1501,7 @@ kind={kind}
                             "knowledge_points": (it.get("knowledge_points") or [])[:5],
                             "tags": (it.get("tags") or [])[:6],
                         }
-                        for i, it in enumerate(normalized_items[: int(os.getenv("WZM_DEEP_ENRICH_MAX_ITEMS") or "10")])
+                        for i, it in enumerate(normalized_items[: int(os.getenv("RPJ_DEEP_ENRICH_MAX_ITEMS") or "10")])
                     ],
                 },
                 result_stage="normalizer",
@@ -1611,863 +1527,28 @@ kind={kind}
         "grade": grade,
     }
 
-async def ocr_extract(state: Dict[str, Any]) -> Dict[str, Any]:
-    """OCR提取节点（图片模式）"""
-    # 从全局缓存获取初始状态，确保关键字段不丢失
-    task_id = state.get("task_id")
-    if task_id and task_id in _initial_state_cache:
-        initial_state = _initial_state_cache[task_id]
-        # 合并初始状态和当前状态
-        state = {**initial_state, **state}
-    
-    logger.info(f"[ocr_extract] Task {state.get('task_id')}: Extracting text from image")
-
-    from backend.core.services.gemini_ocr_service import get_gemini_ocr_service
-
-    image_path = state.get("image_path")
-    # Default subject set to chemistry
-    subject = state.get("subject", "chemistry")
-    task_id = state.get("task_id")
-
-    if not image_path:
-        return {
-            "errors": ["没有提供图片路径"],
-            "current_step": "ocr_extract",
-            "progress": 10.0,
-        }
-
-    try:
-        ocr_service = get_gemini_ocr_service(settings)
-        await ocr_service.initialize()
-
-        # 使用 analyze_exam_image 方法进行 OCR 识别
-        # 将 subject 字符串转换为 SubjectType
-        from backend.core.services.gemini_ocr_service import SubjectType
-        
-        # 映射 subject 字符串到 SubjectType
-        subject_map = {
-            "chemistry": SubjectType.CHEMISTRY,
-            "history": SubjectType.HISTORY,
-            "geography": SubjectType.GEOGRAPHY,
-            "math": SubjectType.MATH,
-            "physics": SubjectType.PHYSICS,
-            "biology": SubjectType.BIOLOGY,
-            "english": SubjectType.ENGLISH,
-            "chinese": SubjectType.CHINESE,
-            "other": SubjectType.OTHER,
-        }
-        subject_type = subject_map.get(subject.lower(), SubjectType.OTHER)
-        
-        # 调用 analyze_exam_image 方法
-        analysis_result = await ocr_service.analyze_exam_image(
-            image_path=image_path,
-            subject=subject_type,
-            grade="",
-            user_hint=(
-                "这是错题识别场景：一张图片可能包含多道错题。"
-                "请识别图片中的所有题目（尽量逐题拆分），并提取每道题的题干、学生答案、正确答案、知识点、错因分析。"
-                "如果无法判断对错，也请把图片中出现的题目都列出来，按题号/分隔线顺序输出。"
-            ),
-            trace_id=str(task_id) if task_id else None,
-            trace_stage="ocr_extract",
-        )
-        
-        ocr_result = analysis_result.raw_response or ""
-
-        # 从分析结果中提取所有题目（多题支持）
-        extracted_items: List[Dict[str, Any]] = []
-        if analysis_result.questions:
-            import unicodedata
-
-            def _norm_answer(s: str) -> str:
-                if s is None:
-                    return ""
-                try:
-                    s = str(s)
-                except Exception:
-                    return ""
-                s = unicodedata.normalize("NFKC", s).strip().lower()
-                # strip common prefixes
-                for p in ["答案", "答", "正确答案", "参考答案", "最终答案", "ans", "answer"]:
-                    if s.startswith(p):
-                        s = s[len(p):].lstrip(":：.。 )）")
-                # remove whitespace and common punctuation
-                drop = " \t\r\n,，.。;；:：、|/\\·•*（）()[]【】{}<>《》“”\"'"
-                s = "".join(ch for ch in s if ch not in drop)
-                return s
-
-            def _split_candidates(s: str) -> List[str]:
-                # Split common multi-answer separators BEFORE normalization so we don't lose the separators.
-                if not isinstance(s, str):
-                    try:
-                        s = str(s or "")
-                    except Exception:
-                        return []
-                raw = unicodedata.normalize("NFKC", s)
-                seps = ["或", "或者", "/", "|", "、", ",", "，", ";", "；", "\n"]
-                parts = [raw]
-                for sep in seps:
-                    next_parts: List[str] = []
-                    for p in parts:
-                        if sep in p:
-                            next_parts.extend([x for x in p.split(sep) if x.strip()])
-                        else:
-                            next_parts.append(p)
-                    parts = next_parts
-                out = []
-                for p in parts:
-                    n = _norm_answer(p)
-                    if n and n not in out:
-                        out.append(n)
-                return out
-
-            def _infer_is_correct(student_answer: str, correct_answer: str, score: Any, max_score: Any):
-                sa_n = _norm_answer(student_answer or "")
-                ca_raw = str(correct_answer or "")
-                if sa_n and ca_raw.strip():
-                    cands = _split_candidates(ca_raw)
-                    if cands and sa_n in cands:
-                        return True
-                    if cands:
-                        return False
-                try:
-                    ms = float(max_score)
-                    sc = float(score)
-                    if ms > 0:
-                        return sc >= ms
-                except Exception:
-                    pass
-                return None
-
-            def _qnum(x):
-                v = getattr(x, "question_number", None)
-                try:
-                    iv = int(v)
-                    return iv if iv > 0 else None
-                except Exception:
-                    return None
-
-            pairs = []
-            for i, qi in enumerate(list(analysis_result.questions or [])):
-                q_text = (qi.question_text or "").strip()
-                # 忽略空题干
-                if not q_text:
-                    continue
-                qn = _qnum(qi)
-                # 保序：优先使用模型输出顺序（更接近图片上的题目顺序），不要因 question_number 误识别而乱序
-                order_key = i + 1
-                student_raw = (getattr(qi, "student_answer_raw", None) or qi.student_answer or "").strip()
-                teacher_marked = (getattr(qi, "teacher_marked_answer", None) or "").strip()
-                model_inferred = (getattr(qi, "model_inferred_answer", None) or "").strip() or (
-                    ((qi.correct_answer or "") if qi.correct_answer else "").strip()
-                )
-                teacher_marked_is_correct = getattr(qi, "teacher_marked_is_correct", None)
-                teacher_marked_mark = (getattr(qi, "teacher_marked_mark", None) or "").strip()
-                teacher_marked_color = (getattr(qi, "teacher_marked_color", None) or "").strip()
-                teacher_marked_evidence = (getattr(qi, "teacher_marked_evidence", None) or "").strip()
-
-                def _extract_choice_letter(s: str) -> Optional[str]:
-                    """
-                    Extract A/B/C/D from noisy strings like:
-                    - "B"
-                    - "选B"
-                    - "答案C"
-                    - "B (批注: ...)"
-                    """
-                    if not isinstance(s, str):
-                        return None
-                    import re
-
-                    txt = s.strip().upper()
-                    if not txt:
-                        return None
-                    # Prefer patterns that explicitly mention answer/option
-                    m = re.search(r"(?:答案|选|选择|正确答案)[:：\\s]*([ABCD])\\b", txt)
-                    if m:
-                        return m.group(1)
-                    # Fallback: any standalone A/B/C/D
-                    m = re.search(r"\\b([ABCD])\\b", txt)
-                    if m:
-                        return m.group(1)
-                    # Last resort: single char
-                    if len(txt) == 1 and txt in ("A", "B", "C", "D"):
-                        return txt
-                    return None
-
-                # 判定优先级：老师批改/自标正确答案 > 模型推断答案 > 分数兜底 > unknown
-                decided_by = None
-                inferred_is_correct = None
-                # 0) 如果卷面有明确的“对/错”符号（如红色√/×），它优先级最高
-                if teacher_marked_is_correct is True or teacher_marked_is_correct is False:
-                    inferred_is_correct = bool(teacher_marked_is_correct)
-                    decided_by = "teacher_mark"
-
-                # 0.5) MCQ hard override (teacher correction beats model):
-                # Example: student chose B, teacher crossed out B and marked C -> wrong, correct=C.
-                stu_opt = _extract_choice_letter(student_raw)
-                tea_opt = _extract_choice_letter(teacher_marked)
-
-                # If teacher crossed out the student's option (common: red strike-through), treat as wrong.
-                if inferred_is_correct is None and stu_opt and str(teacher_marked_mark or "").lower() == "cross":
-                    inferred_is_correct = False
-                    decided_by = "teacher_mark"
-
-                # If teacher wrote the correct option letter, trust it.
-                if inferred_is_correct is None and stu_opt and tea_opt:
-                    inferred_is_correct = True if stu_opt == tea_opt else False
-                    decided_by = "teacher_marked"
-                    # Normalize teacher_marked/correct_answer to the option letter for storage
-                    teacher_marked = tea_opt
-
-                # 1) If still unknown, fall back to teacher-marked explicit answer text, then model inferred, then score.
-                if inferred_is_correct is None:
-                    if teacher_marked:
-                        inferred_is_correct = _infer_is_correct(student_raw, teacher_marked, None, None)
-                        decided_by = "teacher_marked"
-                    elif model_inferred:
-                        inferred_is_correct = _infer_is_correct(student_raw, model_inferred, None, None)
-                        decided_by = "model_inferred"
-                    else:
-                        inferred_is_correct = _infer_is_correct(
-                            student_raw,
-                            "",
-                            getattr(qi, "score", 0.0),
-                            getattr(qi, "max_score", 0.0),
-                        )
-                        decided_by = "score" if inferred_is_correct is not None else "unknown"
-                pairs.append(
-                    (
-                        order_key,
-                        i,
-                        {
-                            "question_content": q_text,
-                            "student_answer": student_raw,
-                            # correct_answer 入库字段优先用老师批改/自标答案；模型答案放到 answer_sources 供展示参考
-                            "correct_answer": teacher_marked,
-                            "teacher_marked_answer": teacher_marked,
-                            "teacher_marked_is_correct": teacher_marked_is_correct,
-                            "teacher_marked_mark": teacher_marked_mark,
-                            "teacher_marked_color": teacher_marked_color,
-                            "teacher_marked_evidence": teacher_marked_evidence,
-                            "model_inferred_answer": model_inferred,
-                            "grading_basis": decided_by,
-                            "question_type": (qi.question_type or "").strip(),
-                            "knowledge_points": qi.knowledge_points or [],
-                            "error_analysis": (qi.error_analysis or "").strip(),
-                            # 不要默认 False（会导致“无法判断”也被判错）；优先用答案比对/得分推断
-                            "is_correct": inferred_is_correct,
-                            "score": getattr(qi, "score", 0.0),
-                            "max_score": getattr(qi, "max_score", 0.0),
-                            "question_number": qn,
-                        },
-                    )
-                )
-
-            for j, (_ord, _i, d) in enumerate(sorted(pairs, key=lambda x: (x[0], x[1]))):
-                d["order"] = j + 1
-                extracted_items.append(d)
-
-        # fallback：如果没有解析出任何题目，至少保留一条
-        if not extracted_items:
-            extracted_items = [
-                {
-                    "question_content": (analysis_result.overall_analysis or "未能识别题目内容").strip() or "未能识别题目内容，请手动输入",
-                    "student_answer": "",
-                    "correct_answer": "",
-                    "question_type": "",
-                    "knowledge_points": analysis_result.weak_points or [],
-                    "error_analysis": "",
-                }
-            ]
-
-        # ===== 学科一致性校验 + 分类归一化（chapter + knowledge_points + tags）=====
-        # 目标：
-        # - 避免用户选择的学科与图片内容不匹配（给出明确提示）
-        # - 题目类型（chapter）必须从候选列表中选择，避免过度分散
-        # - 知识点（knowledge_points）也从候选列表中选择，便于检索与聚合
-        try:
-            grade = state.get("grade", "")
-            bucket = normalize_grade_bucket(grade)
-
-            # 动态 taxonomy：优先从 DB（该用户历史数据）抽取候选，再用 seed 兜底
-            # 这样无需手工穷举所有类型，同时通过“NEW门控+归一化”避免分类爆炸
-            taxonomy = {}
-            for s in ["chemistry", "other"]:
-                try:
-                    taxonomy[s] = await get_dynamic_taxonomy_candidates(
-                        user_id=int(state.get("user_id") or 0),
-                        subject=s,
-                        grade=grade,
-                        max_chapters=20,
-                        max_kps=30,
-                    )
-                except Exception:
-                    taxonomy[s] = {
-                        "chapters": get_category_candidates(s, grade),
-                        "knowledge_points": get_knowledge_point_candidates(s, grade),
-                    }
-
-            prompt_items = [
-                {
-                    "index": i,
-                    "question_content": (it.get("question_content") or "")[:800],
-                    "ocr_knowledge_points": it.get("knowledge_points", []),
-                }
-                for i, it in enumerate(extracted_items[:20])
-            ]
-
-            classify_prompt = f"""你是化学教研员，负责“学科判定 + 分类归一化”。一张图片可能包含多道题。
-
-用户选择学科：{subject}
-年级/学段：{grade or "未知"}（已归一化：{bucket}）
-
-请完成两件事：
-1) 判定图片内容最匹配的学科 detected_subject，必须是 ["chemistry", "other"] 之一，并给出置信度 confidence (0~1)。
-2) 对每道题做分类（允许“受控新增”，避免人工穷举）：
-   - chapter：优先从该学科 chapters 候选中选择 1 个；如确实需要新增，请输出 "NEW:你的新分类"（要短且概括）
-   - knowledge_points：优先从该学科 knowledge_points 候选中选择 1~3 个；如确实需要新增，请用 "NEW:xxx"
-   - tags：2~6 个中文短词（尽量从题干抽取，不要太碎）
-
-新增规则（反碎片化）：
-- 如果与候选语义接近，必须选候选，不要 NEW
-- NEW 的分类要“能覆盖一类题”，避免过细（如不要直接用题干原句）
-
-分类候选（请严格从候选中选择，避免自造过多新类别）：
-{json.dumps(taxonomy, ensure_ascii=False)}
-
-题目列表（每项含 index）：
-{json.dumps(prompt_items, ensure_ascii=False)}
-
-请严格输出 JSON（不要输出其它文字）：
-{{
-  "detected_subject": "chemistry|other",
-  "confidence": 0.0,
-  "results": [
-    {{"index": 0, "chapter": "...", "knowledge_points": ["..."], "tags": ["..."]}}
-  ]
-}}"""
-
-            parsed = await call_router_llm_json(
-                classify_prompt,
-                log_ctx=_ctx(state),
-                trace_id=str(task_id) if task_id else None,
-                trace_stage="subject_classifier",
-            )
-            detected = (parsed or {}).get("detected_subject")
-            conf = (parsed or {}).get("confidence")
-            try:
-                conf_f = float(conf)
-            except Exception:
-                conf_f = 0.0
-
-            if isinstance(detected, str):
-                detected = detected.strip().lower()
-
-            # 学科不匹配：给出明确提示并失败（置信度阈值可微调）
-            if detected in ("chemistry", "other") and detected != subject and conf_f >= 0.75:
-                msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或更换图片。"
-                logger.warning(f"[ocr_extract] subject mismatch: {msg}")
-                if task_id:
-                    from backend.core.db.session import async_session_maker
-                    from backend.core.crud import crud_task
-                    async with async_session_maker() as db:
-                        await crud_task.fail_task(db, task_id, msg)
-                        await db.commit()
-                return {
-                    "errors": [msg],
-                    "parse_success": False,
-                    "current_step": "ocr_extract",
-                    "progress": 20.0,
-                }
-
-            results = (parsed or {}).get("results")
-            if isinstance(results, list):
-                # 归一化写回
-                max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-                max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
-                new_chapters: List[str] = []
-                new_kps: List[str] = []
-
-                for r in results:
-                    if not isinstance(r, dict):
-                        continue
-                    idx = r.get("index")
-                    if not isinstance(idx, int) or idx < 0 or idx >= len(extracted_items):
-                        continue
-
-                    chapter = r.get("chapter")
-                    kp_list = r.get("knowledge_points")
-                    tags = r.get("tags")
-
-                    allowed_chapters = set(taxonomy.get(subject, {}).get("chapters", []) or [])
-                    allowed_kps = set(taxonomy.get(subject, {}).get("knowledge_points", []) or [])
-
-                    # chapter：候选优先，允许 NEW（受限）
-                    final_chapter = "综合"
-                    if isinstance(chapter, str):
-                        ch_raw = chapter.strip()
-                        if ch_raw in allowed_chapters:
-                            final_chapter = ch_raw
-                        elif ch_raw.lower().startswith("new:"):
-                            new_label = _sanitize_label(ch_raw)
-                            if new_label and len(new_chapters) < max_new_chapters:
-                                final_chapter = new_label
-                                if new_label not in new_chapters:
-                                    new_chapters.append(new_label)
-                    extracted_items[idx]["chapter"] = final_chapter
-
-                    # knowledge_points：候选优先，允许 NEW（受限，最多3个）
-                    normalized_kps: List[str] = []
-                    if isinstance(kp_list, list):
-                        for kp in kp_list:
-                            s_raw = str(kp).strip()
-                            if not s_raw:
-                                continue
-                            if s_raw in allowed_kps and s_raw not in normalized_kps:
-                                normalized_kps.append(s_raw)
-                            elif s_raw.lower().startswith("new:"):
-                                new_label = _sanitize_label(s_raw)
-                                if new_label and len(new_kps) < max_new_kps and new_label not in normalized_kps:
-                                    normalized_kps.append(new_label)
-                                    if new_label not in new_kps:
-                                        new_kps.append(new_label)
-                            if len(normalized_kps) >= 3:
-                                break
-                    if not normalized_kps:
-                        normalized_kps = ["综合"]
-                    extracted_items[idx]["knowledge_points"] = normalized_kps
-
-                    if isinstance(tags, list):
-                        extracted_items[idx]["tags"] = [str(t).strip() for t in tags if str(t).strip()][:6]
-        except Exception as e:
-            logger.warning(f"[ocr_extract] subject/category classification skipped/failed: {e}")
-
-        # ===== 深度解析（图片模式）：用强文本模型二次推理，补全错因分析/举一反三/更稳定分类 =====
-        try:
-            enabled = str(os.getenv("WZM_ENABLE_DEEP_ENRICH", "true")).lower() in ("1", "true", "yes", "y", "on")
-            if enabled:
-                extracted_items = await deep_enrich_ocr_items(
-                    user_selected_subject=subject,
-                    grade=grade,
-                    taxonomy=taxonomy,
-                    items=extracted_items,
-                    trace_id=str(task_id) if task_id else None,
-                    trace_stage="deep_enrich",
-                    log_ctx=_ctx(state),
-                )
-        except Exception as e:
-            logger.warning(f"[ocr_extract] deep enrich skipped/failed: {e}")
-
-        # fallback：保证 chapter/knowledge_points/tags 不为空，且不要产生过于碎的类型
-        for it in extracted_items:
-            if not it.get("chapter"):
-                it["chapter"] = "综合"
-            kps = it.get("knowledge_points") or []
-            if not kps:
-                it["knowledge_points"] = ["综合"]
-            if not isinstance(it.get("tags"), list):
-                it["tags"] = []
-
-        # 为兼容旧逻辑，保留第一题的 ocr_data
-        ocr_data = extracted_items[0]
-
-        logger.info(f"[ocr_extract] OCR completed: extracted_count={len(extracted_items)}")
-
-        # 更新任务状态：OCR完成
-        if task_id:
-            from backend.core.db.session import async_session_maker
-            from backend.core.crud import crud_task
-            from backend.core.db.models import TaskStatusEnum
-            async with async_session_maker() as db:
-                await crud_task.update_task_status(
-                    db,
-                    task_id,
-                    TaskStatusEnum.PROCESSING,
-                    progress=40.0,
-                    current_step="图片识别完成，正在解析题目结构..."
-                )
-                await db.commit()
-
-        # 返回结果，确保包含所有关键字段
-        result = {
-            "ocr_text": ocr_result,
-            "ocr_data": ocr_data,
-            "ocr_items": extracted_items,
-            "raw_input": ocr_data.get("question_content", ""),
-            # 供后续保存：记录原始大模型输出与总结内容
-            "original_input": ocr_result,
-            "summarized_input": getattr(analysis_result, "overall_analysis", "") or "",
-            "structured_data": {
-                "question_body": ocr_data.get("question_content", ""),
-                "student_answer": ocr_data.get("student_answer", ""),
-                "correct_answer": ocr_data.get("correct_answer", ""),
-                "question_type": ocr_data.get("question_type", ""),
-                "knowledge_points": ocr_data.get("knowledge_points", []),
-                "error_analysis": ocr_data.get("error_analysis", ""),
-                "chapter": ocr_data.get("chapter"),
-                "tags": ocr_data.get("tags", []),
-            },
-            "current_step": "ocr_extract",
-            "progress": 40.0,
-        }
-        # 确保关键字段被保留（从合并后的 state 中获取）
-        if state.get("user_id") is not None:
-            result["user_id"] = state.get("user_id")
-        if state.get("task_id") is not None:
-            result["task_id"] = state.get("task_id")
-        if state.get("subject") is not None:
-            result["subject"] = state.get("subject")
-        if state.get("difficulty") is not None:
-            result["difficulty"] = state.get("difficulty")
-        if state.get("input_type") is not None:
-            result["input_type"] = state.get("input_type")
-        if state.get("image_path") is not None:
-            result["image_path"] = state.get("image_path")
-        return result
-
-    except Exception as e:
-        logger.error(f"[ocr_extract] Error: {e}")
-        return {
-            "errors": [f"OCR 处理错误: {str(e)}"],
-            "current_step": "ocr_extract",
-            "progress": 10.0,
-        }
-
-async def llm_summarize(state: Dict[str, Any]) -> Dict[str, Any]:
-    """大模型总结节点（文字模式）"""
-    # 从全局缓存获取初始状态，确保关键字段不丢失
-    task_id = state.get("task_id")
-    if task_id and task_id in _initial_state_cache:
-        initial_state = _initial_state_cache[task_id]
-        # 合并初始状态和当前状态
-        state = {**initial_state, **state}
-        task_id = state.get("task_id")  # 重新获取 task_id
-    
-    logger.info(f"[llm_summarize] Task {state.get('task_id')}: Summarizing text input")
-
-    text_data = state.get("text_data", {})
-    # Default subject set to chemistry
-    subject = state.get("subject", "chemistry")
-
-    if not text_data:
-        return {
-            "errors": ["没有提供文字数据"],
-            "current_step": "llm_summarize",
-            "progress": 20.0,
-        }
-
-    try:
-        grade = state.get("grade", "")
-        bucket = normalize_grade_bucket(grade)
-
-        taxonomy = {}
-        for s in ["chemistry", "other"]:
-            try:
-                taxonomy[s] = await get_dynamic_taxonomy_candidates(
-                    user_id=int(state.get("user_id") or 0),
-                    subject=s,
-                    grade=grade,
-                    max_chapters=20,
-                    max_kps=30,
-                )
-            except Exception:
-                taxonomy[s] = {
-                    "chapters": get_category_candidates(s, grade),
-                    "knowledge_points": get_knowledge_point_candidates(s, grade),
-                }
-
-        prompt = f"""你是一个专业的学习助手与化学教研员。请对以下错题信息进行总结和结构化处理，并完成“学科判定 + 分类归一化”，便于错题本检索（按知识点/按题目类型）。
-
-原始输入：
-{json.dumps(text_data, ensure_ascii=False, indent=2)}
-
-请提取并总结以下信息：
-1. **题目内容**: 清晰、完整的题目描述
-2. **学生答案**: 学生的错误答案（如果有）
-3. **正确答案**: 正确答案（如果有）
-4. **知识点**: 优先从候选 knowledge_points 中选择 1~3 个；如确实需要新增，请用 "NEW:xxx"（要短且概括）
-5. **题目类型**: 选择题/填空题/解答题等
-6. **题目类型/章节（chapter）**: 优先从候选 chapters 中选择 1 个；如确实需要新增，请用 "NEW:你的新分类"（要短且概括）
-7. **标签**: 2~6个 tags（中文短词，用于检索）
-8. **学科判定**: detected_subject 必须是 ["chemistry", "other"] 之一，并输出 confidence(0~1)
-
-请以JSON格式返回，格式如下：
-{{
-  "detected_subject": "chemistry|other",
-  "confidence": 0.0,
-  "question_content": "总结后的题目内容",
-  "student_answer": "学生答案",
-  "correct_answer": "正确答案",
-  "knowledge_points": ["知识点1", "知识点2"],
-  "question_type": "题目类型",
-  "chapter": "题目分类",
-  "tags": ["标签1", "标签2"]
-}}
-
-用户选择学科：{subject}
-学段/年级：{grade or "未知"}（已归一化：{bucket}）
-
-候选分类（优先从候选中选择；若语义接近必须选候选，避免过度分散）：
-{json.dumps(taxonomy, ensure_ascii=False)}
-"""
-
-        parsed = await call_router_llm_json(
-            prompt,
-            log_ctx=_ctx(state),
-            trace_id=str(task_id) if task_id else None,
-            trace_stage="text_intake",
-        )
-        if not parsed:
-            raise ValueError("无法解析大模型总结输出")
-
-        detected = (parsed.get("detected_subject") or "").strip().lower()
-        conf = parsed.get("confidence", 0.0)
-        try:
-            conf_f = float(conf)
-        except Exception:
-            conf_f = 0.0
-
-        if detected in ("chemistry", "other") and detected != subject and conf_f >= 0.75:
-            msg = f"上传内容与选择学科不匹配：检测为 {detected}（置信度 {conf_f:.2f}），但选择了 {subject}。请确认学科选择或修改描述。"
-            logger.warning(f"[llm_summarize] subject mismatch: {msg}")
-            return {
-                "errors": [msg],
-                "parse_success": False,
-                "current_step": "llm_summarize",
-                "progress": 30.0,
-            }
-
-        # 归一化 knowledge_points 与 chapter（候选优先，允许 NEW，但做门控防止发散）
-        allowed_chapters = set(taxonomy.get(subject, {}).get("chapters", []) or [])
-        allowed_kps = set(taxonomy.get(subject, {}).get("knowledge_points", []) or [])
-        max_new_chapters = int(os.getenv("WZM_MAX_NEW_CHAPTERS_PER_REQUEST") or "2")
-        max_new_kps = int(os.getenv("WZM_MAX_NEW_KPS_PER_REQUEST") or "6")
-
-        new_chapters: List[str] = []
-        new_kps: List[str] = []
-
-        chapter_raw = str(parsed.get("chapter") or "").strip()
-        if chapter_raw in allowed_chapters:
-            chapter = chapter_raw
-        elif chapter_raw.lower().startswith("new:"):
-            new_label = _sanitize_label(chapter_raw)
-            if new_label and len(new_chapters) < max_new_chapters:
-                chapter = new_label
-                new_chapters.append(new_label)
-            else:
-                chapter = "综合"
-        else:
-            chapter = "综合"
-
-        kp_list = parsed.get("knowledge_points") or []
-        normalized_kps: List[str] = []
-        if isinstance(kp_list, list):
-            for kp in kp_list:
-                s_raw = str(kp).strip()
-                if not s_raw:
-                    continue
-                if s_raw in allowed_kps and s_raw not in normalized_kps:
-                    normalized_kps.append(s_raw)
-                elif s_raw.lower().startswith("new:"):
-                    new_label = _sanitize_label(s_raw)
-                    if new_label and len(new_kps) < max_new_kps and new_label not in normalized_kps:
-                        normalized_kps.append(new_label)
-                        new_kps.append(new_label)
-                if len(normalized_kps) >= 3:
-                    break
-        if not normalized_kps:
-            normalized_kps = ["综合"]
-
-        summarized_data = {
-            "question_content": str(parsed.get("question_content") or "").strip(),
-            "student_answer": str(parsed.get("student_answer") or "").strip(),
-            "correct_answer": str(parsed.get("correct_answer") or "").strip(),
-            "knowledge_points": normalized_kps,
-            "question_type": str(parsed.get("question_type") or "").strip(),
-            "chapter": chapter,
-            "tags": [str(t).strip() for t in (parsed.get("tags") or []) if str(t).strip()][:6],
-        }
-
-        logger.info(f"[llm_summarize] Summarized: {summarized_data}")
-
-        # 只返回新增或更新的字段，不返回可能为 None 的字段
-        result = {
-            "summarized_input": json.dumps(parsed, ensure_ascii=False),
-            "summarized_data": summarized_data,
-            "raw_input": summarized_data.get("question_content", ""),
-            "structured_data": {
-                "question_body": summarized_data.get("question_content", ""),
-                "student_answer": summarized_data.get("student_answer", ""),
-                "correct_answer": summarized_data.get("correct_answer", ""),
-                "knowledge_points": summarized_data.get("knowledge_points", []),
-                "question_type": summarized_data.get("question_type", ""),
-                "chapter": summarized_data.get("chapter") or None,
-                "tags": summarized_data.get("tags") or [],
-            },
-            "current_step": "llm_summarize",
-            "progress": 40.0,
-        }
-        # 只添加非 None 的字段
-        if state.get("user_id") is not None:
-            result["user_id"] = state.get("user_id")
-        if state.get("task_id") is not None:
-            result["task_id"] = state.get("task_id")
-        if state.get("subject") is not None:
-            result["subject"] = state.get("subject")
-        if state.get("difficulty") is not None:
-            result["difficulty"] = state.get("difficulty")
-        if state.get("input_type") is not None:
-            result["input_type"] = state.get("input_type")
-        if state.get("original_input") is not None:
-            result["original_input"] = state.get("original_input")
-        return result
-
-    except Exception as e:
-        logger.error(f"[llm_summarize] Error: {e}")
-        return {
-            "errors": [f"大模型总结错误: {str(e)}"],
-            "current_step": "llm_summarize",
-            "progress": 20.0,
-        }
-
-async def parse_structure(state: Dict[str, Any]) -> Dict[str, Any]:
-    """解析结构化数据节点"""
-    # 从全局缓存获取初始状态，确保关键字段不丢失
-    task_id = state.get("task_id")
-    if task_id and task_id in _initial_state_cache:
-        initial_state = _initial_state_cache[task_id]
-        # 合并初始状态和当前状态
-        state = {**initial_state, **state}
-        task_id = state.get("task_id")  # 重新获取 task_id
-    
-    logger.info(f"[parse_structure] Task {state.get('task_id')}: Parsing structure")
-
-    structured_data = state.get("structured_data", {})
-    structured_data_list: List[Dict[str, Any]] = []
-    # Default subject set to chemistry
-    subject = state.get("subject", "chemistry")
-    difficulty = state.get("difficulty", "medium")
-
-    # 多题：如果 OCR 阶段提供了 ocr_items，则优先生成 structured_data_list
-    if isinstance(state.get("ocr_items"), list) and state.get("ocr_items"):
-        for item in state["ocr_items"]:
-            q_body = (item.get("question_content") or "").strip()
-            if not q_body:
-                continue
-            structured_data_list.append(
-                {
-                    "question_body": q_body,
-                    "student_answer": (item.get("student_answer") or "").strip(),
-                    "correct_answer": (item.get("correct_answer") or "").strip(),
-                    "question_type": (item.get("question_type") or "").strip(),
-                    "knowledge_points": item.get("knowledge_points") or [],
-                    "error_analysis": (item.get("error_analysis") or "").strip(),
-                    "chapter": (item.get("chapter") or "").strip() if isinstance(item.get("chapter"), str) else item.get("chapter"),
-                    "tags": item.get("tags") or [],
-                    "subject": subject,
-                    "difficulty": difficulty,
-                }
-            )
-
-    # 单题（文字模式 / 兼容路径）
-    if not structured_data_list:
-        # 从结构化数据中提取信息
-        question_body = (structured_data.get("question_body") or "").strip()
-        student_answer = (structured_data.get("student_answer") or "").strip()
-        correct_answer = (structured_data.get("correct_answer") or "").strip()
-
-        # 提取知识点
-        knowledge_points = []
-        if state.get("ocr_data"):
-            knowledge_points = state.get("ocr_data", {}).get("knowledge_points", [])
-        elif state.get("summarized_data"):
-            knowledge_points = state.get("summarized_data", {}).get("knowledge_points", [])
-
-        structured_data_list = [
-            {
-                **structured_data,
-                "question_body": question_body,
-                "student_answer": student_answer,
-                "correct_answer": correct_answer,
-                "knowledge_points": knowledge_points,
-                "subject": subject,
-                "difficulty": difficulty,
-            }
-        ]
-
-    # 兼容：保留 structured_data 为第一题
-    structured_data = structured_data_list[0] if structured_data_list else structured_data
-
-    # 只返回新增或更新的字段，不返回可能为 None 的字段
-    result = {
-        "structured_data": {
-            **structured_data,
-            "subject": subject,
-            "difficulty": difficulty,
-        },
-        "structured_data_list": structured_data_list,
-        "parse_success": True,
-        "current_step": "parse_structure",
-        "progress": 60.0,
-    }
-    # 只添加非 None 的字段
-    if state.get("user_id") is not None:
-        result["user_id"] = state.get("user_id")
-    if state.get("task_id") is not None:
-        result["task_id"] = state.get("task_id")
-    if state.get("subject") is not None:
-        result["subject"] = state.get("subject")
-    if state.get("difficulty") is not None:
-        result["difficulty"] = state.get("difficulty")
-    if state.get("input_type") is not None:
-        result["input_type"] = state.get("input_type")
-    if state.get("image_path") is not None:
-        result["image_path"] = state.get("image_path")
-    if state.get("original_input") is not None:
-        result["original_input"] = state.get("original_input")
-    if state.get("summarized_input") is not None:
-        result["summarized_input"] = state.get("summarized_input")
-    return result
-    
-    # 更新任务状态：解析完成
-    if task_id:
-        async with async_session_maker() as db:
-            await crud_task.update_task_status(
-                db,
-                task_id,
-                TaskStatusEnum.PROCESSING,
-                progress=80.0,
-                current_step="题目解析完成，正在保存到数据库..."
-            )
-            await db.commit()
-
 async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    保存错题节点 (修复版)
-    修复了 MissingGreenlet 错误：通过使用 flush() 而不是 commit() 来安全获取 ID。
+    保存错题节点 - RPJ版本
     """
     t0 = time.perf_counter()
     logger.info(f"[save_question] {_ctx(state)} start")
     
-    # 从全局缓存获取初始状态，确保关键字段不丢失
     task_id = state.get("task_id")
     if task_id and task_id in _initial_state_cache:
         initial_state = _initial_state_cache[task_id]
         state = {**initial_state, **state}
         task_id = state.get("task_id")
 
-    # 引入必要的模型和工具
     from backend.core.db.session import async_session_maker
     from backend.core.crud import crud_task
-    # 【重要】必须导入 Question 模型
     from backend.core.db.models import Question, SubjectEnum, DifficultyEnum, QuestionSourceEnum
 
     user_id = state.get("user_id")
-    subject = state.get("subject", "chemistry")
+    subject = state.get("subject", "chinese")
     difficulty = state.get("difficulty", "medium")
     grade = state.get("grade", "")
 
-    # 验证 user_id
     if not user_id:
         return {
             "errors": ["user_id 缺失，无法保存错题"],
@@ -2476,7 +1557,6 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             "progress": 60.0,
         }
 
-    # 如果已有错误，直接标记任务失败
     if isinstance(state.get("errors"), list) and state.get("errors"):
         try:
             async with async_session_maker() as db:
@@ -2493,7 +1573,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         async with async_session_maker() as db:
-            # 1. 准备枚举值
+            # 枚举值转换
             try:
                 subject_enum = SubjectEnum(subject)
             except ValueError:
@@ -2504,12 +1584,12 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
             except ValueError:
                 difficulty_enum = DifficultyEnum.MEDIUM
 
-            # 2. 准备数据列表
+            # 准备数据列表
             structured_data = state.get("structured_data", {})
             structured_data_list = state.get("structured_data_list")
             items = structured_data_list if isinstance(structured_data_list, list) else [structured_data]
 
-            # 按 order 排序以保持题目顺序
+            # 按 order 排序
             try:
                 indexed = []
                 for i, it in enumerate(items):
@@ -2525,13 +1605,13 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
 
             created_ids: List[int] = []
 
-            # 3. 循环创建题目对象
+            # 循环创建题目
             for idx, item in enumerate(items):
                 content = (item.get("question_body") or "").strip()
                 if not content:
                     content = "题目内容待补充"
 
-                # 构建 summarized_input 元数据
+                # 元数据
                 meta = {}
                 try:
                     meta = {
@@ -2549,7 +1629,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     pass
 
-                # 实例化 ORM 对象 (不使用 crud_question.create_question)
+                # 创建题目对象
                 q = Question(
                     user_id=int(user_id),
                     content=content,
@@ -2574,7 +1654,7 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                     summarized_input=json.dumps(meta, ensure_ascii=False) if meta else None
                 )
 
-                # 处理图片关联
+                # 图片关联
                 if state.get("input_type") == "image" and state.get("image_path"):
                     q.image_urls = [state.get("image_path")]
                     if state.get("source_image_id"):
@@ -2583,15 +1663,13 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                 if state.get("original_input"):
                     q.original_input = state.get("original_input")
 
-                # 【关键修复】添加到 Session 并 Flush
                 db.add(q)
-                await db.flush()  # 生成 ID，但不提交事务，对象保持活跃
+                await db.flush()
                 
-                # 安全获取 ID
                 created_ids.append(q.id)
                 logger.info(f"[save_question] Flushed question {idx+1}/{len(items)}, ID={q.id}")
 
-            # 4. 更新任务状态
+            # 更新任务状态
             if created_ids:
                 first_id = created_ids[0]
                 await crud_task.complete_task(
@@ -2610,7 +1688,6 @@ async def save_question(state: Dict[str, Any]) -> Dict[str, Any]:
                     },
                 )
             
-            # 5. 最后统一提交
             await db.commit()
             
             duration_ms = int((time.perf_counter() - t0) * 1000)

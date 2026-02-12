@@ -1,18 +1,20 @@
 """
-Questions API Endpoints
-错题相关API
+Questions API Endpoints - RPJ模块
+错题相关API（支持语文、英语、政治学科）
 """
 
 import os
 import uuid
+import json
 import logging
+import re
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.db.session import get_db
-from backend.core.crud import crud_question, crud_task, crud_user
+from backend.core.crud import crud_question, crud_task, crud_user, crud_image_file
 from backend.core.schemas.question import (
     QuestionCreate,
     QuestionUpdate,
@@ -22,10 +24,16 @@ from backend.core.schemas.question import (
     SimilarQuestionQuery,
 )
 from backend.core.schemas.task import TaskResponse, TaskStatus
-from backend.core.db.models import TaskStatusEnum
-from backend.modules.tony.api.deps import get_current_user_id
-from backend.modules.tony.config import settings
+from backend.core.db.models import TaskStatusEnum, ImageFileTypeEnum
+from backend.modules.rpj.api.deps import get_current_user_id
+from backend.modules.rpj.config import settings
 from backend.core.services.gemini_ocr_service import get_gemini_ocr_service, SubjectType
+from backend.core.utils.file_utils import (
+    get_user_upload_dir,
+    get_user_directory_name,
+    calculate_file_hash,
+    get_filename_from_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,20 +41,27 @@ router = APIRouter()
 
 UPLOAD_DIR = "./data/uploads"
 
-# 中文学科名称到英文的映射（TONY模块专用）
+# 中文学科名称到英文的映射（RPJ模块专用）
 SUBJECT_NAME_MAP = {
-    "历史": "history",
-    "地理": "geography",
-    "其他": "other",
+    "语文": "chinese",
+    "英语": "english", 
+    "政治": "politics",
+    "chinese": "chinese",
+    "english": "english",
+    "politics": "politics",
+    "语文试卷": "chinese",
+    "英语试卷": "english",
+    "政治试卷": "politics",
 }
 
 
 def validate_subject(subject: str) -> None:
-    """验证学科是否属于TONY模块"""
-    if subject not in settings.SUBJECTS:
+    """验证学科是否属于RPJ模块"""
+    subject_lower = subject.lower()
+    if subject_lower not in settings.SUBJECTS:
         raise HTTPException(
             status_code=400,
-            detail=f"Subject '{subject}' is not supported by TONY module. "
+            detail=f"Subject '{subject}' is not supported by RPJ module. "
                    f"Supported subjects: {settings.SUBJECTS}"
         )
 
@@ -78,23 +93,30 @@ async def create_question(
     await db.commit()
 
     # Start background processing
-    # In production, this should use Celery
-    # Using the new QuestionIntakeAgent (设计文档4.1节)
-    
-    # For development: use BackgroundTasks
-    # For production: use Celery
     async def process_async():
-        from backend.modules.tony.agents.question_intake_agent import QuestionIntakeAgent
+        from backend.modules.rpj.agents.question_intake_ocr_agent import QuestionIntakeOCRAgent
 
         try:
-            # 使用新的 QuestionIntakeAgent (设计文档4.1节)
-            agent = QuestionIntakeAgent()
+            # 使用RPJ模块的QuestionIntakeOCRAgent
+            agent = QuestionIntakeOCRAgent()
+            
+            # 转换QuestionCreate为text_data格式
+            text_data = {
+                "content": question_data.content,
+                "student_answer": question_data.student_answer,
+                "correct_answer": question_data.correct_answer,
+                "knowledge_points": question_data.knowledge_points or [],
+                "tags": question_data.tags or [],
+            }
+            
             result = await agent.process(
-                raw_input=question_data.content,
+                input_type="text",
                 user_id=user_id,
                 task_id=task_id,
-                image_urls=question_data.image_urls,
-                student_answer=question_data.student_answer,
+                subject=question_data.subject or "chinese",
+                difficulty=question_data.difficulty or "medium",
+                grade=question_data.grade or "",
+                text_data=text_data,
             )
             
             if result.get("success"):
@@ -103,8 +125,8 @@ async def create_question(
                 logger.warning(f"Task {task_id} completed with errors: {result.get('errors')}")
 
         except Exception as e:
-            logger.error(f"Task {task_id} failed: {e}")
-            async with async_session_maker() as session:
+            logger.error(f"Task {task_id} failed: {e}", exc_info=True)
+            async with get_db() as session:
                 await crud_task.fail_task(session, task_id, str(e))
                 await session.commit()
 
@@ -122,15 +144,16 @@ async def create_question(
 @router.post("/ocr", response_model=TaskResponse, status_code=202)
 async def create_question_with_image(
     file: UploadFile = File(...),
-    subject: str = Form("other"),
+    subject: str = Form("chinese"),
     difficulty: str = Form("medium"),
+    grade: str = Form(""),
     title: Optional[str] = Form(None),
     background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     """
-    上传图片识别错题
+    上传图片识别错题（录入错题功能专用）
     
     支持上传错题图片，自动OCR识别题目内容和答案，
     然后进行结构化存储和AI分析。
@@ -142,6 +165,10 @@ async def create_question_with_image(
     4. 创建错题记录
     5. 触发AI分析流程
     """
+    # 验证学科
+    subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
+    validate_subject(subject_en)
+    
     # 验证文件类型
     allowed_types = ["image/jpeg", "image/png", "image/webp", "image/heic"]
     if file.content_type not in allowed_types:
@@ -153,16 +180,10 @@ async def create_question_with_image(
     # 获取用户对象
     user = await crud_user.get_user(db, user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="用户不存在")
 
-    # 解析学科
-    subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
-    
     # 读取文件内容并计算哈希值
     content = await file.read()
-    from backend.core.utils.file_utils import calculate_file_hash, get_filename_from_path
-    from backend.core.crud import crud_image_file
-    
     file_hash = calculate_file_hash(content)
     
     # 检查图片是否已存在（同一用户维度去重）
@@ -178,8 +199,14 @@ async def create_question_with_image(
     # 生成task_id用于后续处理
     task_id = str(uuid.uuid4())
     
+    # 创建任务记录
+    await crud_task.create_task(db, task_id)
+    await db.commit()
+    
+    # 获取或创建原始图片记录
     if existing_image:
         # 图片已存在，复用现有文件
+        image_file = existing_image
         file_path = existing_image.file_path
         filename = get_filename_from_path(file_path)
         logger.info(f"Image already exists, reusing: hash={file_hash[:16]}..., path={file_path}")
@@ -193,110 +220,53 @@ async def create_question_with_image(
         filename = f"{file_hash[:32]}.{file_ext}"
         
         # 保存到用户专属目录: data/uploads/{username_email}/questions/{subject}/
-        file_path = os.path.join(
-            get_user_upload_dir(UPLOAD_DIR, user, "questions", subject_en),
-            filename
-        )
+        upload_dir = get_user_upload_dir(UPLOAD_DIR, user, "questions", subject_en)
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, filename)
         
         # 保存文件
         with open(file_path, "wb") as f:
             f.write(content)
         
+        # 标准化路径格式为 data/uploads/... (不带 ./ 前缀)
+        relative_path = os.path.relpath(file_path, os.path.abspath("."))
+        relative_path = relative_path.lstrip("./")
+        if not relative_path.startswith("data/uploads"):
+            relative_path = f"data/uploads/{get_user_directory_name(user.username, user.email)}/questions/{subject_en}/{filename}"
+        
         # 创建图片文件记录
-        await crud_image_file.create_image_file(
+        image_file = await crud_image_file.create_image_file(
             db=db,
             file_hash=file_hash,
             user_id=user.id,
             file_type="questions",
             subject=subject_en,
-            file_path=file_path,
+            file_path=relative_path,
             file_size=len(content),
             mime_type=file.content_type,
+            image_type=ImageFileTypeEnum.ORIGINAL,
         )
-        logger.info(f"New image saved: hash={file_hash[:16]}..., path={file_path}")
+        logger.info(f"New image saved: hash={file_hash[:16]}..., path={file_path}, id={image_file.id}")
 
     try:
-
-        # 创建任务记录
-        await crud_task.create_task(db, task_id)
-        await db.commit()
-
         # 异步处理OCR和分析
         async def process_with_ocr():
-            from backend.modules.tony.agents.question_intake_agent import QuestionIntakeAgent
+            from backend.modules.rpj.agents.question_intake_ocr_agent import QuestionIntakeOCRAgent
             from backend.core.db.session import async_session_maker
 
             try:
-                # 1. OCR识别
-                ocr_service = get_gemini_ocr_service()
-                await ocr_service.initialize()
-
-                # 解析学科类型 - 支持中文和英文
-                subject_en = SUBJECT_NAME_MAP.get(subject, subject.lower())
-                try:
-                    subject_type = SubjectType(subject_en)
-                except ValueError:
-                    subject_type = SubjectType.OTHER
-
-                # 使用OCR识别单个题目（不是试卷批改，而是错题录入）
-                logger.info(f"Starting OCR for question image: {file_path}")
+                # 使用QuestionIntakeOCRAgent处理
+                agent = QuestionIntakeOCRAgent()
                 
-                # 使用简化的prompt进行单题识别
-                from backend.core.services.gemini_ocr_service import GeminiOCRService
-                ocr_result = await ocr_service._analyze_image(
-                    image_path=file_path,
-                    prompt=f"""你是一个专业的学习助手。请识别图片中的错题，提取以下信息（如果图片中没有某项信息，请留空）：
-
-1. **题目内容**: 完整的题目描述
-2. **学生答案**: 学生写的答案（如果有）
-3. **正确答案**: 正确的答案（如果有标注）
-4. **题目类型**: 选择题/填空题/解答题等
-5. **知识点**: 涉及的知识点（如果能识别）
-
-请以JSON格式返回，格式如下：
-{{
-  "question_content": "题目内容",
-  "student_answer": "学生答案",
-  "correct_answer": "正确答案",
-  "question_type": "题目类型",
-  "knowledge_points": ["知识点1", "知识点2"]
-}}
-
-如果图片模糊或无法识别，请说明原因。"""
-                )
-
-                # 解析OCR结果
-                import json
-                import re
-                
-                # 尝试从结果中提取JSON
-                json_match = re.search(r'\{[\s\S]*\}', ocr_result)
-                if json_match:
-                    ocr_data = json.loads(json_match.group())
-                else:
-                    # 如果没有JSON格式，使用原始文本作为题目内容
-                    ocr_data = {
-                        "question_content": ocr_result,
-                        "student_answer": "",
-                        "correct_answer": "",
-                        "question_type": "",
-                        "knowledge_points": []
-                    }
-
-                logger.info(f"OCR completed for task {task_id}: {ocr_data}")
-
-                # 2. 使用QuestionIntakeAgent处理
-                agent = QuestionIntakeAgent()
                 result = await agent.process(
-                    raw_input=ocr_data.get("question_content", ""),
+                    input_type="image",
                     user_id=user_id,
                     task_id=task_id,
-                    image_urls=[file_path],
-                    student_answer=ocr_data.get("student_answer", ""),
-                    correct_answer=ocr_data.get("correct_answer", ""),
-                    subject=subject,
+                    subject=subject_en,
                     difficulty=difficulty,
-                    title=title or "OCR识别错题",
+                    grade=grade,
+                    source_image_id=image_file.id,
+                    image_path=file_path,
                 )
 
                 if result.get("success"):
@@ -318,12 +288,13 @@ async def create_question_with_image(
             task_id=task_id,
             status=TaskStatus.PENDING,
             message="图片已上传，OCR识别处理中...",
+            details={"is_duplicate": is_duplicate},
         )
 
     except Exception as e:
-        logger.error(f"Failed to process image upload: {e}")
+        logger.error(f"Failed to process image upload: {e}", exc_info=True)
         # 清理文件
-        if os.path.exists(file_path):
+        if not existing_image and os.path.exists(file_path):
             os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
@@ -373,7 +344,7 @@ async def get_question(
     """
     question = await crud_question.get_question(db, question_id, user_id)
     if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
+        raise HTTPException(status_code=404, detail="错题不存在")
 
     return QuestionDetail.model_validate(question)
 
@@ -392,7 +363,7 @@ async def update_question(
         db, question_id, question_data, user_id
     )
     if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
+        raise HTTPException(status_code=404, detail="错题不存在")
 
     return QuestionResponse.model_validate(question)
 
@@ -408,7 +379,7 @@ async def delete_question(
     """
     success = await crud_question.delete_question(db, question_id, user_id)
     if not success:
-        raise HTTPException(status_code=404, detail="Question not found")
+        raise HTTPException(status_code=404, detail="错题不存在")
 
 
 @router.post("/{question_id}/reanalyze", response_model=TaskResponse, status_code=202)
@@ -425,51 +396,52 @@ async def reanalyze_question(
     # Verify question exists and belongs to user
     question = await crud_question.get_question(db, question_id, user_id)
     if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
+        raise HTTPException(status_code=404, detail="错题不存在")
 
     # Create new task
     task_id = str(uuid.uuid4())
     await crud_task.create_task(db, task_id, question_id)
     await db.commit()
 
-    # Start background reanalysis using new agent
+    # Start background reanalysis
     async def reanalyze_async():
-        from backend.modules.tony.agents.question_intake_agent import analyze_error, update_result
-        from backend.modules.tony.agents.state import QuestionIntakeState
         from backend.core.db.session import async_session_maker
+        from backend.modules.rpj.agents.question_intake_ocr_agent import QuestionIntakeOCRAgent
 
         try:
-            # 构建状态
-            state: QuestionIntakeState = {
-                "task_id": task_id,
-                "question_id": question_id,
-                "user_id": user_id,
-                "raw_input": question.content,
-                "structured_data": {
-                    "question_body": question.content,
-                    "student_answer": question.student_answer,
-                    "correct_answer": question.correct_answer,
-                },
-                "subject": question.subject.value if question.subject else "other",
-                "grade": question.grade or "",
-                "chapter": question.chapter or "",
+            # 使用QuestionIntakeOCRAgent进行重新分析
+            agent = QuestionIntakeOCRAgent()
+            
+            # 构建text_data
+            text_data = {
+                "content": question.content,
+                "student_answer": question.student_answer,
+                "correct_answer": question.correct_answer,
                 "knowledge_points": question.knowledge_points or [],
-                "errors": [],
+                "tags": question.tags or [],
             }
             
-            # 执行分析
-            result = await analyze_error(state)
-            state = {**state, **result}
+            result = await agent.process(
+                input_type="text",
+                user_id=user_id,
+                task_id=task_id,
+                subject=question.subject.value if hasattr(question.subject, 'value') else "chinese",
+                difficulty=question.difficulty.value if hasattr(question.difficulty, 'value') else "medium",
+                grade=question.grade or "",
+                text_data=text_data,
+            )
             
-            # 更新结果
-            await update_result(state)
+            if result.get("success"):
+                logger.info(f"Reanalysis task {task_id} completed")
+            else:
+                logger.warning(f"Reanalysis task {task_id} completed with errors: {result.get('errors')}")
 
             async with async_session_maker() as session:
                 await crud_task.complete_task(session, task_id, question_id)
                 await session.commit()
 
         except Exception as e:
-            logger.error(f"Reanalysis task {task_id} failed: {e}")
+            logger.error(f"Reanalysis task {task_id} failed: {e}", exc_info=True)
             async with async_session_maker() as session:
                 await crud_task.fail_task(session, task_id, str(e))
                 await session.commit()
@@ -479,7 +451,7 @@ async def reanalyze_question(
     return TaskResponse(
         task_id=task_id,
         status=TaskStatus.PENDING,
-        message="Reanalysis started.",
+        message="重新分析任务已开始",
     )
 
 
@@ -502,12 +474,12 @@ async def find_similar_questions(
     if query.question_id:
         question = await crud_question.get_question(db, query.question_id, user_id)
         if not question:
-            raise HTTPException(status_code=404, detail="Question not found")
+            raise HTTPException(status_code=404, detail="错题不存在")
         query_text = question.content
     elif query.content:
         query_text = query.content
     else:
-        raise HTTPException(status_code=400, detail="Provide question_id or content")
+        raise HTTPException(status_code=400, detail="请提供question_id或content")
 
     # Search similar
     results = await vector_store.search_by_text(
@@ -542,3 +514,111 @@ async def get_due_for_review(
     questions = await crud_question.get_questions_for_review(db, user_id, limit)
     return [QuestionResponse.model_validate(q) for q in questions]
 
+
+@router.get("/stats/summary", response_model=dict)
+async def get_question_stats(
+    subject: Optional[str] = Query(None, description="学科筛选"),
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    获取错题统计摘要
+    包括各学科错题数量、掌握程度等
+    """
+    stats = await crud_question.get_question_stats(db, user_id, subject)
+    
+    return {
+        "success": True,
+        "stats": stats,
+    }
+
+
+@router.get("/stats/by-subject", response_model=dict)
+async def get_stats_by_subject(
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    按学科统计错题分布
+    """
+    stats = await crud_question.get_stats_by_subject(db, user_id)
+    
+    return {
+        "success": True,
+        "stats": stats,
+    }
+
+
+@router.get("/stats/by-difficulty", response_model=dict)
+async def get_stats_by_difficulty(
+    subject: Optional[str] = Query(None, description="学科筛选"),
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    按难度统计错题分布
+    """
+    stats = await crud_question.get_stats_by_difficulty(db, user_id, subject)
+    
+    return {
+        "success": True,
+        "stats": stats,
+    }
+
+
+@router.get("/export/json", response_model=dict)
+async def export_questions_json(
+    subject: Optional[str] = Query(None, description="学科筛选"),
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    导出错题为JSON格式
+    """
+    questions = await crud_question.get_all_user_questions(db, user_id, subject)
+    
+    export_data = []
+    for question in questions:
+        export_data.append({
+            "id": question.id,
+            "content": question.content,
+            "subject": question.subject.value if hasattr(question.subject, 'value') else str(question.subject),
+            "difficulty": question.difficulty.value if hasattr(question.difficulty, 'value') else str(question.difficulty),
+            "grade": question.grade,
+            "student_answer": question.student_answer,
+            "correct_answer": question.correct_answer,
+            "explanation": question.explanation,
+            "error_analysis": question.error_analysis,
+            "knowledge_points": question.knowledge_points,
+            "chapter": question.chapter,
+            "tags": question.tags,
+            "suggested_questions": question.suggested_questions,
+            "created_at": question.created_at.isoformat() if question.created_at else None,
+            "last_reviewed_at": question.last_reviewed_at.isoformat() if question.last_reviewed_at else None,
+            "review_count": question.review_count,
+            "mastery_level": question.mastery_level,
+        })
+    
+    return {
+        "success": True,
+        "count": len(export_data),
+        "questions": export_data,
+        "exported_at": datetime.now().isoformat(),
+    }
+
+
+@router.post("/batch-delete", status_code=204)
+async def batch_delete_questions(
+    question_ids: List[int],
+    db: AsyncSession = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    批量删除错题
+    """
+    success = await crud_question.batch_delete_questions(db, question_ids, user_id)
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="批量删除失败，请确保所有错题都属于当前用户"
+        )

@@ -1,6 +1,5 @@
 """
 WZM Module - FastAPI Application Entry Point
-化学模块
 """
 
 import logging
@@ -14,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from .config import settings
 from .api.router import api_router
 from backend.core.db.session import init_db, close_db
+from .api.endpoints.companion import chat
 
 # Configure logging
 logging.basicConfig(
@@ -151,6 +151,12 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+app.include_router(
+    chat.router,
+    prefix="/api/v1/companion",
+    tags=["Companion Chat"],
+)
 
 # Health check endpoint
 @app.get("/health", tags=["Health"])

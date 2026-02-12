@@ -407,9 +407,10 @@ LoRA auto-discovery (by convention):
 Verify:
 
 ```bash
-# If your environment has a global SOCKS/HTTP proxy, bypass it for localhost:
-export NO_PROXY=127.0.0.1,localhost
+# If your environment has a global SOCKS/HTTP proxy, bypass it for localhost (local LAN IP):
+export NO_PROXY=127.0.0.1,localhost,10.244.241.121
 curl --noproxy '*' http://127.0.0.1:8001/v1/models
+curl http://10.244.241.121:8004/v1/models  # 其他局域网机器上也可以访问到启动的这台服务对应的地址
 ```
 
 Notes:

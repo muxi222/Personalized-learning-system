@@ -218,7 +218,7 @@ def setup_model_and_tokenizer(cfg: dict):
             model = _load_model(
                 device_map=device_map,
                 max_memory=max_memory,
-                llm_int8_enable_fp32_cpu_offload=True,
+                #llm_int8_enable_fp32_cpu_offload=True,
                 offload_folder=str(offload_dir),
             )
         else:

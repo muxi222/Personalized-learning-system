@@ -1,4 +1,4 @@
-"""WZM - Review API（学生实现版 / Stub）
+"""RPJ- Review API（学生实现版 / Stub）
 
 仅保留主要入口 endpoints 的定义，删除具体实现。
 参考：`backend/modules/tony/api/endpoints/review/review.py`
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.db.session import get_db
 from backend.core.schemas.question import QuestionResponse
-from backend.modules.wzm.api.deps import get_current_user_id
+from backend.modules.rpj.api.deps import get_current_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-WZY model eval runner (OpenAI-compatible endpoint).
+Wzy model eval runner (OpenAI-compatible endpoint, e.g. local vLLM).
 
-Student module: provides a minimal eval set + runnable wrapper.
+This wrapper:
+- ensures a minimal eval set exists under data/ (student-friendly)
+- calls the core evaluator with Wzy defaults
 """
 
 from __future__ import annotations
@@ -12,12 +14,13 @@ import shutil
 from pathlib import Path
 import sys
 import subprocess
+import json
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="WZY model eval runner (vLLM)")
+    parser = argparse.ArgumentParser(description="Wzy model eval runner (vLLM)")
     parser.add_argument("--module", default="wzy")  # passed from pipeline.sh
-    parser.add_argument("--api-base", default="http://127.0.0.1:8004/v1")
+    parser.add_argument("--api-base", default="http://127.0.0.1:8001/v1")
     parser.add_argument("--model", default="wzy-dpo")
     parser.add_argument("--judge-api-base", default="")
     parser.add_argument("--judge-model", default="")
@@ -28,6 +31,7 @@ def main() -> int:
         repo = repo.parent
     repo_root = repo.parent if repo.name == "training" else Path.cwd()
 
+    # Ensure eval set exists under data/
     data_eval = repo_root / "data" / "training" / "wzy" / "eval"
     data_eval.mkdir(parents=True, exist_ok=True)
     eval_set = data_eval / "model_eval.jsonl"
@@ -54,7 +58,49 @@ def main() -> int:
     if passthru:
         cmd += passthru
     print(" ".join(cmd))
-    return subprocess.call(cmd)
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        return int(rc)
+
+    # Retrieval evaluation (precision/recall/hit@k) for Wzy (准召率).
+    # This is user-scoped and depends on local indices/embeddings; the script will fall back to a lightweight keyword
+    # retriever when deps are missing, so students can still get a report.
+    retrieval_out = data_eval / "retrieval_eval_report.json"
+    try:
+        cmd2 = [
+            sys.executable,
+            "-m",
+            "training.modules.wzy.eval.retrieval_hit_rate",
+            "--k",
+            "5",
+            "--max-questions",
+            "200",
+            "--out",
+            str(retrieval_out),
+        ]
+        print(" ".join(cmd2))
+        rc2 = subprocess.call(cmd2)
+        if rc2 == 0 and retrieval_out.exists() and out.exists():
+            rep = json.loads(out.read_text(encoding="utf-8"))
+            rrep = json.loads(retrieval_out.read_text(encoding="utf-8"))
+            rep["retrieval_eval"] = rrep
+            # Attach a short retrieval summary into conclusion if present
+            try:
+                c = rep.get("conclusion") if isinstance(rep, dict) else None
+                if isinstance(c, dict):
+                    summ = (
+                        f"retrieval: hit@k={rrep.get('hit_at_k')} "
+                        f"precision@k={rrep.get('precision_at_k')} recall@k={rrep.get('recall_at_k')}"
+                    )
+                    prev = str(c.get("summary") or "").strip()
+                    c["summary"] = (prev + " | " + summ).strip(" |")
+            except Exception:
+                pass
+            out.write_text(json.dumps(rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+    return 0
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@ import os
 import logging
 from typing import List
 
-from backend.modules.wzm.celery_app import celery_app
-from backend.modules.wzm.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
+from backend.modules.rpj.celery_app import celery_app
+from backend.modules.rpj.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
 
 logger = logging.getLogger(__name__)
 

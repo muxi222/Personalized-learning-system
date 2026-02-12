@@ -231,7 +231,7 @@ def main():
     parser.add_argument(
         "--subjects",
         nargs="*",
-        default=["history", "geography", "other"],
+        default=["chemistry"],
         help="Subjects to include",
     )
     parser.add_argument("--limit", type=int, default=0, help="Optional limit for smoke runs")

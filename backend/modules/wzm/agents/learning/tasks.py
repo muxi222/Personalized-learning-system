@@ -7,7 +7,7 @@ import os
 import logging
 
 from backend.modules.wzm.celery_app import celery_app
-from backend.modules.wzmy.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
+from backend.modules.wzm.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
 
 logger = logging.getLogger(__name__)
 

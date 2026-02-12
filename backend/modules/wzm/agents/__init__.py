@@ -1,7 +1,7 @@
 """
 WZM Module - Agents Package
 
-Agent implementations for WZM module (History, Geography, Other subjects)
+Agent implementations for WZM module
 """
 
 from .intake.question_intake_agent import QuestionIntakeAgent

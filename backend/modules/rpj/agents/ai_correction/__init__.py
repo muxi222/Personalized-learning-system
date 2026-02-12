@@ -1,3 +1,3 @@
-"""WZM module - AI correction agents subpackage."""
+"""RPJ module - AI correction agents subpackage."""
 
 

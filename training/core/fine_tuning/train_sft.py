@@ -167,7 +167,7 @@ def setup_model_and_tokenizer(config: dict):
         bnb_4bit_use_double_quant=bool(config["use_nested_quant"]),
     )
 
-    def _load_model(device_map="auto", **extra_kwargs):
+    def _load_model(device_map={"": 0}, **extra_kwargs):
         return AutoModelForCausalLM.from_pretrained(
             model_ref,
             quantization_config=bnb_config,
@@ -229,7 +229,7 @@ def setup_model_and_tokenizer(config: dict):
             model = _load_model(
                 device_map=device_map,
                 max_memory=max_memory,
-                llm_int8_enable_fp32_cpu_offload=True,
+                #llm_int8_enable_fp32_cpu_offload=True,
                 offload_folder=str(offload_dir),
             )
         else:

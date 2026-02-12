@@ -1,0 +1,13 @@
+{
+  "_comment": "Wzy embedding/index build defaults. Override via CLI flags if needed.",
+  "module": "wzy",
+  "subjects": ["math", "physics"],
+  "sqlite_path": "data/sqlite/app.db",
+  "vector_store_dir": "data/faiss/wzy",
+  "bm25_dir": "data/bm25/wzy",
+  "embedding_backend": "hash",
+  "hash_dim": 1536,
+  "embedding_model": "BAAI/bge-large-zh-v1.5",
+  "limit": null
+}
+

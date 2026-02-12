@@ -79,7 +79,7 @@ def setup_model_and_tokenizer(config: dict):
     model = AutoModelForCausalLM.from_pretrained(
         config["model_name"],
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map={"": 0},
         trust_remote_code=True,
     )
     model.config.use_cache = False
@@ -214,7 +214,7 @@ def merge_and_save(config: dict, merge_output_dir: str):
     base_model = AutoModelForCausalLM.from_pretrained(
         config["model_name"],
         torch_dtype=torch.bfloat16,
-        device_map="auto",
+        device_map={"": 0},
         trust_remote_code=True,
     )
 

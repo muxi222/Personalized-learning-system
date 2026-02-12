@@ -32,7 +32,7 @@ from training.core.graphrag.kb_builder import (
 )
 
 
-DEFAULT_SUBJECTS = ["history", "geography", "other"]
+DEFAULT_SUBJECTS = ["chemistry"]
 
 
 def main():
@@ -51,7 +51,7 @@ def main():
         "--subjects",
         nargs="*",
         default=DEFAULT_SUBJECTS,
-        help="Subjects to include (wzm: history geography other)",
+        help="Subjects to include (wzm: chemistry)",
     )
     parser.add_argument("--limit", type=int, default=0, help="Optional limit for quick smoke builds")
 

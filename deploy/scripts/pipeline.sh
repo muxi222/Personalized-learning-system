@@ -598,8 +598,8 @@ vllm_port_for() {
     tony) echo "8001" ;;
     rpj) echo "8002" ;;
     xmx) echo "8003" ;;
-    wzy) echo "8004" ;;
-    wzm) echo "8005" ;;
+    wzm) echo "8004" ;;
+    wzy) echo "8005" ;;
     *) echo "" ;;
   esac
 }

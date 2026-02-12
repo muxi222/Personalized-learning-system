@@ -1,10 +1,8 @@
 """
-WZM Module Configuration - 历史、地理、其他
+WZM Module Configuration - 化学、其他
 
 This module handles:
-- 历史 (History)
-- 地理 (Geography)
-- 其他 (Other)
+- 化学 (Chemistry)
 """
 
 from functools import lru_cache

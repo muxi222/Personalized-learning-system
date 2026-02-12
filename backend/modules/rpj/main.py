@@ -1,11 +1,13 @@
 """
-WZM Module - FastAPI Application Entry Point
-化学模块
+RPJ Module - FastAPI Application Entry Point
+语文、英语、道德与法治模块
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
-
+from logging.handlers import RotatingFileHandler
+from .api.endpoints.companion import chat
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,10 +18,38 @@ from .api.router import api_router
 from backend.core.db.session import init_db, close_db
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format=settings.LOG_FORMAT,
-)
+_level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
+_fmt = settings.LOG_FORMAT
+
+# Ensure log directory exists and write to file by default (Tony requirement).
+try:
+    log_path = settings.LOG_FILE or "./logs/rpj.log"
+    log_dir = os.path.dirname(log_path) or "."
+    os.makedirs(log_dir, exist_ok=True)
+except Exception:
+    log_path = None
+
+root_logger = logging.getLogger()
+root_logger.setLevel(_level)
+
+# Avoid duplicate handlers on reload
+has_file = any(isinstance(h, RotatingFileHandler) for h in root_logger.handlers)
+has_stream = any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in root_logger.handlers)
+
+formatter = logging.Formatter(_fmt)
+
+if not has_stream:
+    sh = logging.StreamHandler()
+    sh.setLevel(_level)
+    sh.setFormatter(formatter)
+    root_logger.addHandler(sh)
+
+if log_path and not has_file:
+    fh = RotatingFileHandler(log_path, maxBytes=50 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    fh.setLevel(_level)
+    fh.setFormatter(formatter)
+    root_logger.addHandler(fh)
+
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
@@ -62,18 +92,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     description=f"""
-    ## WZM模块 - 化学学科
+    ## RPJ模块 - 语文、英语、道德与法治
 
     智能错题分析与举一反三推荐系统
 
     ### 支持学科:
-    - 化学
+    - 📖 语文 (Chinese Language)
+    - 🇬🇧 英语 (English)
+    - ⚖️ 道德与法治 (Morality and Law)
 
     ### 主要功能:
     - 📝 错题录入与管理
     - 🔍 AI智能错因分析
     - 💡 举一反三题目推荐
     - 📊 学习进度追踪
+    - ✍️ 作文/书面表达智能评阅
+    - 🎯 语言能力专项训练
+
+    ### 特色功能:
+    - 语文：文言文理解、现代文阅读、作文智能批改
+    - 英语：阅读理解、语法纠错、写作指导
+    - 道法：案例分析、法律条文解析、道德情境判断
 
     ### API文档:
     - Swagger UI: `/docs`
@@ -152,6 +191,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
+app.include_router(
+    chat.router,
+    prefix="/api/v1/companion",
+    tags=["Companion Chat"],
+)
 # Health check endpoint
 @app.get("/health", tags=["Health"])
 async def health_check():
@@ -173,10 +217,11 @@ async def root():
     根路径 - 欢迎信息
     """
     return {
-        "message": f"Welcome to {settings.APP_NAME}",
+        "message": f"欢迎使用{settings.APP_NAME} - RPJ模块",
         "module": settings.MODULE_NAME,
         "subjects": settings.SUBJECTS,
         "version": settings.APP_VERSION,
         "docs": "/docs",
         "api": settings.API_V1_PREFIX,
+        "description": "语文、英语、道德与法治智能学习系统",
     }

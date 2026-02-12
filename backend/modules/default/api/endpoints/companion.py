@@ -141,6 +141,7 @@ async def _proxy_stream(
     Streaming proxy (SSE passthrough).
     This is used by `/companion/chat/stream` so frontend can render tokens incrementally.
     """
+    logger.info("_proxy_stream_ok")
     import httpx
 
     port = MODULE_PORTS.get(module)
@@ -151,6 +152,7 @@ async def _proxy_stream(
     headers = {}
     auth = request.headers.get("authorization")
     if auth:
+        logger.info("auth_ok")
         headers["authorization"] = auth
 
     async def gen():
@@ -207,16 +209,15 @@ def _resolve_module(subject: str) -> str:
     if not module:
         raise HTTPException(status_code=400, detail=f"Unknown subject: {subject}")
     return module
-
-
 @router.post("/chat")
 async def chat(
     request: Request,
-    subject: str = Query(..., description="学科（Tony-first: history/geography/other）"),
+    subject: str = Query(..., description="学科"),
     body: Dict[str, Any] = Body(default_factory=dict),  # passthrough
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("chat_ok")
     _ = (current_user, db)  # keep signature consistent; proxy uses auth header
     module = _resolve_module(subject)
     # Forward subject to module so it can choose subject-specific LoRA (module-sft-<subject>).
@@ -226,26 +227,31 @@ async def chat(
 @router.post("/chat/stream")
 async def chat_stream(
     request: Request,
-    subject: str = Query(..., description="学科（Tony-first: history/geography/other）"),
+    subject: str = Query(..., description="学科"),
     body: Dict[str, Any] = Body(default_factory=dict),  # passthrough
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("chat_stream_ok")
     _ = (current_user, db)
     module = _resolve_module(subject)
+    logger.info("chat_subject: %s", subject)
+    logger.info("chat_module: %s", module)
     # Forward subject to module so it can choose subject-specific LoRA (module-sft-<subject>).
     return await _proxy_stream(request=request, module=module, path="/chat/stream", params={"subject": subject}, json_body=body or {})
 
 @router.get("/conversations")
 async def list_conversations(
     request: Request,
-    subject: str = Query(..., description="学科（Tony-first: history/geography/other）"),
+    subject: str = Query(..., description="学科"),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("subject: %s", subject)
     _ = request
     module = _resolve_module(subject)
+    logger.info("module: %s", module)
     res = await db.execute(
         select(CompanionConversation)
         .where(
@@ -273,7 +279,7 @@ async def list_conversations(
 async def get_conversation(
     conversation_id: int,
     request: Request,
-    subject: str = Query(..., description="学科（Tony-first: history/geography/other）"),
+    subject: str = Query(..., description="学科"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -319,7 +325,7 @@ async def get_conversation(
 async def delete_conversation(
     conversation_id: int,
     request: Request,
-    subject: str = Query(..., description="学科（Tony-first: history/geography/other）"),
+    subject: str = Query(..., description="学科"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
