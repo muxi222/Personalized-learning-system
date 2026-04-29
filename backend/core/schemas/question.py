@@ -18,6 +18,7 @@ class SubjectType(str, Enum):
     CHINESE = "chinese"
     HISTORY = "history"
     GEOGRAPHY = "geography"
+    ECONOMICS = "economics"
     OTHER = "other"
 
 class DifficultyLevel(str, Enum):

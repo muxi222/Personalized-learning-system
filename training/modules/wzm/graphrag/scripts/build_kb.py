@@ -15,11 +15,14 @@ Why split graph vs index?
 
 from __future__ import annotations
 
+import logging
 import argparse
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _p = Path(__file__).resolve()
 while _p.name != "training" and _p.parent != _p:
@@ -36,6 +39,7 @@ DEFAULT_SUBJECTS = ["chemistry"]
 
 
 def main():
+    logger.info("build_kb_ok")
     parser = argparse.ArgumentParser(description="Build Wzm GraphRAG KB")
     parser.add_argument(
         "--sqlite",

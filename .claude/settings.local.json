@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3:*)",
+      "Bash(grep:*)",
+      "Bash(python backend/scripts/rebuild_wzm_indexes.py:*)",
+      "Bash(python -c:*)",
+      "Bash(pip show:*)",
+      "Bash(python3:*)",
+      "Bash(curl -s http://127.0.0.1:8004/v1/models)",
+      "Bash(curl -s http://127.0.0.1:8001/v1/models)",
+      "Bash(curl:*)",
+      "Bash(python test_companion_e2e.py:*)",
+      "Bash(./deploy/scripts/start.sh:*)",
+      "Bash(source:*)",
+      "Bash(echo:*)",
+      "Bash(ls:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(docker:*)",
+      "Bash(which apt-get:*)",
+      "Read(//usr/bin/**)",
+      "Read(//var/run/**)",
+      "Bash(sudo -n true 2>/dev/null && echo \"has sudo\" || echo \"no sudo\")",
+      "Bash(sudo apt-get:*)",
+      "Bash(sudo install:*)",
+      "Bash(sudo systemctl:*)",
+      "Bash(ls /.dockerenv)",
+      "Read(//proc/97931/**)",
+      "Bash(sudo usermod:*)",
+      "Bash(sudo docker:*)",
+      "Bash(sudo chmod:*)",
+      "Bash(ssh:*)",
+      "Bash(ping:*)",
+      "Bash(chmod:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch"
+    ]
+  }
+}

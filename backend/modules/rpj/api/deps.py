@@ -11,7 +11,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.modules.wzm.config import settings
+from backend.modules.tony.config import settings
 from backend.core.db.session import get_db
 from backend.core.crud import crud_user
 from backend.core.db.models import User

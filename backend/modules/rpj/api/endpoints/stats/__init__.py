@@ -1,5 +1,5 @@
 """
-Stats endpoints package (wzm module)
+Stats endpoints package (tony module)
 """
 
 

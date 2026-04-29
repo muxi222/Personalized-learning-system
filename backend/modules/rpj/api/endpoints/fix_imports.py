@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Batch fix imports for WZM module endpoints
+Batch fix imports for TONY module endpoints
 """
 import os
 import re
@@ -26,11 +26,11 @@ replacements = [
     (r'from \.\.\.\.crud\.', 'from backend.core.crud.'),
     (r'from \.\.\.\.schemas\.', 'from backend.core.schemas.'),
     (r'from \.\.\.\.services\.', 'from backend.core.services.'),
-    (r'from \.\.\.\.core\.config import', 'from backend.modules.wzm.config import'),
-    (r'from \.\.deps import', 'from backend.modules.wzm.api.deps import'),
+    (r'from \.\.\.\.core\.config import', 'from backend.modules.tony.config import'),
+    (r'from \.\.deps import', 'from backend.modules.tony.api.deps import'),
 
     # 处理agents导入（需要指向模块的agents）
-    (r'from \.\.\.\.agents\.', 'from backend.modules.wzm.agents.'),
+    (r'from \.\.\.\.agents\.', 'from backend.modules.tony.agents.'),
 ]
 
 for filename in endpoint_files:

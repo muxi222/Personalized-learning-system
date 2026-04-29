@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tony-vllm
+  name: wzm-vllm
   labels:
-    app: tony-vllm
+    app: wzm-vllm
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: tony-vllm
+      app: wzm-vllm
   template:
     metadata:
       labels:
-        app: tony-vllm
+        app: wzm-vllm
     spec:
       containers:
         - name: vllm
@@ -21,7 +21,7 @@ spec:
             - "--model"
             - "OpenPipe/Qwen3-14B-Instruct"
             - "--served-model-name"
-            - "tony-qwen3-14b"
+            - "wzm-qwen3-14b"
             - "--host"
             - "0.0.0.0"
             - "--port"

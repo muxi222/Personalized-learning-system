@@ -4,7 +4,7 @@ services:
     container_name: wzy-vllm
     restart: unless-stopped
     ports:
-      - "8001:8000"
+      - "8005:8000"
     environment:
       # Optional: speed/compat tweaks
       - VLLM_LOGGING_LEVEL=INFO

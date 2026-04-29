@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Batch fix imports for WZM module agents
+Batch fix imports for TONY module agents
 """
 import os
 import re
@@ -34,10 +34,10 @@ replacements = [
     (r'from \.\.schemas\.', 'from backend.core.schemas.'),
 
     # Core config → Module config
-    (r'from \.\.core\.config import', 'from backend.modules.wzm.config import'),
+    (r'from \.\.core\.config import', 'from backend.modules.tony.config import'),
 
     # Celery app
-    (r'from \.\.core\.celery_app import', 'from backend.modules.wzm.celery_app import'),
+    (r'from \.\.core\.celery_app import', 'from backend.modules.tony.celery_app import'),
 ]
 
 for filename in agent_files:

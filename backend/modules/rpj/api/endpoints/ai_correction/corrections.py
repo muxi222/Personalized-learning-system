@@ -25,7 +25,6 @@ from backend.modules.tony.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-
 def image_to_url(correction_id: int, image_type: str) -> str:
     """
     生成图片URL路径（使用correction_id和image_type）
@@ -45,7 +44,6 @@ def image_to_url(correction_id: int, image_type: str) -> str:
 
     # 生成完整URL: http://localhost:6005/api/v1/ocr/images/corrections/{correction_id}/{image_type}
     return f"http://{host}:{port}/api/v1/ocr/images/corrections/{correction_id}/{image_type}"
-
 
 # ============ Response Models ============
 
@@ -70,14 +68,12 @@ class CorrectionResponse(BaseModel):
     questions_detail: Optional[List[dict]] = None  # 题目详情（仅在详情接口返回）
     created_at: datetime
 
-
 class CorrectionListResponse(BaseModel):
     """批注记录列表响应"""
     total: int
     page: int
     page_size: int
     items: List[CorrectionResponse]
-
 
 class CorrectionStatisticsResponse(BaseModel):
     """批注统计响应"""
@@ -92,7 +88,6 @@ class CorrectionStatisticsResponse(BaseModel):
     avg_score: float
     subject_stats: dict
     time_series: List[dict]
-
 
 # ============ API Endpoints ============
 
@@ -111,7 +106,7 @@ async def list_corrections(
     支持分页、学科筛选、时间范围筛选
     """
     logger.info(f"list_corrections called: user_id={current_user.id}, user={current_user.username}, subject={subject}")
-    
+
     skip = (page - 1) * page_size
     corrections, total = await get_exam_corrections(
         db,
@@ -122,9 +117,9 @@ async def list_corrections(
         start_date=start_date,
         end_date=end_date,
     )
-    
+
     logger.info(f"list_corrections result: found {len(corrections)} items, total={total}")
-    
+
     return CorrectionListResponse(
         total=total,
         page=page,
@@ -153,7 +148,6 @@ async def list_corrections(
         ],
     )
 
-
 @router.get("/{correction_id}", response_model=CorrectionResponse)
 async def get_correction(
     correction_id: int,
@@ -164,7 +158,7 @@ async def get_correction(
     correction = await get_exam_correction(db, correction_id, current_user.id)
     if not correction:
         raise HTTPException(status_code=404, detail="批注记录不存在")
-    
+
     return CorrectionResponse(
         id=correction.id,
         user_id=correction.user_id,
@@ -186,7 +180,6 @@ async def get_correction(
         created_at=correction.created_at,
     )
 
-
 @router.delete("/{correction_id}", status_code=204)
 async def delete_correction(
     correction_id: int,
@@ -198,7 +191,6 @@ async def delete_correction(
     if not success:
         raise HTTPException(status_code=404, detail="批注记录不存在")
     await db.commit()
-
 
 @router.get("/statistics/{period}", response_model=CorrectionStatisticsResponse)
 async def get_statistics(
@@ -212,7 +204,7 @@ async def get_statistics(
 ):
     """
     获取批注统计数据
-    
+
     支持周、月、季度、年度统计：
     - 总批改次数
     - 总题目数
@@ -222,4 +214,3 @@ async def get_statistics(
     """
     stats = await get_correction_statistics(db, current_user.id, period)
     return CorrectionStatisticsResponse(**stats)
-

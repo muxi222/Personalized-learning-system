@@ -37,7 +37,6 @@ def _truncate(s: str, n: int = 240) -> str:
 
 
 class CompanionChatRequest(BaseModel):
-    logger.info("1")
     message: str = Field(..., min_length=1, max_length=8000, description="用户输入")
     conversation_id: Optional[int] = Field(None, description="会话ID（不传则新建）")
     # 预留：让前端把“学习建议/复习”等入口意图传入，帮助书童调整输出结构
@@ -45,7 +44,6 @@ class CompanionChatRequest(BaseModel):
 
 
 class RetrievedItem(BaseModel):
-    logger.info("2")
     id: Optional[int] = None
     source: str
     score: Optional[float] = None
@@ -55,49 +53,51 @@ class RetrievedItem(BaseModel):
 
 
 class CompanionChatResponse(BaseModel):
-    logger.info("3")
     conversation_id: int
     assistant_message: str
     retrieved: List[RetrievedItem] = []
 
 
 def _sse(obj: Dict[str, Any]) -> bytes:
-    logger.info("4")
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
 def _truthy(v: str | None) -> bool:
-    logger.info("5")
     return str(v or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 async def _personal_model_should_run(svc, trace_id: str) -> bool:
-    logger.info("6")
     """
     In classroom deployments, students often forget to export PERSONAL_MODEL_ENABLED_WZM
     before starting the backend. To keep the demo working, we try a best-effort auto-enable:
     - if env PERSONAL_MODEL_AUTO_ENABLE is truthy (default true)
     - and /v1/models is reachable
     """
+    logger.info("333333333333333333333333333333")
     if svc.enabled:
         return True
+    logger.info("444444444444444444444444444444")
     auto = os.environ.get("PERSONAL_MODEL_AUTO_ENABLE")
+    logger.info("5555555555555555555555555555555")
     if auto is None:
         auto = "true"
+    logger.info("PERSONAL_MODEL_AUTO_ENABLE: %s", auto)
     if not _truthy(auto):
         return False
     try:
+        logger.info("666666666666666666666666666")
         # Health check (fast). If reachable, allow running even if ENABLED flag is false.
         await svc.list_models()
+        logger.info("77777777777777777777777777777777")
         logger.warning("[%s] personal model auto-enabled (env flag missing): set PERSONAL_MODEL_ENABLED_WZM=true to suppress", trace_id)
         return True
     except Exception as e:
+        logger.info("888888888888888888888888888888888")
         logger.warning("[%s] personal model disabled and /v1/models unreachable: %r", trace_id, e)
         return False
 
 
 async def _get_or_create_conversation(db: AsyncSession, user_id: int, conversation_id: Optional[int]) -> CompanionConversation:
-    logger.info("7")
     if conversation_id:
         res = await db.execute(
             select(CompanionConversation).where(
@@ -118,7 +118,6 @@ async def _get_or_create_conversation(db: AsyncSession, user_id: int, conversati
 
 
 async def _load_recent_messages(db: AsyncSession, conversation_id: int, limit: int = 12) -> List[CompanionMessage]:
-    logger.info("8")
     res = await db.execute(
         select(CompanionMessage)
         .where(CompanionMessage.conversation_id == int(conversation_id))
@@ -130,7 +129,6 @@ async def _load_recent_messages(db: AsyncSession, conversation_id: int, limit: i
 
 
 def _system_prompt_for_mode(*, mode: str, profile: Dict[str, Any]) -> str:
-    logger.info("9")
     """
     A warm, structured system prompt. Keep it short so the model has room for context.
     """
@@ -139,7 +137,7 @@ def _system_prompt_for_mode(*, mode: str, profile: Dict[str, Any]) -> str:
     weak_subj = profile.get("weak_subjects") or []
 
     base = (
-        "你是用户专属的学习小书童（数字孪生式学习伙伴）。\n"
+        "你是用户专属的学习小书童（数字孪生式学习伙伴, 化学大师）。\n"
         "你的目标：在保证知识正确的前提下，给出针对性学习指导，并提供情绪价值（温暖、耐心、鼓励）。\n"
         "回答风格：先结论，再分点解释，最后给可执行的练习/复盘建议。\n"
         "如果你不确定，请明确说明不确定并给出验证思路。\n"
@@ -157,7 +155,6 @@ def _system_prompt_for_mode(*, mode: str, profile: Dict[str, Any]) -> str:
 
 
 def _format_retrieval_block(items: List[RetrievedItem]) -> str:
-    logger.info("10")
     if not items:
         return ""
     lines = ["以下是与问题相关的学习材料/错题记录（可能不完全准确，请你综合判断）："]
@@ -175,15 +172,18 @@ async def _retrieve_context(
     user_id: int,
     query: str,
     profile: Dict[str, Any],
+    subject: Optional[str] = None,
     top_k: int = 5,
 ) -> List[RetrievedItem]:
     """
     Retrieval strategy (runtime):
     1) Hybrid search (FAISS+BM25) over question corpus for wzm module
     2) Optional GraphRAG expansion by weak knowledge points (if enabled)
+
+    Args:
+        subject: Filter results by subject (e.g., "chemistry" for wzm module)
     """
-    
-    logger.info("11")
+
     out: List[RetrievedItem] = []
 
     # Ensure hybrid index is initialized (best-effort; it may already be done at app startup).
@@ -195,6 +195,11 @@ async def _retrieve_context(
         )
     except Exception as e:
         logger.debug(f"hybrid search init skipped: {e}")
+
+    # Build metadata filter for subject
+    filter_metadata = None
+    if subject:
+        filter_metadata = {"subject": subject}
 
     # Try embedding->vector hybrid search; fallback to BM25 if embedding is unavailable.
     try:
@@ -209,10 +214,10 @@ async def _retrieve_context(
                 query_text=query,
                 query_embedding=emb,
                 top_k=int(top_k),
-                filter_metadata=None,
+                filter_metadata=filter_metadata,
             )
         else:
-            results = await hs.search_bm25(query_text=query, top_k=int(top_k), filter_metadata=None)
+            results = await hs.search_bm25(query_text=query, top_k=int(top_k), filter_metadata=filter_metadata)
         for r in (results or []):
             out.append(
                 RetrievedItem(
@@ -233,15 +238,23 @@ async def _retrieve_context(
             graphrag = get_graphrag_service()
             await graphrag.initialize(graph_path=settings.module_graphrag_graph_path)
             weak_kps = profile.get("weak_knowledge_points", []) or []
-            subject = (profile.get("weak_subjects") or ["other"])[0]
+            # Use the subject parameter if provided, otherwise fall back to profile
+            graphrag_subject = subject or (profile.get("weak_subjects") or ["other"])[0]
             qids = graphrag.find_questions_by_knowledge_points(
-                subject=subject,
+                subject=graphrag_subject,
                 knowledge_points=weak_kps,
                 top_k=10,
                 exclude_question_ids=set([it.id for it in out if it.id]),
             )
             if qids:
-                rows = await db.execute(select(Question).where(Question.id.in_(qids), Question.user_id == int(user_id)))
+                # Filter by subject when querying database
+                query_filters = [Question.id.in_(qids), Question.user_id == int(user_id)]
+                if subject:
+                    # Import SubjectEnum to filter by subject
+                    from backend.core.db.models import SubjectEnum
+                    query_filters.append(Question.subject == SubjectEnum(subject))
+
+                rows = await db.execute(select(Question).where(*query_filters))
                 for q in rows.scalars().all():
                     out.append(
                         RetrievedItem(
@@ -267,7 +280,6 @@ async def chat(
     db: AsyncSession = Depends(get_db),
 ):
     
-    logger.info("12")
     """
     Chat with the user's "小书童".
 
@@ -283,6 +295,8 @@ async def chat(
 
     t0 = time.monotonic()
     svc = get_personal_model_service(settings.MODULE_NAME)
+    logger.info('1111_wzm', settings)
+    logger.info('1111_wzm', svc)
 
     # Student profile (used for personalization)
     advisor = get_learning_advisor_service()
@@ -318,6 +332,7 @@ async def chat(
     if warn:
         logger.warning("[%s] %s", trace_id, warn)
 
+    logger.info("11111111111111111111111111111111111111111")
     if not await _personal_model_should_run(svc, trace_id):
         raise HTTPException(
             status_code=503,
@@ -342,8 +357,8 @@ async def chat(
     )
     await db.flush()
 
-    # Retrieve context (Wzm-only)
-    retrieved = await _retrieve_context(db=db, user_id=current_user.id, query=msg, profile=profile, top_k=5)
+    # Retrieve context (Wzm-only, filtered by subject)
+    retrieved = await _retrieve_context(db=db, user_id=current_user.id, query=msg, profile=profile, subject=subject, top_k=5)
     retrieval_block = _format_retrieval_block(retrieved)
     try:
         src_counts: Dict[str, int] = {}
@@ -441,13 +456,15 @@ async def chat_stream(
     - Response is `text/event-stream` where each message is:
         data: {"type":"delta","content":"..."}
     """
-    logger.info("13")
     msg = (body.message or "").strip()
     if not msg:
         raise HTTPException(status_code=400, detail="message is required")
 
     t0 = time.monotonic()
     svc = get_personal_model_service(settings.MODULE_NAME)
+    logger.info('1112-wzm, %s', settings.MODULE_NAME)
+    logger.info('1113-wzm, %s', svc)
+    logger.info('1114-wzm, %s', settings)
 
     # Student profile (used for personalization)
     advisor = get_learning_advisor_service()
@@ -483,6 +500,7 @@ async def chat_stream(
     if warn:
         logger.warning("[%s] %s", trace_id, warn)
 
+    logger.info("22222222222222222222222222222222222222222")
     if not await _personal_model_should_run(svc, trace_id):
         raise HTTPException(
             status_code=503,
@@ -507,8 +525,8 @@ async def chat_stream(
     )
     await db.flush()
 
-    # Retrieve context (Wzm-only) — do it before streaming starts.
-    retrieved = await _retrieve_context(db=db, user_id=current_user.id, query=msg, profile=profile, top_k=5)
+    # Retrieve context (Wzm-only, filtered by subject) — do it before streaming starts.
+    retrieved = await _retrieve_context(db=db, user_id=current_user.id, query=msg, profile=profile, subject=subject, top_k=5)
     retrieval_block = _format_retrieval_block(retrieved)
     try:
         src_counts: Dict[str, int] = {}
@@ -628,7 +646,6 @@ async def list_conversations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    logger.info("15")
     res = await db.execute(
         select(CompanionConversation)
         .where(CompanionConversation.user_id == int(current_user.id), CompanionConversation.module == settings.MODULE_NAME)
@@ -655,7 +672,6 @@ async def get_conversation_messages(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    logger.info("16")
     res = await db.execute(
         select(CompanionConversation).where(
             CompanionConversation.id == int(conversation_id),
@@ -692,7 +708,6 @@ async def delete_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    logger.info("17")
     """
     Delete one conversation (and its messages) for the current user.
     """

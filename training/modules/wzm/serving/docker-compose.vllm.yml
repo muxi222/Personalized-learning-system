@@ -1,7 +1,7 @@
 services:
   wzm-vllm:
     image: vllm/vllm-openai:latest
-    container_name: tony-vllm
+    container_name: wzm-vllm
     restart: unless-stopped
     ports:
       - "8004:8000"
@@ -14,7 +14,7 @@ services:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     command: >
       --model OpenPipe/Qwen3-14B-Instruct
-      --served-model-name tony-qwen3-14b
+      --served-model-name wzm-qwen3-14b
       --host 0.0.0.0
       --port 8000
       --max-model-len 8192

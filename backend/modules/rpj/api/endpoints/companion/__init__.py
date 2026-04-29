@@ -1,7 +1,6 @@
 """
-Companion endpoints package (RPJ module) - TODO.
+Companion endpoints package (Tony).
 
-Tony module has the full implementation.
-Student modules should implement their own companion later.
+Other modules: create the same package shape, but keep TODO-only stubs.
 """
 

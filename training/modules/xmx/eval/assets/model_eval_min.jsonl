@@ -1,4 +1,0 @@
-{"id":"xmx-1","type":"freeform","prompt":"经济学：请用通俗语言解释“机会成本”，并举一个生活例子。","reference":""}
-{"id":"xmx-2","type":"freeform","prompt":"解释“供给曲线向右移动”可能由哪些因素导致？列 3 点。","reference":""}
-{"id":"xmx-3","type":"mcq","prompt":"选择题：如果需求不变而供给减少，均衡价格通常会？A. 上升 B. 下降 C. 不变 D. 无法判断。只输出最终选项字母。","gold":"A","reference":"A"}
-

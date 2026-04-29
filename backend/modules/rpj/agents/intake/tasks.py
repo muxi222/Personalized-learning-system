@@ -1,4 +1,6 @@
 """
+TONY Agents - Intake Tasks (Celery)
+
 Intake module: "录入错题" + reanalyze.
 Moved from agents/tasks.py without logic changes.
 """
@@ -6,10 +8,11 @@ Moved from agents/tasks.py without logic changes.
 import logging
 from typing import Optional, List
 
-from backend.modules.wzm.celery_app import celery_app
-from backend.modules.wzm.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
+from backend.modules.tony.celery_app import celery_app
+from backend.modules.tony.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
 
 logger = logging.getLogger(__name__)
+
 
 @celery_app.task(bind=True, max_retries=3)
 def process_question_task(

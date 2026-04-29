@@ -3,7 +3,6 @@ Image Files API Endpoints
 错题图片管理API
 """
 
-import os
 import logging
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,10 +10,10 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
-from backend.modules.wzm.api.deps import get_current_user, get_db
+from backend.modules.tony.api.deps import get_current_user, get_db
 from backend.core.crud import crud_image_file
 from backend.core.db.models import User, ImageFile, Question
-from backend.modules.rpj.config import settings
+from backend.modules.tony.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
