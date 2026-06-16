@@ -49,6 +49,11 @@ dependencies = [
     "python-multipart>=0.0.6",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
+    # Pin bcrypt to 4.x: 5.0.0 breaks passlib (spurious "password longer than
+    # 72 bytes" errors on short passwords). Mirrors requirements.txt.
+    "bcrypt>=4.0.0,<5.0.0",
+    # Required by EmailStr fields in user schemas (was only in requirements.txt).
+    "email-validator>=2.1.0",
     # Task Queue
     "redis>=5.0.1",
     "celery>=5.3.6",
