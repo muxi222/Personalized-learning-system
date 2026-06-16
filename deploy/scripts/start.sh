@@ -31,8 +31,7 @@ NC='\033[0m' # No Color
 
 # 模块定义 (兼容 Bash 3.2)
 MODULES=("default" "rpj" "xmx" "wzy" "wzm" "tony")
-# Celery agent workers are only available for these modules (default has no celery_app).
-AGENT_MODULES=("rpj" "xmx" "wzy" "wzm" "tony")
+AGENT_MODULES=("default" "rpj" "xmx" "wzy" "wzm" "tony")
 
 # 根据模块名获取端口号
 get_module_port() {
@@ -436,10 +435,6 @@ start_module_api() {
 # 启动模块 Agent Worker
 start_module_agent() {
     local module=$1
-    if [ "$module" = "default" ]; then
-        log_warn "default 模块不提供 Agent Worker（无 celery_app），跳过启动"
-        return 0
-    fi
     local queue="queue_${module}"
     local subjects=$(get_module_subjects "$module")
 

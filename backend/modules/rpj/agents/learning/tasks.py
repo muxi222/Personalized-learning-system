@@ -1,14 +1,13 @@
 """
-TONY Agents - Learning Tasks (Celery)
+RPJ Agents - Learning Tasks (Celery)
 
 Learning module: "学习建议 / 举一反三" (similar questions).
-Moved from agents/tasks.py without logic changes.
 """
 
 import logging
 
-from backend.modules.tony.celery_app import celery_app
-from backend.modules.tony.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
+from backend.modules.rpj.celery_app import celery_app
+from backend.modules.rpj.agents.shared.celery_utils import run_async, update_task_status, mark_task_failed
 
 logger = logging.getLogger(__name__)
 

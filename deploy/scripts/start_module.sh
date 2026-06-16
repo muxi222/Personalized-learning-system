@@ -246,11 +246,19 @@ trap cleanup INT TERM EXIT
 if [ "$SERVICE_TYPE" = "api" ]; then
     log_module "$MODULE" "启动 API 服务 (端口: $PORT, 学科: $SUBJECTS)..."
 
+    # NOTE: scope --reload to the code directory only. Watching PROJECT_ROOT
+    # (the default) includes logs/ and data/, and since the service writes its
+    # own log into logs/ this creates an infinite reload loop (the port never
+    # opens). RELOAD=false in .env disables hot-reload entirely.
+    RELOAD_ARGS="--reload --reload-dir ${PROJECT_ROOT}/backend"
+    if [ "${RELOAD:-true}" = "false" ]; then
+        RELOAD_ARGS=""
+    fi
     conda run -n 312_edu --no-capture-output uvicorn \
         "backend.modules.${MODULE}.main:app" \
         --host ${HOST:-0.0.0.0} \
         --port ${PORT} \
-        --reload > "${LOG_FILE}" 2>&1 &
+        ${RELOAD_ARGS} > "${LOG_FILE}" 2>&1 &
 
     CHILD_PID=$!
     echo $CHILD_PID > "${PID_FILE}"
@@ -283,10 +291,6 @@ if [ "$SERVICE_TYPE" = "api" ]; then
     log_module "$MODULE" "日志文件: ${LOG_FILE}"
 
 elif [ "$SERVICE_TYPE" = "agent" ]; then
-    if [ "$MODULE" = "default" ]; then
-        log_error "default 模块不提供 Agent Worker（无 celery_app），请使用: ./start.sh api_default"
-        exit 1
-    fi
     QUEUE="queue_${MODULE}"
     log_module "$MODULE" "启动 Agent Worker (队列: $QUEUE, 学科: $SUBJECTS)..."
 
