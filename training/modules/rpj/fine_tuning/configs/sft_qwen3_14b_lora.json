@@ -1,0 +1,30 @@
+{
+  "_comment": "xmx (history/geography/other) SFT config. Target model: Qwen3-14B-Instruct (LoRA/QLoRA).",
+  "model_name": "OpenPipe/Qwen3-14B-Instruct",
+  "dataset_path": "data/training/rpj/datasets/sft/train.jsonl",
+  "output_dir": "data/training/rpj/checkpoints/sft_lora",
+  "system_prompt": "你是一名面向初中/高中阶段学生的学习助手，擅长经济学、英语与综合人文类学科。\n\n要求：\n1) 讲解准确、条理清晰，由浅入深\n2) 优先定位薄弱知识点，给出可执行的复习/练习建议\n3) 对学生保持耐心、鼓励式表达\n4) 输出结构化：先结论，再依据/步骤，最后给出练习建议与复盘要点",
+  "lora_r": 64,
+  "lora_alpha": 16,
+  "lora_dropout": 0.05,
+  "lora_target_modules": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj"
+  ],
+  "num_epochs": 2,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 16,
+  "learning_rate": 0.0002,
+  "max_seq_length": 2048,
+  "warmup_ratio": 0.03,
+  "weight_decay": 0.001,
+  "use_4bit": true,
+  "bnb_4bit_compute_dtype": "bfloat16",
+  "bnb_4bit_quant_type": "nf4",
+  "use_nested_quant": false
+}

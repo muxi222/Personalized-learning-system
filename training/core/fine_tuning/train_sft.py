@@ -326,7 +326,6 @@ def train(config: dict):
             bf16=True,
             tf32=True,
             max_grad_norm=0.3,
-            group_by_length=True,
             report_to="tensorboard",
             optim="paged_adamw_32bit",
             max_length=int(config["max_seq_length"]),

@@ -34,3 +34,18 @@ TODO（生产落地必做）：
 - 灰度发布（Argo Rollouts / Flagger）
 - 观测：请求日志、token 计数、延迟、错误率、SLO
 
+### 监控与运维
+
+详细的模型启动、状态监控与运维指南见独立文档：**[docs/MODEL_SERVING_GUIDE.md](../../../docs/MODEL_SERVING_GUIDE.md)**
+
+快速操作：
+
+```bash
+# 一键状态检查
+./deploy/scripts/check_vllm.sh tony
+
+# 启动 / 停止 / 查看日志
+./deploy/scripts/pipeline.sh serve-model --module tony up
+./deploy/scripts/pipeline.sh serve-model --module tony logs
+```
+

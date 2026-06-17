@@ -302,6 +302,19 @@ Stop / logs:
 ./deploy/scripts/pipeline.sh serve-model --module tony logs
 ```
 
+### Model serving monitoring
+
+详细的模型启动、状态监控与运维指南见独立文档：
+
+→ **[docs/MODEL_SERVING_GUIDE.md](./MODEL_SERVING_GUIDE.md)**
+
+快速检查命令：
+
+```bash
+./deploy/scripts/check_vllm.sh tony
+curl -s http://127.0.0.1:8005/metrics | grep -E "request_success|gpu_cache|num_preemptions"
+```
+
 ### Model endpoint evaluation (OpenAI-compatible)
 
 Once the model server is running, evaluate the served model via OpenAI-compatible requests:
