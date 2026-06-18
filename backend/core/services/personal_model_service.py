@@ -154,6 +154,10 @@ class PersonalModelService:
         # Optional explicit override: PERSONAL_MODEL_MODEL_<MODULE>_<SUBJECT>=...
         override_key = f"PERSONAL_MODEL_MODEL_{self._module.upper()}_{subj.upper()}"
         override = (os.environ.get(override_key) or "").strip()
+        has_explicit_override = bool(override)
+        # Implicit (legacy) per-subject LoRA name. The current unified gateway exposes only
+        # <module>-sft / <module>-dpo (no per-subject suffix), so this implicit probe is
+        # best-effort: if it's not served we simply use the configured default (<module>-dpo).
         subject_model = override or f"{self._module}-sft-{subj}"
 
         try:
@@ -171,11 +175,19 @@ class PersonalModelService:
                 f"Run train-sft for subject={subj}, then restart vLLM so it loads the LoRA."
             )
 
+        # Subject-specific model is not served. Only surface a (non-blocking) warning when the
+        # operator explicitly requested one via PERSONAL_MODEL_MODEL_<MODULE>_<SUBJECT>; otherwise
+        # the configured default (e.g. <module>-dpo) is the intended model and falling back is
+        # routine — avoid a noisy "LoRA not found" banner on every message.
         return {
             "model": self.default_model,
             "subject_model": subject_model,
             "used_subject_model": False,
-            "warning": f"Subject-specific LoRA not found: {subject_model}. Falling back to default model: {self.default_model}",
+            "warning": (
+                f"Subject-specific model not found: {subject_model}. Falling back to default model: {self.default_model}"
+                if has_explicit_override
+                else None
+            ),
         }
 
     def _get_client(self):
