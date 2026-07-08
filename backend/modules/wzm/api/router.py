@@ -15,6 +15,7 @@ from .endpoints.shared import users as shared_users
 from .endpoints.shared import tasks as shared_tasks
 from .endpoints.shared import feedback as shared_feedback
 from .endpoints.stats import feedback as feedback_stats
+from .endpoints.companion import chat as companion_chat
 
 api_router = APIRouter()
 
@@ -31,3 +32,4 @@ api_router.include_router(shared_users.router, prefix="/users", tags=["Users"])
 api_router.include_router(shared_tasks.router, prefix="/tasks", tags=["Tasks"])
 api_router.include_router(shared_feedback.router, prefix="/feedback", tags=["Feedback"])
 api_router.include_router(feedback_stats.router, prefix="/feedback", tags=["Feedback"])
+api_router.include_router(companion_chat.router, prefix="/companion", tags=["Companion"])

@@ -416,11 +416,17 @@ start_module_api() {
     export PYTHONPATH="${PROJECT_ROOT}/backend:${PYTHONPATH:+:$PYTHONPATH}"
 
     # 启动 API (使用模块的main.py)
+    # 根据 RELOAD 环境变量决定是否启用热重载
+    local reload_args=""
+    if [ "${RELOAD:-true}" = "true" ]; then
+        reload_args="--reload --reload-dir ${PROJECT_ROOT}/backend --reload-exclude '**/__pycache__/*' --reload-exclude '**/*.pyc'"
+    fi
+
     conda run -n 312_edu --no-capture-output uvicorn \
         "backend.modules.${module}.main:app" \
         --host ${HOST:-0.0.0.0} \
         --port ${port} \
-        --reload > "${PROJECT_ROOT}/logs/${module}_api.log" 2>&1 &
+        ${reload_args} > "${PROJECT_ROOT}/logs/${module}_api.log" 2>&1 &
 
     local pid=$!
     echo $pid > "${pid_file}"

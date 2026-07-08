@@ -135,18 +135,39 @@ class PersonalModelService:
         self,
         *,
         subject: Optional[str],
+        training_mode: Optional[str] = None,
         strict: bool = False,
     ) -> Dict[str, Any]:
         """
-        Resolve which served model id to use for a given subject.
+        Resolve which served model id to use for a given subject and training mode.
 
         Convention:
-        - subject-specific LoRA:  <module>-sft-<subject>
-        - fallback:              settings PERSONAL_MODEL_MODEL_<MODULE>
+        - training_mode specified:  <module>-<training_mode> (e.g., xmx-sft, xmx-dpo)
+        - subject-specific LoRA:    <module>-sft-<subject>
+        - fallback:                 settings PERSONAL_MODEL_MODEL_<MODULE>
 
         Return:
           { "model": str, "subject_model": Optional[str], "used_subject_model": bool, "warning": Optional[str] }
         """
+        # Priority 1: training_mode (sft/dpo)
+        mode = (training_mode or "").strip().lower()
+        if mode in {"sft", "dpo"}:
+            target_model = f"{self._module}-{mode}"
+            try:
+                models = await self.list_models_cached()
+                ids = {str(m.get("id") or "").strip() for m in (models or []) if isinstance(m, dict)}
+                if target_model in ids:
+                    return {"model": target_model, "subject_model": None, "used_subject_model": False, "warning": None}
+            except Exception:
+                pass
+            # If requested training_mode model not found, fall through to other resolution
+            logger.warning(
+                "[personal_model] training_mode=%s requested but model %s not found, falling back",
+                mode,
+                target_model,
+            )
+
+        # Priority 2: subject-specific model
         subj = (subject or "").strip().lower()
         if not subj:
             return {"model": self.default_model, "subject_model": None, "used_subject_model": False, "warning": None}

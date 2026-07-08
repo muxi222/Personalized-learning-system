@@ -250,7 +250,8 @@ if [ "$SERVICE_TYPE" = "api" ]; then
     # (the default) includes logs/ and data/, and since the service writes its
     # own log into logs/ this creates an infinite reload loop (the port never
     # opens). RELOAD=false in .env disables hot-reload entirely.
-    RELOAD_ARGS="--reload --reload-dir ${PROJECT_ROOT}/backend"
+    # Exclude __pycache__ to prevent reload loops from Python bytecode updates.
+    RELOAD_ARGS="--reload --reload-dir ${PROJECT_ROOT}/backend --reload-exclude '**/__pycache__/*' --reload-exclude '**/*.pyc'"
     if [ "${RELOAD:-true}" = "false" ]; then
         RELOAD_ARGS=""
     fi

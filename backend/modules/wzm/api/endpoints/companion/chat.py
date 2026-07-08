@@ -276,6 +276,7 @@ async def _retrieve_context(
 async def chat(
     body: CompanionChatRequest,
     subject: Optional[str] = Query(None, description="学科（用于选择 <module>-sft-<subject>）"),
+    training_mode: Optional[str] = Query(None, description="训练模式: sft | dpo"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -314,11 +315,11 @@ async def chat(
     trace_id = f"companion:{settings.MODULE_NAME}:{int(current_user.id)}:{int(conv.id)}"
 
     strict_subject = str(os.environ.get("COMPANION_REQUIRE_SUBJECT_MODEL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
-    resolved = await svc.resolve_model_for_subject(subject=subject, strict=strict_subject)
+    resolved = await svc.resolve_model_for_subject(subject=subject, training_mode=training_mode, strict=strict_subject)
     model_to_use = resolved["model"]
     warn = resolved.get("warning")
     logger.info(
-        "[%s] chat request subject=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
+        "[%s] chat request subject=%s training_mode=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
         trace_id,
         (subject or None),
         (body.mode or "chat"),
@@ -402,6 +403,7 @@ async def chat(
                 "profile": profile,
                 "retrieval": [it.model_dump() for it in (retrieved or [])],
                 "subject": (subject or None),
+                "training_mode": (training_mode or None),
                 "resolved_model": resolved,
             },
         )
@@ -445,6 +447,7 @@ async def chat(
 async def chat_stream(
     body: CompanionChatRequest,
     subject: Optional[str] = Query(None, description="学科（用于选择 <module>-sft-<subject>）"),
+    training_mode: Optional[str] = Query(None, description="训练模式: sft | dpo"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -482,11 +485,11 @@ async def chat_stream(
     trace_id = f"companion:{settings.MODULE_NAME}:{int(current_user.id)}:{int(conv.id)}"
 
     strict_subject = str(os.environ.get("COMPANION_REQUIRE_SUBJECT_MODEL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
-    resolved = await svc.resolve_model_for_subject(subject=subject, strict=strict_subject)
+    resolved = await svc.resolve_model_for_subject(subject=subject, training_mode=training_mode, strict=strict_subject)
     model_to_use = resolved["model"]
     warn = resolved.get("warning")
     logger.info(
-        "[%s] chat_stream request subject=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
+        "[%s] chat_stream request subject=%s training_mode=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
         trace_id,
         (subject or None),
         (body.mode or "chat"),
@@ -582,6 +585,7 @@ async def chat_stream(
                 "trace_id": trace_id,
                 "model": model_to_use,
                 "subject": (subject or None),
+                "training_mode": (training_mode or None),
                 "subject_model": resolved.get("subject_model"),
                 "used_subject_model": bool(resolved.get("used_subject_model")),
                 "warning": warn,
@@ -611,6 +615,7 @@ async def chat_stream(
                     "profile": profile,
                     "retrieval": [it.model_dump() for it in (retrieved or [])],
                     "subject": (subject or None),
+                "training_mode": (training_mode or None),
                     "resolved_model": resolved,
                 },
             ):

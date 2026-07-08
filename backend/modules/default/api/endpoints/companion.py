@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -213,6 +213,7 @@ def _resolve_module(subject: str) -> str:
 async def chat(
     request: Request,
     subject: str = Query(..., description="学科"),
+    training_mode: Optional[str] = Query(None, description="训练模式: sft | dpo"),
     body: Dict[str, Any] = Body(default_factory=dict),  # passthrough
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -220,14 +221,18 @@ async def chat(
     logger.info("chat_ok")
     _ = (current_user, db)  # keep signature consistent; proxy uses auth header
     module = _resolve_module(subject)
-    # Forward subject to module so it can choose subject-specific LoRA (module-sft-<subject>).
-    return await _proxy(request=request, module=module, method="POST", path="/chat", params={"subject": subject}, json_body=body or {})
+    # Forward subject and training_mode to module so it can choose appropriate model.
+    params = {"subject": subject}
+    if training_mode:
+        params["training_mode"] = training_mode
+    return await _proxy(request=request, module=module, method="POST", path="/chat", params=params, json_body=body or {})
 
 
 @router.post("/chat/stream")
 async def chat_stream(
     request: Request,
     subject: str = Query(..., description="学科"),
+    training_mode: Optional[str] = Query(None, description="训练模式: sft | dpo"),
     body: Dict[str, Any] = Body(default_factory=dict),  # passthrough
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -237,8 +242,12 @@ async def chat_stream(
     module = _resolve_module(subject)
     logger.info("chat_subject: %s", subject)
     logger.info("chat_module: %s", module)
-    # Forward subject to module so it can choose subject-specific LoRA (module-sft-<subject>).
-    return await _proxy_stream(request=request, module=module, path="/chat/stream", params={"subject": subject}, json_body=body or {})
+    logger.info("chat_training_mode: %s", training_mode)
+    # Forward subject and training_mode to module so it can choose appropriate model.
+    params = {"subject": subject}
+    if training_mode:
+        params["training_mode"] = training_mode
+    return await _proxy_stream(request=request, module=module, path="/chat/stream", params=params, json_body=body or {})
 
 @router.get("/conversations")
 async def list_conversations(

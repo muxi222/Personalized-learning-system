@@ -32,8 +32,8 @@ from backend.core.services.learning_advisor_service import get_learning_advisor_
 from backend.core.services.personal_model_service import get_personal_model_service
 from backend.core.services.embedding_service import get_embedding_service
 from backend.core.services.hybrid_search_service import get_hybrid_search_service
-from backend.modules.tony.api.deps import get_current_user, get_db
-from backend.modules.tony.config import settings
+from backend.modules.xmx.api.deps import get_current_user, get_db
+from backend.modules.xmx.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -260,6 +260,7 @@ async def _retrieve_context(
 async def chat(
     body: CompanionChatRequest,
     subject: Optional[str] = Query(None, description="学科（用于选择 <module>-sft-<subject>）"),
+    training_mode: Optional[str] = Query(None, description="训练模式: sft | dpo"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -271,6 +272,10 @@ async def chat(
     - retrieve context (hybrid search + optional GraphRAG)
     - call the personal model (OpenAI-compatible vLLM)
     - store conversation history
+
+    Parameters:
+    - training_mode: "sft" or "dpo" to select <module>-sft or <module>-dpo model
+    - subject: specific subject for subject-specific LoRA (if available)
     """
     msg = (body.message or "").strip()
     if not msg:
@@ -295,13 +300,14 @@ async def chat(
     trace_id = f"companion:{settings.MODULE_NAME}:{int(current_user.id)}:{int(conv.id)}"
 
     strict_subject = str(os.environ.get("COMPANION_REQUIRE_SUBJECT_MODEL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
-    resolved = await svc.resolve_model_for_subject(subject=subject, strict=strict_subject)
+    resolved = await svc.resolve_model_for_subject(subject=subject, training_mode=training_mode, strict=strict_subject)
     model_to_use = resolved["model"]
     warn = resolved.get("warning")
     logger.info(
-        "[%s] chat request subject=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
+        "[%s] chat request subject=%s training_mode=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
         trace_id,
         (subject or None),
+        (training_mode or None),
         (body.mode or "chat"),
         len(msg),
         _truncate(msg, 160),
@@ -425,6 +431,7 @@ async def chat(
 async def chat_stream(
     body: CompanionChatRequest,
     subject: Optional[str] = Query(None, description="学科（用于选择 <module>-sft-<subject>）"),
+    training_mode: Optional[str] = Query(None, description="训练模式: sft | dpo"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -435,6 +442,10 @@ async def chat_stream(
     - `POST /api/v1/companion/chat/stream`
     - Response is `text/event-stream` where each message is:
         data: {"type":"delta","content":"..."}
+
+    Parameters:
+    - training_mode: "sft" or "dpo" to select <module>-sft or <module>-dpo model
+    - subject: specific subject for subject-specific LoRA (if available)
     """
     msg = (body.message or "").strip()
     if not msg:
@@ -459,13 +470,14 @@ async def chat_stream(
     trace_id = f"companion:{settings.MODULE_NAME}:{int(current_user.id)}:{int(conv.id)}"
 
     strict_subject = str(os.environ.get("COMPANION_REQUIRE_SUBJECT_MODEL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
-    resolved = await svc.resolve_model_for_subject(subject=subject, strict=strict_subject)
+    resolved = await svc.resolve_model_for_subject(subject=subject, training_mode=training_mode, strict=strict_subject)
     model_to_use = resolved["model"]
     warn = resolved.get("warning")
     logger.info(
-        "[%s] chat_stream request subject=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
+        "[%s] chat_stream request subject=%s training_mode=%s mode=%s msg_len=%s msg_preview=%r personal_model_enabled=%s model=%s subject_model=%s used_subject_model=%s",
         trace_id,
         (subject or None),
+        (training_mode or None),
         (body.mode or "chat"),
         len(msg),
         _truncate(msg, 160),

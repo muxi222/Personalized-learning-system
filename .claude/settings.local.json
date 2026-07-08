@@ -74,7 +74,19 @@
       "Bash(localedef --list-archive)",
       "Read(//usr/lib/locale/**)",
       "Bash(bash -ilc 'echo \"shell ok: LC_ALL=$LC_ALL LANG=$LANG\"')",
-      "Bash(bash -c 'source ~/.bashrc 2>&1; echo \"after source: LC_ALL=$LC_ALL LANG=$LANG\"')"
+      "Bash(bash -c 'source ~/.bashrc 2>&1; echo \"after source: LC_ALL=$LC_ALL LANG=$LANG\"')",
+      "Bash(awk '{print $2, $14, $15, $16, $17}')",
+      "Bash(pkill -9 -f \"uvicorn backend.modules\")",
+      "Bash(pkill -9 -f \"celery.*backend.modules\")",
+      "Bash(rm -f pids/*.pid)",
+      "Bash(netstat -tlnp)",
+      "Bash(pkill -9 -f \"conda run.*uvicorn\")",
+      "Bash(pkill -9 -f \"python.*uvicorn\")",
+      "Bash(pkill -9 -f \"celery.*backend\")",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs -r kill -9)",
+      "Bash(fuser *)",
+      "Bash(timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/6003')"
     ]
   }
 }
