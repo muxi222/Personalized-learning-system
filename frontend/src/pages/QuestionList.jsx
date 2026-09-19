@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { questionApi, imageFilesApi } from '../lib/api'
 import {
   Search,
@@ -9,11 +9,11 @@ import {
   ChevronLeft,
   ChevronRight,
   BookOpen,
-  Image as ImageIcon,
   Maximize2,
   Trash2
 } from 'lucide-react'
 import clsx from 'clsx'
+import SubjectFilter from '../components/SubjectFilter'
 import ImageViewer from '../components/ImageViewer'
 import toast from 'react-hot-toast'
 
@@ -45,12 +45,18 @@ const DIFFICULTIES = [
 ]
 
 export default function QuestionList() {
+  const [searchParams] = useSearchParams()
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState({
     subject: '',
     difficulty: '',
-    search: '',
+    search: searchParams.get('search') || '',
   })
+  useEffect(() => {
+    setFilters(prev => ({ ...prev, search: searchParams.get('search') || '' }))
+    setPage(1)
+  }, [searchParams])
+
   const [dateRange, setDateRange] = useState({ start: '', end: '' }) // YYYY-MM-DD
   const [groupBy, setGroupBy] = useState('upload') // upload | chapter
   const [chapterFilter, setChapterFilter] = useState('')
@@ -343,16 +349,36 @@ export default function QuestionList() {
     <div className="animate-fade-in">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="font-display text-3xl font-bold text-white mb-2">
+        <h1 className="font-display text-2xl font-bold text-slate-800 mb-2">
           错题本
         </h1>
-        <p className="text-slate-400">
+        <p className="text-slate-500">
           共 {total} 道错题
         </p>
       </div>
 
       {/* Filters */}
-      <div className="card p-4 mb-6">
+      <div className="page-filters">
+        <SubjectFilter value={filters.subject} includeAll name="question-subject" onChange={value => {
+          setFilters(prev => ({ ...prev, subject: value }))
+          setChapterFilter('')
+          setKnowledgePointFilter('')
+          setPage(1)
+        }} />
+        <div className="filter-row">
+          <span className="filter-label" id="question-difficulty-label">难度</span>
+          <div className="filter-options" role="radiogroup" aria-labelledby="question-difficulty-label">
+            {DIFFICULTIES.map(({ value, label }) => (
+              <label className={'filter-option' + (filters.difficulty === value ? ' is-selected' : '')} key={value}>
+                <input type="radio" name="question-difficulty" value={value} checked={filters.difficulty === value} onChange={() => {
+                  setFilters(prev => ({ ...prev, difficulty: value }))
+                  setPage(1)
+                }} />
+                {value ? label : '全部'}
+              </label>
+            ))}
+          </div>
+        </div>
         <form onSubmit={handleSearch} className="flex flex-wrap items-center gap-4">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
@@ -360,47 +386,18 @@ export default function QuestionList() {
             <input
               type="text"
               value={filters.search}
-              onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+              onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1) }}
               className="input pl-10"
               placeholder="搜索题目内容..."
             />
           </div>
 
-          {/* Subject filter */}
-          <select
-            value={filters.subject}
-            onChange={(e) => {
-              const next = e.target.value
-              setFilters({ ...filters, subject: next })
-              setKnowledgePointFilter('')
-              setPage(1)
-            }}
-            className="input w-auto"
-          >
-            {SUBJECTS.map(({ value, label }) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-
-          {/* Difficulty filter */}
-          <select
-            value={filters.difficulty}
-            onChange={(e) => {
-              setFilters({ ...filters, difficulty: e.target.value })
-              setPage(1)
-            }}
-            className="input w-auto"
-          >
-            {DIFFICULTIES.map(({ value, label }) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-
           {/* Date range */}
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">日期</span>
+          <div className="question-date-range flex flex-wrap items-center gap-2">
+            <span className="text-slate-500 text-sm">日期</span>
             <input
               type="date"
+              aria-label="开始日期"
               value={dateRange.start}
               onChange={(e) => {
                 setDateRange(prev => ({ ...prev, start: e.target.value }))
@@ -411,6 +408,7 @@ export default function QuestionList() {
             <span className="text-slate-500 text-sm">-</span>
             <input
               type="date"
+              aria-label="结束日期"
               value={dateRange.end}
               onChange={(e) => {
                 setDateRange(prev => ({ ...prev, end: e.target.value }))
@@ -423,6 +421,7 @@ export default function QuestionList() {
           {/* Group mode */}
           <select
             value={groupBy}
+            aria-label="错题分组方式"
             onChange={(e) => {
               setGroupBy(e.target.value)
               setChapterFilter('')
@@ -491,7 +490,7 @@ export default function QuestionList() {
                 <button
                   type="button"
                   onClick={handleDeleteChapter}
-                  className="bg-red-500/20 hover:bg-red-500/30 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                  className="bg-red-500/20 hover:bg-red-500/30 text-red-600 px-3 py-2 rounded-lg text-sm font-medium transition-all"
                 >
                   <Trash2 className="w-4 h-4 inline mr-1" />
                   删除该分类
@@ -524,13 +523,13 @@ export default function QuestionList() {
                 type="button"
                 onClick={handleBatchDelete}
                 disabled={selectedCount === 0 || batchDeleteMutation.isPending}
-                className="bg-red-500/20 hover:bg-red-500/30 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                className="bg-red-500/20 hover:bg-red-500/30 text-red-600 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
               >
                 <Trash2 className="w-4 h-4 inline mr-1" />
                 {batchDeleteMutation.isPending ? '删除中...' : `删除 (${selectedCount})`}
               </button>
               {groupBy === 'upload' && isGrouped && (
-                <div className="flex items-center gap-1 rounded-lg border border-slate-700/60 bg-slate-900/40 p-1">
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -539,7 +538,7 @@ export default function QuestionList() {
                     }}
                     className={clsx(
                       'px-2 py-1 text-xs rounded-md transition-all',
-                      selectionKind === 'image' ? 'bg-primary-500/20 text-primary-200' : 'text-slate-300 hover:bg-slate-800/50'
+                      selectionKind === 'image' ? 'bg-primary-500/20 text-primary-600' : 'text-slate-600 hover:bg-slate-50'
                     )}
                   >
                     按图片
@@ -552,7 +551,7 @@ export default function QuestionList() {
                     }}
                     className={clsx(
                       'px-2 py-1 text-xs rounded-md transition-all',
-                      selectionKind === 'question' ? 'bg-primary-500/20 text-primary-200' : 'text-slate-300 hover:bg-slate-800/50'
+                      selectionKind === 'question' ? 'bg-primary-500/20 text-primary-600' : 'text-slate-600 hover:bg-slate-50'
                     )}
                   >
                     按错题
@@ -562,7 +561,7 @@ export default function QuestionList() {
               <button
                 type="button"
                 onClick={handleDeleteFiltered}
-                className="bg-red-500/10 hover:bg-red-500/20 text-red-300 px-3 py-2 rounded-lg text-sm font-medium transition-all"
+                className="bg-red-500/10 hover:bg-red-500/20 text-red-600 px-3 py-2 rounded-lg text-sm font-medium transition-all"
               >
                 删除筛选结果
               </button>
@@ -600,7 +599,7 @@ export default function QuestionList() {
             <button
               type="button"
               onClick={handleDeleteFiltered}
-              className="bg-red-500/10 hover:bg-red-500/20 text-red-300 px-3 py-2 rounded-lg text-sm font-medium transition-all"
+              className="bg-red-500/10 hover:bg-red-500/20 text-red-600 px-3 py-2 rounded-lg text-sm font-medium transition-all"
             >
               <Trash2 className="w-4 h-4 inline mr-1" />
               删除筛选结果
@@ -614,8 +613,8 @@ export default function QuestionList() {
         <div className="space-y-4">
           {[...Array(5)].map((_, i) => (
             <div key={i} className="card p-6 animate-pulse">
-              <div className="h-5 bg-slate-700 rounded w-3/4 mb-3" />
-              <div className="h-4 bg-slate-700 rounded w-1/2" />
+              <div className="h-5 bg-slate-50 rounded w-3/4 mb-3" />
+              <div className="h-4 bg-slate-50 rounded w-1/2" />
             </div>
           ))}
         </div>
@@ -637,7 +636,7 @@ export default function QuestionList() {
                     <div className="flex items-start gap-4">
                       {/* 组预览图 */}
                       {group.preview_image_url && (
-                        <div className="relative flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-slate-800/50 border border-slate-700/50 hover:border-primary-500/50 transition-all group">
+                        <div className="relative flex-shrink-0 w-32 h-32 rounded-lg overflow-hidden bg-slate-50 border border-slate-200 hover:border-primary-500/50 transition-all group">
                           {/* 选择框（批量管理模式，按图片） */}
                           {isSelectionMode && selectionKind === 'image' && imageId && (
                             <input
@@ -718,7 +717,7 @@ export default function QuestionList() {
                                     })
                                     .catch(() => toast.error('删除失败'))
                                 }}
-                                className="px-2 py-1 rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-medium transition-all"
+                                className="px-2 py-1 rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-600 text-xs font-medium transition-all"
                                 title="删除本图全部错题"
                               >
                                 删除
@@ -731,7 +730,7 @@ export default function QuestionList() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-4 mb-3">
                           <div className="min-w-0">
-                            <h3 className="text-lg font-medium text-white line-clamp-1">
+                            <h3 className="text-lg font-medium text-slate-800 line-clamp-1">
                               {groupBy === 'chapter'
                                 ? `${SUBJECTS.find(s => s.value === group.subject)?.label || group.subject} · ${group.chapter || '未分类'}`
                                 : groupBy === 'knowledge_point'
@@ -739,7 +738,7 @@ export default function QuestionList() {
                                 : `${SUBJECTS.find(s => s.value === group.subject)?.label || group.subject} · ${group.upload_type === 'image' ? '图片上传' : '文字录入'}`
                               }
                             </h3>
-                            <p className="text-slate-400 text-sm mt-1">
+                            <p className="text-slate-500 text-sm mt-1">
                               共 {group.count} 道题
                             </p>
                             {(group.created_at || group.tags?.length) && (
@@ -776,7 +775,7 @@ export default function QuestionList() {
                             <Link
                               key={q.id}
                               to={`/questions/${q.id}${q.subject ? `?subject=${encodeURIComponent(q.subject)}` : ''}`}
-                              className="block rounded-lg bg-slate-800/40 hover:bg-slate-800/60 border border-slate-700/40 hover:border-primary-500/40 transition-all p-3"
+                              className="block rounded-lg bg-slate-50 hover:bg-slate-50 border border-slate-200 hover:border-primary-500/40 transition-all p-3"
                             >
                               <div className="flex items-start justify-between gap-3">
                                 {/* 选择框（批量管理模式，按错题） */}
@@ -794,29 +793,29 @@ export default function QuestionList() {
                                 )}
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2">
-                                    <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-primary-500/15 text-primary-200 text-xs font-semibold flex-shrink-0">
+                                    <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-primary-500/15 text-primary-600 text-xs font-semibold flex-shrink-0">
                                       {qi + 1}
                                     </span>
-                                    <div className="text-white text-sm font-medium line-clamp-1">
+                                    <div className="text-slate-800 text-sm font-medium line-clamp-1">
                                       {q.title || (q.content ? q.content.slice(0, 60) : '题目内容')}
                                     </div>
                                     <span
                                       className={clsx(
                                         'text-xs px-2 py-0.5 rounded-full border flex-shrink-0',
-                                        isCorrect === true && 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
-                                        isCorrect === false && 'bg-red-500/10 text-red-300 border-red-500/30',
-                                        isCorrect == null && 'bg-slate-500/10 text-slate-300 border-slate-500/30'
+                                        isCorrect === true && 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30',
+                                        isCorrect === false && 'bg-red-500/10 text-red-600 border-red-500/30',
+                                        isCorrect == null && 'bg-slate-500/10 text-slate-600 border-slate-200'
                                       )}
                                     >
                                       {isCorrect === true ? '正确' : isCorrect === false ? '错误' : '未知'}
                                     </span>
                                     {typeof q?.score === 'number' && typeof q?.max_score === 'number' && (
-                                      <span className="text-slate-400 text-xs flex-shrink-0">
+                                      <span className="text-slate-500 text-xs flex-shrink-0">
                                         {q.score}/{q.max_score}
                                       </span>
                                     )}
                                   </div>
-                                  <div className="text-slate-400 text-xs line-clamp-1 mt-1">
+                                  <div className="text-slate-500 text-xs line-clamp-1 mt-1">
                                     {q.content}
                                   </div>
                                 </div>
@@ -853,7 +852,7 @@ export default function QuestionList() {
                   {/* 图片缩略图 */}
                   {question.image_urls && question.image_urls.length > 0 && (
                     <div
-                      className="flex-shrink-0 w-32 h-32 rounded-xl overflow-hidden bg-slate-800/50 border border-slate-700/50 cursor-pointer hover:border-primary-500/50 transition-all group relative"
+                      className="flex-shrink-0 w-32 h-32 rounded-lg overflow-hidden bg-slate-50 border border-slate-200 cursor-pointer hover:border-primary-500/50 transition-all group relative"
                       onClick={(e) => {
                         e.preventDefault()
                         setViewerImage({
@@ -894,12 +893,12 @@ export default function QuestionList() {
                     className="flex-1 min-w-0 hover:opacity-80 transition-opacity"
                   >
                     <div className="flex items-start justify-between gap-4 mb-2">
-                      <h3 className="text-lg font-medium text-white line-clamp-1">
+                      <h3 className="text-lg font-medium text-slate-800 line-clamp-1">
                         {question.title || question.content.slice(0, 80)}
                       </h3>
                       <ArrowRight className="w-5 h-5 text-slate-500 flex-shrink-0" />
                     </div>
-                    <p className="text-slate-400 text-sm line-clamp-2 mb-3">
+                    <p className="text-slate-500 text-sm line-clamp-2 mb-3">
                       {question.content}
                     </p>
                     <div className="flex items-center gap-3 flex-wrap">
@@ -908,9 +907,9 @@ export default function QuestionList() {
                       </span>
                       <span className={clsx(
                         'badge',
-                        question.difficulty === 'easy' && 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
-                        question.difficulty === 'medium' && 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-                        question.difficulty === 'hard' && 'bg-red-500/20 text-red-300 border border-red-500/30',
+                        question.difficulty === 'easy' && 'bg-emerald-500/20 text-emerald-600 border border-emerald-500/30',
+                        question.difficulty === 'medium' && 'bg-amber-500/20 text-amber-600 border border-amber-500/30',
+                        question.difficulty === 'hard' && 'bg-red-500/20 text-red-600 border border-red-500/30',
                       )}>
                         {DIFFICULTIES.find(d => d.value === question.difficulty)?.label || question.difficulty}
                       </span>
@@ -932,8 +931,8 @@ export default function QuestionList() {
       ) : (
         <div className="card p-12 text-center">
           <BookOpen className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-white mb-2">暂无错题</h3>
-          <p className="text-slate-400 mb-4">
+          <h3 className="text-lg font-medium text-slate-800 mb-2">暂无错题</h3>
+          <p className="text-slate-500 mb-4">
             去录入第一道错题吧！
           </p>
           <Link to="/submit" className="btn-primary inline-flex items-center gap-2">
@@ -964,7 +963,7 @@ export default function QuestionList() {
                   'w-10 h-10 rounded-lg font-medium transition-colors',
                   page === pageNum
                     ? 'bg-primary-500 text-white'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
                 )}
               >
                 {pageNum}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { companionApi } from '../lib/api'
-import { MODULE_DESCRIPTIONS, SUBJECT_NAMES_CN, SUBJECT_TO_MODULE } from '../config/moduleRouting'
+import { SUBJECT_NAMES_CN, SUBJECT_TO_MODULE } from '../config/moduleRouting'
 import { Sparkles, Send, MessageCircle, History, Plus, Search, Square, Trash2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 
@@ -38,7 +38,6 @@ export default function Companion() {
   const abortRef = useRef(null)
 
   const subjectOptions = useMemo(() => getSubjectOptions(), [])
-  const subjectModule = SUBJECT_TO_MODULE?.[subject] || 'default'
   const subjectLabel = SUBJECT_NAMES_CN?.[subject] || subject
 
   const { data: convList, refetch: refetchConversations } = useQuery({
@@ -312,7 +311,7 @@ export default function Companion() {
   const renderAssistantMarkdown = (raw) => {
     const s = String(raw || '').trim()
     return (
-      <div className="prose prose-invert max-w-none prose-p:my-2 prose-pre:bg-slate-950/60 prose-pre:border prose-pre:border-slate-700/60">
+      <div className="prose prose-slate max-w-none prose-p:my-2 prose-pre:bg-white prose-pre:border prose-pre:border-slate-200">
         <ReactMarkdown>{s || '（无可展示内容）'}</ReactMarkdown>
       </div>
     )
@@ -350,16 +349,16 @@ export default function Companion() {
 
   return (
     <div className="max-w-6xl mx-auto animate-fade-in">
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className="companion-layout">
         {/* Gemini-like left sidebar */}
-        <div className="card lg:col-span-4 xl:col-span-3 p-3 flex flex-col min-h-[720px]">
+        <div className="companion-sidebar flex flex-col">
           <div className="p-2">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-accent-500 rounded-xl flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-white" />
+              <div className="w-10 h-10 bg-primary-50 from-primary-500 to-accent-500 rounded-lg flex items-center justify-center">
+                <Sparkles className="w-5 h-5 text-slate-800" />
               </div>
               <div className="min-w-0">
-                <div className="font-display font-bold text-white leading-tight">小书童</div>
+                <div className="font-display font-bold text-slate-800 leading-tight">小书童</div>
                 <div className="text-xs text-slate-500 leading-tight">对话 / 学习建议 / 复习陪练</div>
               </div>
             </div>
@@ -387,12 +386,13 @@ export default function Companion() {
             <div className="mt-3 flex items-center gap-2">
               <select
                 value={subject}
+                aria-label="对话学科"
                 onChange={(e) => { setAvailability({ ok: true, message: '' }); setSubject(e.target.value); startNewChat() }}
                 className="input w-full"
               >
                 {subjectOptions.map((s) => (
                   <option key={s} value={s}>
-                    {SUBJECT_NAMES_CN?.[s] || s}（{SUBJECT_TO_MODULE?.[s] || 'default'}）
+                    {SUBJECT_NAMES_CN?.[s] || s}
                   </option>
                 ))}
               </select>
@@ -405,33 +405,24 @@ export default function Companion() {
           </div>
 
           <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-4">
-            {Object.entries(grouped).map(([label, items]) => (
+            {Object.entries(grouped).filter(([, items]) => items.length > 0).map(([label, items]) => (
               <div key={label}>
                 <div className="text-xs text-slate-500 px-2 mb-2">{label}</div>
                 <div className="space-y-1">
                   {(items || []).length === 0 ? null : items.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => { setIsComposingNew(false); setConversationId(c.id) }}
-                      className={`group w-full text-left px-3 py-2 rounded-xl border transition-all relative ${
-                        String(conversationId) === String(c.id)
-                          ? 'border-primary-500/40 bg-primary-500/10 text-white'
-                          : 'border-transparent hover:border-slate-700/60 hover:bg-slate-800/40 text-slate-300'
-                      }`}
-                    >
+                    <div key={c.id} className="companion-conversation">
                       <button
-                        type="button"
-                        title="删除会话"
-                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); deleteConversation(c.id) }}
-                        className="absolute right-2 top-2 p-1.5 rounded-lg text-slate-500 hover:text-red-300 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition"
+                        onClick={() => { setIsComposingNew(false); setConversationId(c.id) }}
+                        aria-pressed={String(conversationId) === String(c.id)}
+                        className={'w-full text-left px-3 py-2 rounded-md border transition-colors ' + (
+                          String(conversationId) === String(c.id) ? 'border-primary-200 bg-primary-50 text-primary-700' : 'border-transparent hover:bg-slate-50 text-slate-600'
+                        )}
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <span className="block text-sm font-medium truncate">{c.title || '会话 ' + c.id}</span>
+                        <span className="block text-xs text-slate-400 mt-1">{formatWhen(c.updated_at || c.created_at)}</span>
                       </button>
-                      <div className="text-sm font-medium line-clamp-1">{c.title || `会话 ${c.id}`}</div>
-                      <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
-                        {formatWhen(c.updated_at || c.created_at)}
-                      </div>
-                    </button>
+                      <button type="button" title="删除会话" aria-label={'删除会话：' + (c.title || c.id)} onClick={() => deleteConversation(c.id)} className="absolute right-2 top-2 p-1.5 rounded text-slate-400 hover:text-red-600"><Trash2 size={14} /></button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -444,48 +435,48 @@ export default function Companion() {
             ) : null}
           </div>
 
-          <div className="px-2 pb-2 text-xs text-slate-500">
-            模块：{subjectModule}（{MODULE_DESCRIPTIONS?.[subjectModule] || '模块说明缺失'}）
-          </div>
         </div>
 
         {/* Right chat panel */}
-        <div className="card lg:col-span-8 xl:col-span-9 flex flex-col min-h-[720px]">
+        <div className="companion-chat flex flex-col">
           {/* Top bar */}
-          <div className="px-5 py-4 border-b border-slate-800/50 flex items-start justify-between gap-4">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-slate-200 font-semibold">
-                <MessageCircle className="w-4 h-4 text-slate-400" />
+              <div className="flex items-center gap-2 text-slate-700 font-semibold">
+                <MessageCircle className="w-4 h-4 text-slate-500" />
                 <span className="truncate">
                   {selectedConversation?.title || (isComposingNew || !conversationId ? '新对话' : `会话 ${conversationId || ''}`)}
                 </span>
               </div>
               <div className="text-xs text-slate-500 mt-1">
-                {selectedConversation?.updated_at || selectedConversation?.created_at ? `更新时间：${formatWhen(selectedConversation.updated_at || selectedConversation.created_at)}` : 'Gemini 风格的对话体验（课堂版）'}
+                {selectedConversation?.updated_at || selectedConversation?.created_at ? `更新时间：${formatWhen(selectedConversation.updated_at || selectedConversation.created_at)}` : '小书童 · ' + subjectLabel}
               </div>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={() => setMode('chat')}
+                aria-pressed={mode === 'chat'}
                 className={`px-3 py-1.5 rounded-full text-xs border ${
-                  mode === 'chat' ? 'bg-primary-500/15 border-primary-500/30 text-primary-200' : 'border-slate-700/60 text-slate-300 hover:bg-slate-800/40'
+                  mode === 'chat' ? 'bg-primary-500/15 border-primary-500/30 text-primary-600' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
                 对话
               </button>
               <button
                 onClick={() => setMode('learning_advice')}
+                aria-pressed={mode === 'learning_advice'}
                 className={`px-3 py-1.5 rounded-full text-xs border ${
-                  mode === 'learning_advice' ? 'bg-primary-500/15 border-primary-500/30 text-primary-200' : 'border-slate-700/60 text-slate-300 hover:bg-slate-800/40'
+                  mode === 'learning_advice' ? 'bg-primary-500/15 border-primary-500/30 text-primary-600' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
                 学习建议
               </button>
               <button
                 onClick={() => setMode('review')}
+                aria-pressed={mode === 'review'}
                 className={`px-3 py-1.5 rounded-full text-xs border ${
-                  mode === 'review' ? 'bg-primary-500/15 border-primary-500/30 text-primary-200' : 'border-slate-700/60 text-slate-300 hover:bg-slate-800/40'
+                  mode === 'review' ? 'bg-primary-500/15 border-primary-500/30 text-primary-600' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
                 复习陪练
@@ -496,24 +487,24 @@ export default function Companion() {
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
             {!availability.ok ? (
-              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-200 text-sm">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-600 text-sm">
                 {availability.message || '当前学科的小书童暂不可用。'}
-                <div className="text-xs text-amber-200/80 mt-1">
-                  提示：该学科会路由到模块 <span className="font-mono">{subjectModule}</span>。如果模块服务/模型未启动，请先启动对应模块与模型服务后重试。
+                <div className="text-xs text-amber-600/80 mt-1">
+                  请稍后重试，或切换其他学科。
                 </div>
               </div>
             ) : null}
             {messages.length === 0 ? (
               <div className="text-slate-500 text-sm py-16 text-center">
-                试试问：我最近薄弱点是什么？给我一周复习计划；或者直接把一道题的困惑发给我。
+                <Sparkles className="w-8 h-8 mx-auto mb-4 text-primary-400" /><p className="text-lg text-slate-600 mb-2">今天想学点什么？</p><p>小书童在这里，陪你一起思考。</p>
               </div>
             ) : (
               messages.map((m) => (
                 <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 leading-relaxed ${
+                  <div className={`max-w-[85%] rounded-lg px-4 py-3 leading-relaxed ${
                     m.role === 'user'
-                      ? 'bg-primary-500/20 border border-primary-500/30 text-slate-100'
-                      : 'bg-slate-800/50 border border-slate-700/50 text-slate-200'
+                      ? 'bg-primary-500/20 border border-primary-500/30 text-slate-800'
+                      : 'bg-slate-50 border border-slate-200 text-slate-700'
                   }`}>
                     {m.role === 'assistant'
                       ? (() => {
@@ -521,9 +512,9 @@ export default function Companion() {
                         return (
                           <div className="space-y-3">
                             {(think || inThinking) ? (
-                              <div className="rounded-xl border border-slate-700/60 bg-slate-950/40 px-3 py-2">
-                                <div className="text-xs text-slate-400 mb-1">思考过程（think）</div>
-                                <div className="text-xs leading-relaxed whitespace-pre-wrap font-mono text-slate-300">
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <div className="text-xs text-slate-500 mb-1">思考过程（think）</div>
+                                <div className="text-xs leading-relaxed whitespace-pre-wrap font-mono text-slate-600">
                                   {think || '（思考中…）'}
                                 </div>
                               </div>
@@ -532,7 +523,7 @@ export default function Companion() {
                             {answer ? (
                               renderAssistantMarkdown(answer)
                             ) : (
-                              <div className="text-slate-400">
+                              <div className="text-slate-500">
                                 {m.streaming ? '正在生成回答…' : '（无内容）'}
                               </div>
                             )}
@@ -550,7 +541,7 @@ export default function Companion() {
 
           {/* Bottom composer (sticky / gemini-like) */}
           <div className="px-5 pb-5">
-            <div className="bg-slate-900/40 backdrop-blur-sm border border-slate-800/60 rounded-2xl p-3">
+            <div className="bg-white backdrop-blur-sm border border-slate-200 rounded-lg p-3">
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -560,13 +551,14 @@ export default function Companion() {
                     send()
                   }
                 }}
-                placeholder="输入你的问题（Enter 发送，Shift+Enter 换行）"
-                className="w-full bg-transparent outline-none text-slate-100 placeholder-slate-500 resize-none min-h-[52px] max-h-[180px]"
+                aria-label="对话内容"
+                placeholder="输入你的问题..."
+                className="w-full bg-transparent outline-none text-slate-800 placeholder-slate-500 resize-none min-h-[52px] max-h-[180px]"
                 disabled={sending || !availability.ok}
               />
               <div className="mt-2 flex items-center justify-between gap-3">
                 <div className="text-xs text-slate-500">
-                  {!availability.ok ? '当前学科不可用，请切换学科或启动对应模块/模型' : (sending ? '流式生成中…' : '提示：输出支持 Markdown（表格/代码块等）')}
+                  {!availability.ok ? '当前学科暂不可用' : (sending ? '正在回复...' : subjectLabel)}
                 </div>
                 <div className="flex items-center gap-2">
                   {sending ? (
@@ -592,4 +584,3 @@ export default function Companion() {
     </div>
   )
 }
-

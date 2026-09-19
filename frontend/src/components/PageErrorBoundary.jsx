@@ -28,15 +28,15 @@ export default class PageErrorBoundary extends Component {
     return (
       <div className="card p-8">
         <div className="flex items-start gap-4">
-          <div className="w-12 h-12 rounded-xl bg-slate-800/60 flex items-center justify-center">
-            <BookOpen className="w-6 h-6 text-slate-300" />
+          <div className="w-12 h-12 rounded-lg bg-slate-50 flex items-center justify-center">
+            <BookOpen className="w-6 h-6 text-slate-600" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-lg font-semibold text-white mb-1">页面渲染失败</h3>
-            <p className="text-slate-300 break-words">{message}</p>
+            <h3 className="text-lg font-semibold text-slate-800 mb-1">页面渲染失败</h3>
+            <p className="text-slate-600 break-words">{message}</p>
 
             {showDebug && stack && (
-              <pre className="mt-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800/60 text-xs text-slate-300 overflow-auto whitespace-pre-wrap">
+              <pre className="mt-4 p-4 rounded-lg bg-white border border-slate-200 text-xs text-slate-600 overflow-auto whitespace-pre-wrap">
                 {stack}
               </pre>
             )}
@@ -58,5 +58,4 @@ export default class PageErrorBoundary extends Component {
     )
   }
 }
-
 

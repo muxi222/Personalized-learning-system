@@ -68,12 +68,12 @@ export default function TaskDetail() {
     <div className="max-w-3xl mx-auto animate-fade-in space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-bold text-white mb-2">任务详情</h1>
-          <div className="text-slate-400 text-sm break-all">
+          <h1 className="font-display text-2xl font-bold text-slate-800 mb-2">任务详情</h1>
+          <div className="text-slate-500 text-sm break-all">
             task_id: {taskId}
           </div>
           {subject && (
-            <div className="text-slate-400 text-sm">
+            <div className="text-slate-500 text-sm">
               subject: {subject}
             </div>
           )}
@@ -88,14 +88,14 @@ export default function TaskDetail() {
       }`}>
         <div className="flex items-start gap-3">
           {status === 'completed' ? (
-            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
           ) : status === 'failed' ? (
-            <AlertCircle className="w-5 h-5 text-red-400" />
+            <AlertCircle className="w-5 h-5 text-red-600" />
           ) : (
-            <Loader2 className="w-5 h-5 text-primary-400 animate-spin" />
+            <Loader2 className="w-5 h-5 text-primary-600 animate-spin" />
           )}
           <div className="flex-1 min-w-0">
-            <div className="text-white font-medium">
+            <div className="text-slate-800 font-medium">
               {status === 'completed' ? '已完成' :
                status === 'failed' ? '失败' :
                status === 'processing' ? '处理中' :
@@ -103,37 +103,36 @@ export default function TaskDetail() {
                '状态未知'}
               {typeof progress === 'number' ? `（${Math.round(progress)}%）` : ''}
             </div>
-            {step && <div className="text-sm text-slate-300 mt-1">{step}</div>}
-            {status === 'failed' && error && <div className="text-sm text-red-300 mt-2 break-words">{error}</div>}
+            {step && <div className="text-sm text-slate-600 mt-1">{step}</div>}
+            {status === 'failed' && error && <div className="text-sm text-red-600 mt-2 break-words">{error}</div>}
           </div>
         </div>
       </div>
 
       {imageId && (
         <div className="card p-4 space-y-3">
-          <div className="text-white font-medium">图片内容</div>
+          <div className="text-slate-800 font-medium">图片内容</div>
           <img
             src={buildImageFileContentUrl(imageId)}
             alt="task image"
-            className="w-full rounded-xl border border-slate-700/60"
+            className="w-full rounded-lg border border-slate-200"
           />
-          <div className="text-xs text-slate-400 break-all">
+          <div className="text-xs text-slate-500 break-all">
             image_id: {imageId}
           </div>
         </div>
       )}
 
       <div className="card p-4 space-y-3">
-        <div className="text-white font-medium">执行步骤 / 结果</div>
+        <div className="text-slate-800 font-medium">执行步骤 / 结果</div>
         {stages ? (
-          <pre className="text-xs text-slate-300 whitespace-pre-wrap break-words bg-slate-900/40 border border-slate-700/60 rounded-lg p-3 overflow-auto max-h-[420px]">
+          <pre className="text-xs text-slate-600 whitespace-pre-wrap break-words bg-white border border-slate-200 rounded-lg p-3 overflow-auto max-h-[420px]">
             {JSON.stringify(stages, null, 2)}
           </pre>
         ) : (
-          <div className="text-slate-400 text-sm">暂无阶段信息（任务尚未产生结果或后端未上报 stages）</div>
+          <div className="text-slate-500 text-sm">暂无阶段信息（任务尚未产生结果或后端未上报 stages）</div>
         )}
       </div>
     </div>
   )
 }
-

@@ -7,61 +7,46 @@ import hashlib
 import logging
 from typing import Optional
 
-# 在导入 passlib 之前应用 bcrypt 兼容性补丁
-from .. import bcrypt_compat  # noqa: F401
-
+import bcrypt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from passlib.context import CryptContext
 
 from ..db.models import User
 from ..schemas.user import UserCreate
 
 logger = logging.getLogger(__name__)
 
-# Support both legacy bcrypt hashes and new bcrypt-sha256 hashes.
-# Default to bcrypt_sha256 for new passwords to avoid the 72-byte limit.
-pwd_context = CryptContext(
-    schemes=["bcrypt_sha256", "bcrypt"],
-    deprecated="auto",
-    bcrypt__truncate_error=False,
-)
-
+# bcrypt only accepts 72 bytes. bcrypt 5.x raises instead of truncating.
 _BCRYPT_MAX_INPUT_BYTES = 72
 
-def _normalize_password(password: str) -> str:
-    """
-    Normalize password so bcrypt never sees inputs longer than 72 bytes.
 
-    Passlib's bcrypt variants raise ValueError when the encoded password exceeds
-    72 bytes. To keep supporting arbitrarily long UTF-8 passwords we hash them
-    with SHA-256 first (similar to passlib.hash.bcrypt_sha256) and return the
-    hex digest. Short passwords are returned verbatim to preserve compatibility.
-    """
+def _password_bytes(password: str) -> bytes:
+    """Prepare password bytes that are safe to pass to bcrypt."""
     password_bytes = password.encode("utf-8")
     if len(password_bytes) <= _BCRYPT_MAX_INPUT_BYTES:
-        return password
-    digest = hashlib.sha256(password_bytes).hexdigest()
-    logger.debug("Normalized password exceeding bcrypt limit (len=%s bytes)", len(password_bytes))
-    return digest
+        return password_bytes
+    logger.debug(
+        "Normalized password exceeding bcrypt limit (len=%s bytes)",
+        len(password_bytes),
+    )
+    return hashlib.sha256(password_bytes).hexdigest().encode("ascii")
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
-    normalized = _normalize_password(plain_password)
-    if pwd_context.verify(normalized, hashed_password):
-        return True
-    # Fallback for legacy hashes that stored the raw (non-normalized) password.
-    if normalized != plain_password:
-        try:
-            return pwd_context.verify(plain_password, hashed_password)
-        except Exception:
-            return False
+    hashed = hashed_password.encode("utf-8") if isinstance(hashed_password, str) else hashed_password
+    try:
+        if bcrypt.checkpw(_password_bytes(plain_password), hashed):
+            return True
+    except ValueError:
+        return False
     return False
+
 
 def get_password_hash(password: str) -> str:
     """获取密码哈希"""
-    normalized = _normalize_password(password)
-    return pwd_context.hash(normalized)
+    hashed = bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt())
+    return hashed.decode("ascii")
 
 async def create_user(
     db: AsyncSession,

@@ -41,13 +41,13 @@ const correctionsApi = {
 }
 
 const SUBJECT_MAP = {
-  'math': { label: '数学', color: 'text-blue-400', bg: 'bg-blue-500/10' },
-  'english': { label: '英语', color: 'text-green-400', bg: 'bg-green-500/10' },
-  'physics': { label: '物理', color: 'text-amber-400', bg: 'bg-amber-500/10' },
-  'chemistry': { label: '化学', color: 'text-purple-400', bg: 'bg-purple-500/10' },
-  'chinese': { label: '语文', color: 'text-red-400', bg: 'bg-red-500/10' },
+  'math': { label: '数学', color: 'text-blue-600', bg: 'bg-blue-500/10' },
+  'english': { label: '英语', color: 'text-green-600', bg: 'bg-green-500/10' },
+  'physics': { label: '物理', color: 'text-amber-600', bg: 'bg-amber-500/10' },
+  'chemistry': { label: '化学', color: 'text-purple-600', bg: 'bg-purple-500/10' },
+  'chinese': { label: '语文', color: 'text-red-600', bg: 'bg-red-500/10' },
   'biology': { label: '生物', color: 'text-teal-400', bg: 'bg-teal-500/10' },
-  'other': { label: '其他', color: 'text-slate-400', bg: 'bg-slate-500/10' },
+  'other': { label: '其他', color: 'text-slate-500', bg: 'bg-slate-500/10' },
 }
 
 export default function CorrectionDetail() {
@@ -66,8 +66,8 @@ export default function CorrectionDetail() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
-          <BarChart3 className="w-12 h-12 text-primary-400 animate-pulse mx-auto mb-4" />
-          <p className="text-slate-400">加载批改详情中...</p>
+          <BarChart3 className="w-12 h-12 text-primary-600 animate-pulse mx-auto mb-4" />
+          <p className="text-slate-500">加载批改详情中...</p>
         </div>
       </div>
     )
@@ -77,7 +77,7 @@ export default function CorrectionDetail() {
     return (
       <div className="card p-12 text-center">
         <FileCheck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-white mb-2">批改记录不存在</h3>
+        <h3 className="text-lg font-medium text-slate-800 mb-2">批改记录不存在</h3>
         <button onClick={() => navigate('/corrections')} className="btn-primary mt-4">
           返回批改历史
         </button>
@@ -94,7 +94,7 @@ export default function CorrectionDetail() {
       {/* Back button */}
       <button
         onClick={() => navigate('/corrections')}
-        className="flex items-center gap-2 text-slate-400 hover:text-white mb-6 transition-colors"
+        className="flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-6 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" />
         返回批改历史
@@ -104,7 +104,7 @@ export default function CorrectionDetail() {
       <div className="card p-6 mb-6">
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
-            <h1 className="font-display text-3xl font-bold text-white mb-2">
+            <h1 className="font-display text-2xl font-bold text-slate-800 mb-2">
               {correction.exam_title || '试卷批改详情'}
             </h1>
             <div className="flex items-center gap-3 flex-wrap">
@@ -112,7 +112,7 @@ export default function CorrectionDetail() {
                 {subjectInfo.label}
               </span>
               {correction.grade && (
-                <span className="badge bg-slate-700 text-slate-300">
+                <span className="badge bg-slate-50 text-slate-600">
                   {correction.grade}
                 </span>
               )}
@@ -126,23 +126,23 @@ export default function CorrectionDetail() {
 
         {/* 得分卡片 */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className={`p-4 rounded-xl ${scorePercent >= 60 ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+          <div className={`p-4 rounded-lg ${scorePercent >= 60 ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-300 text-sm">总得分</span>
-              <Award className={`w-5 h-5 ${scorePercent >= 60 ? 'text-emerald-400' : 'text-red-400'}`} />
+              <span className="text-slate-600 text-sm">总得分</span>
+              <Award className={`w-5 h-5 ${scorePercent >= 60 ? 'text-emerald-600' : 'text-red-600'}`} />
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-bold text-white">{correction.total_score}</span>
-              <span className="text-slate-400">/ {correction.max_score}</span>
+              <span className="text-4xl font-bold text-slate-800">{correction.total_score}</span>
+              <span className="text-slate-500">/ {correction.max_score}</span>
             </div>
             <div className="mt-2">
-              <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+              <div className="h-2 bg-slate-50 rounded-full overflow-hidden">
                 <div
                   className={clsx(
                     "h-full transition-all",
                     scorePercent >= 60
-                      ? "bg-gradient-to-r from-emerald-500 to-green-500"
-                      : "bg-gradient-to-r from-red-500 to-orange-500"
+                      ? "bg-primary-50 from-emerald-500 to-green-500"
+                      : "bg-primary-50 from-red-500 to-orange-500"
                   )}
                   style={{ width: `${Math.min(100, scorePercent)}%` }}
                 />
@@ -150,38 +150,38 @@ export default function CorrectionDetail() {
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-800/50">
+          <div className="p-4 rounded-lg bg-slate-50">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-300 text-sm">正确率</span>
-              <BarChart3 className="w-5 h-5 text-primary-400" />
+              <span className="text-slate-600 text-sm">正确率</span>
+              <BarChart3 className="w-5 h-5 text-primary-600" />
             </div>
-            <div className="text-4xl font-bold text-white">
+            <div className="text-4xl font-bold text-slate-800">
               {(correction.accuracy_rate * 100).toFixed(0)}%
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-emerald-500/10">
+          <div className="p-4 rounded-lg bg-emerald-500/10">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-emerald-300 text-sm">答对</span>
-              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+              <span className="text-emerald-600 text-sm">答对</span>
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
             </div>
-            <div className="text-4xl font-bold text-emerald-400">
+            <div className="text-4xl font-bold text-emerald-600">
               {correction.correct_count}
             </div>
-            <div className="text-xs text-emerald-400/70 mt-1">
+            <div className="text-xs text-emerald-600/70 mt-1">
               / {correction.question_count} 题
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-red-500/10">
+          <div className="p-4 rounded-lg bg-red-500/10">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-red-300 text-sm">答错</span>
-              <XCircle className="w-5 h-5 text-red-400" />
+              <span className="text-red-600 text-sm">答错</span>
+              <XCircle className="w-5 h-5 text-red-600" />
             </div>
-            <div className="text-4xl font-bold text-red-400">
+            <div className="text-4xl font-bold text-red-600">
               {correction.wrong_count}
             </div>
-            <div className="text-xs text-red-400/70 mt-1">
+            <div className="text-xs text-red-600/70 mt-1">
               / {correction.question_count} 题
             </div>
           </div>
@@ -194,8 +194,8 @@ export default function CorrectionDetail() {
           {/* 原始与批改对比 */}
           <div className="card p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-white font-semibold flex items-center gap-2">
-                <ImageIcon className="w-5 h-5 text-primary-400" />
+              <h2 className="text-slate-800 font-semibold flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-primary-600" />
                 试卷对比
               </h2>
               {correction.corrected_image_url && (
@@ -211,19 +211,19 @@ export default function CorrectionDetail() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* 原始试卷 */}
               <div>
-                <div className="text-slate-400 text-sm mb-2">📄 原始试卷</div>
+                <div className="text-slate-500 text-sm mb-2">📄 原始试卷</div>
                 <div className="relative group cursor-pointer">
                   <img
                     src={correction.original_image_url}
                     alt="原始试卷"
-                    className="w-full rounded-xl transition-all group-hover:brightness-110"
+                    className="w-full rounded-lg transition-all group-hover:brightness-110"
                     onClick={() => {
                       setViewerImage({ url: correction.original_image_url, title: '原始试卷' })
                       setViewerOpen(true)
                     }}
                   />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-xl">
-                    <div className="p-3 bg-black/60 backdrop-blur-sm rounded-xl">
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-lg">
+                    <div className="p-3 bg-black/60 backdrop-blur-sm rounded-lg">
                       <Maximize2 className="w-7 h-7 text-white" />
                     </div>
                   </div>
@@ -233,7 +233,7 @@ export default function CorrectionDetail() {
               {/* 批改后试卷 */}
               {correction.corrected_image_url && (
                 <div>
-                  <div className="text-red-400 text-sm mb-2 flex items-center gap-1">
+                  <div className="text-red-600 text-sm mb-2 flex items-center gap-1">
                     <CheckCircle2 className="w-4 h-4" />
                     批改后试卷
                   </div>
@@ -241,14 +241,14 @@ export default function CorrectionDetail() {
                     <img
                       src={correction.corrected_image_url}
                       alt="批改后试卷"
-                      className="w-full rounded-xl transition-all group-hover:brightness-110"
+                      className="w-full rounded-lg transition-all group-hover:brightness-110"
                       onClick={() => {
                         setViewerImage({ url: correction.corrected_image_url, title: '批改后试卷' })
                         setViewerOpen(true)
                       }}
                     />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-xl">
-                      <div className="p-3 bg-black/60 backdrop-blur-sm rounded-xl">
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-lg">
+                      <div className="p-3 bg-black/60 backdrop-blur-sm rounded-lg">
                         <Maximize2 className="w-7 h-7 text-white" />
                       </div>
                     </div>
@@ -261,12 +261,12 @@ export default function CorrectionDetail() {
           {/* 总体分析 */}
           {correction.overall_analysis && (
             <div className="card p-6">
-              <h2 className="text-white font-semibold mb-4 flex items-center gap-2">
-                <FileCheck className="w-5 h-5 text-primary-400" />
+              <h2 className="text-slate-800 font-semibold mb-4 flex items-center gap-2">
+                <FileCheck className="w-5 h-5 text-primary-600" />
                 AI 总体分析
               </h2>
-              <div className="bg-slate-800/50 rounded-xl p-4">
-                <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">
+              <div className="bg-slate-50 rounded-lg p-4">
+                <p className="text-slate-600 leading-relaxed whitespace-pre-wrap">
                   {correction.overall_analysis}
                 </p>
               </div>
@@ -276,8 +276,8 @@ export default function CorrectionDetail() {
           {/* 题目详情列表 */}
           {questions.length > 0 && (
             <div className="card p-6">
-              <h2 className="text-white font-semibold mb-4 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-accent-400" />
+              <h2 className="text-slate-800 font-semibold mb-4 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-cyan-600" />
                 题目详情 ({questions.length} 题)
               </h2>
               <div className="space-y-4">
@@ -285,7 +285,7 @@ export default function CorrectionDetail() {
                   <div
                     key={index}
                     className={clsx(
-                      "p-4 rounded-xl border",
+                      "p-4 rounded-lg border",
                       q.is_correct
                         ? "bg-emerald-500/5 border-emerald-500/30"
                         : "bg-red-500/5 border-red-500/30"
@@ -302,7 +302,7 @@ export default function CorrectionDetail() {
                         )}>
                           {q.question_number}
                         </span>
-                        <span className="text-slate-400 text-sm">{q.question_type}</span>
+                        <span className="text-slate-500 text-sm">{q.question_type}</span>
                         {q.knowledge_points && q.knowledge_points.length > 0 && (
                           <div className="flex gap-1 ml-2">
                             {q.knowledge_points.slice(0, 2).map((kp, i) => (
@@ -316,23 +316,23 @@ export default function CorrectionDetail() {
                       <div className="flex items-center gap-2">
                         <span className={clsx(
                           "text-lg font-bold",
-                          q.is_correct ? "text-emerald-400" : "text-red-400"
+                          q.is_correct ? "text-emerald-600" : "text-red-600"
                         )}>
                           {q.score}/{q.max_score}
                         </span>
                         {q.is_correct ? (
-                          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                          <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                         ) : (
-                          <XCircle className="w-5 h-5 text-red-400" />
+                          <XCircle className="w-5 h-5 text-red-600" />
                         )}
                       </div>
                     </div>
 
                     {/* 题目内容 */}
                     <div className="mb-3">
-                      <div className="text-slate-400 text-xs mb-1">题目:</div>
-                      <div className="bg-slate-800/50 rounded-lg p-3">
-                        <p className="text-white text-sm">{q.question_text}</p>
+                      <div className="text-slate-500 text-xs mb-1">题目:</div>
+                      <div className="bg-slate-50 rounded-lg p-3">
+                        <p className="text-slate-800 text-sm">{q.question_text}</p>
                       </div>
                     </div>
 
@@ -340,18 +340,18 @@ export default function CorrectionDetail() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {/* 学生答案 */}
                       <div>
-                        <div className="text-red-400 text-xs mb-1">学生答案:</div>
+                        <div className="text-red-600 text-xs mb-1">学生答案:</div>
                         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-                          <p className="text-slate-300 text-sm">{q.student_answer || '未作答'}</p>
+                          <p className="text-slate-600 text-sm">{q.student_answer || '未作答'}</p>
                         </div>
                       </div>
 
                       {/* 正确答案 */}
                       {q.correct_answer && (
                         <div>
-                          <div className="text-emerald-400 text-xs mb-1">正确答案:</div>
+                          <div className="text-emerald-600 text-xs mb-1">正确答案:</div>
                           <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
-                            <p className="text-slate-300 text-sm">{q.correct_answer}</p>
+                            <p className="text-slate-600 text-sm">{q.correct_answer}</p>
                           </div>
                         </div>
                       )}
@@ -360,12 +360,12 @@ export default function CorrectionDetail() {
                     {/* 错因分析 */}
                     {!q.is_correct && q.error_analysis && (
                       <div className="mt-3">
-                        <div className="text-amber-400 text-xs mb-1 flex items-center gap-1">
+                        <div className="text-amber-600 text-xs mb-1 flex items-center gap-1">
                           <Target className="w-3 h-3" />
                           错因分析:
                         </div>
                         <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
-                          <p className="text-slate-300 text-sm">{q.error_analysis}</p>
+                          <p className="text-slate-600 text-sm">{q.error_analysis}</p>
                         </div>
                       </div>
                     )}
@@ -373,10 +373,10 @@ export default function CorrectionDetail() {
                     {/* 解题步骤 */}
                     {q.solution_steps && q.solution_steps.length > 0 && (
                       <div className="mt-3">
-                        <div className="text-primary-400 text-xs mb-2">解题步骤:</div>
+                        <div className="text-primary-600 text-xs mb-2">解题步骤:</div>
                         <ol className="space-y-1 ml-4">
                           {q.solution_steps.map((step, i) => (
-                            <li key={i} className="text-slate-300 text-sm list-decimal">
+                            <li key={i} className="text-slate-600 text-sm list-decimal">
                               {step}
                             </li>
                           ))}
@@ -395,8 +395,8 @@ export default function CorrectionDetail() {
           {/* 薄弱知识点 */}
           {correction.weak_points && correction.weak_points.length > 0 && (
             <div className="card p-6">
-              <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
-                <Target className="w-5 h-5 text-amber-400" />
+              <h3 className="text-slate-800 font-semibold mb-4 flex items-center gap-2">
+                <Target className="w-5 h-5 text-amber-600" />
                 薄弱知识点
               </h3>
               <div className="space-y-2">
@@ -405,10 +405,10 @@ export default function CorrectionDetail() {
                     key={index}
                     className="flex items-center gap-2 p-3 bg-amber-500/10 rounded-lg"
                   >
-                    <span className="w-6 h-6 bg-amber-500/30 text-amber-400 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">
+                    <span className="w-6 h-6 bg-amber-500/30 text-amber-600 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">
                       {index + 1}
                     </span>
-                    <span className="text-amber-300 text-sm">{point}</span>
+                    <span className="text-amber-600 text-sm">{point}</span>
                   </div>
                 ))}
               </div>
@@ -418,17 +418,17 @@ export default function CorrectionDetail() {
           {/* 改进建议 */}
           {correction.improvement_suggestions && correction.improvement_suggestions.length > 0 && (
             <div className="card p-6">
-              <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
-                <Lightbulb className="w-5 h-5 text-emerald-400" />
+              <h3 className="text-slate-800 font-semibold mb-4 flex items-center gap-2">
+                <Lightbulb className="w-5 h-5 text-emerald-600" />
                 改进建议
               </h3>
               <ul className="space-y-3">
                 {correction.improvement_suggestions.map((suggestion, index) => (
                   <li key={index} className="flex items-start gap-3">
-                    <span className="w-6 h-6 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
+                    <span className="w-6 h-6 bg-emerald-500/20 text-emerald-600 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
                       {index + 1}
                     </span>
-                    <span className="text-slate-300 text-sm leading-relaxed">
+                    <span className="text-slate-600 text-sm leading-relaxed">
                       {suggestion}
                     </span>
                   </li>
@@ -439,23 +439,23 @@ export default function CorrectionDetail() {
 
           {/* 统计信息 */}
           <div className="card p-6">
-            <h3 className="text-white font-semibold mb-4">统计信息</h3>
+            <h3 className="text-slate-800 font-semibold mb-4">统计信息</h3>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-400">题目总数</span>
-                <span className="text-white font-medium">{correction.question_count}</span>
+                <span className="text-slate-500">题目总数</span>
+                <span className="text-slate-800 font-medium">{correction.question_count}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">答对题数</span>
-                <span className="text-emerald-400 font-medium">{correction.correct_count}</span>
+                <span className="text-slate-500">答对题数</span>
+                <span className="text-emerald-600 font-medium">{correction.correct_count}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">答错题数</span>
-                <span className="text-red-400 font-medium">{correction.wrong_count}</span>
+                <span className="text-slate-500">答错题数</span>
+                <span className="text-red-600 font-medium">{correction.wrong_count}</span>
               </div>
-              <div className="flex justify-between pt-3 border-t border-slate-700">
-                <span className="text-slate-400">批改时间</span>
-                <span className="text-white font-medium">
+              <div className="flex justify-between pt-3 border-t border-slate-200">
+                <span className="text-slate-500">批改时间</span>
+                <span className="text-slate-800 font-medium">
                   {new Date(correction.created_at).toLocaleDateString('zh-CN')}
                 </span>
               </div>

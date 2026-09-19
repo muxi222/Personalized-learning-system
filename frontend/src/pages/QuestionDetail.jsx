@@ -97,7 +97,7 @@ export default function QuestionDetail() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 text-primary-400 animate-spin" />
+        <Loader2 className="w-8 h-8 text-primary-600 animate-spin" />
       </div>
     )
   }
@@ -106,8 +106,8 @@ export default function QuestionDetail() {
     return (
       <div className="card p-12 text-center">
         <BookOpen className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-white mb-2">题目不存在</h3>
-        <p className="text-slate-400 mb-4">该题目可能已被删除</p>
+        <h3 className="text-lg font-medium text-slate-800 mb-2">题目不存在</h3>
+        <p className="text-slate-500 mb-4">该题目可能已被删除</p>
         <button onClick={() => navigate('/questions')} className="btn-primary">
           返回错题本
         </button>
@@ -232,7 +232,7 @@ export default function QuestionDetail() {
       {/* Back button */}
       <button
         onClick={() => navigate(-1)}
-        className="flex items-center gap-2 text-slate-400 hover:text-white mb-6 transition-colors"
+        className="flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-6 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" />
         返回
@@ -245,7 +245,7 @@ export default function QuestionDetail() {
           {/* Title and meta */}
           <div className="card p-6">
             <div className="flex items-start justify-between gap-4 mb-4">
-              <h1 className="font-display text-2xl font-bold text-white">
+              <h1 className="font-display text-2xl font-bold text-slate-800">
                 {question.title || '错题详情'}
               </h1>
               <button
@@ -268,9 +268,9 @@ export default function QuestionDetail() {
               </span>
               <span className={clsx(
                 'badge',
-                difficultyValue === 'easy' && 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
-                difficultyValue === 'medium' && 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-                difficultyValue === 'hard' && 'bg-red-500/20 text-red-300 border border-red-500/30',
+                difficultyValue === 'easy' && 'bg-emerald-500/20 text-emerald-600 border border-emerald-500/30',
+                difficultyValue === 'medium' && 'bg-amber-500/20 text-amber-600 border border-amber-500/30',
+                difficultyValue === 'hard' && 'bg-red-500/20 text-red-600 border border-red-500/30',
               )}>
                 {difficultyValue === 'easy' ? '简单' :
                  difficultyValue === 'medium' ? '中等' : '困难'}
@@ -285,19 +285,19 @@ export default function QuestionDetail() {
             {/* Question content */}
             <div className="space-y-4">
               <div>
-                <h3 className="text-sm font-medium text-slate-400 mb-2 flex items-center gap-2">
+                <h3 className="text-sm font-medium text-slate-500 mb-2 flex items-center gap-2">
                   <BookOpen className="w-4 h-4" />
                   题目内容
                 </h3>
-                <div className="bg-slate-800/50 rounded-xl p-4">
-                  <p className="text-white whitespace-pre-wrap">{question.content}</p>
+                <div className="bg-slate-50 rounded-lg p-4">
+                  <p className="text-slate-800 whitespace-pre-wrap">{question.content}</p>
                 </div>
               </div>
 
               {/* 题目图片 */}
               {imageUrls.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-medium text-slate-400 mb-2 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-slate-500 mb-2 flex items-center gap-2">
                     <ImageIcon className="w-4 h-4" />
                     题目图片
                   </h3>
@@ -305,7 +305,7 @@ export default function QuestionDetail() {
                     <div className="mb-3">
                       <Link
                         to={`/questions/image/${question.source_image_id}`}
-                        className="inline-flex items-center gap-2 text-primary-300 hover:text-primary-200 text-sm"
+                        className="inline-flex items-center gap-2 text-primary-600 hover:text-primary-600 text-sm"
                       >
                         查看本次上传图片中的全部题目
                       </Link>
@@ -315,7 +315,7 @@ export default function QuestionDetail() {
                     {imageUrls.map((url, index) => (
                       <div
                         key={index}
-                        className="relative group cursor-pointer overflow-hidden rounded-xl bg-slate-800/50 border border-slate-700/50 hover:border-primary-500/50 transition-all"
+                        className="relative group cursor-pointer overflow-hidden rounded-lg bg-slate-50 border border-slate-200 hover:border-primary-500/50 transition-all"
                         onClick={() => {
                           setViewerImage({
                             url: url.startsWith('http') ? url : `/api/v1${url}`,
@@ -333,7 +333,7 @@ export default function QuestionDetail() {
                         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <div className="text-center">
                             <Maximize2 className="w-8 h-8 text-white mx-auto mb-2" />
-                            <p className="text-white text-sm font-medium">点击放大</p>
+                            <p className="text-slate-800 text-sm font-medium">点击放大</p>
                           </div>
                         </div>
                       </div>
@@ -344,43 +344,43 @@ export default function QuestionDetail() {
 
               {question.student_answer && (
                 <div>
-                  <h3 className="text-sm font-medium text-red-400 mb-2">我的答案</h3>
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
-                    <p className="text-slate-300 whitespace-pre-wrap">{question.student_answer}</p>
+                  <h3 className="text-sm font-medium text-red-600 mb-2">我的答案</h3>
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+                    <p className="text-slate-600 whitespace-pre-wrap">{question.student_answer}</p>
                   </div>
                 </div>
               )}
 
               {(question.correct_answer || teacherMarkedAnswer || modelInferredAnswer) && (
                 <div>
-                  <h3 className="text-sm font-medium text-emerald-400 mb-2 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-emerald-600 mb-2 flex items-center gap-2">
                     <CheckCircle className="w-4 h-4" />
                     正确答案（判定依据）
                   </h3>
-                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4">
                     {teacherMarkedAnswer ? (
                       <div className="space-y-2">
-                        <p className="text-slate-200 whitespace-pre-wrap">{teacherMarkedAnswer}</p>
-                        <p className="text-slate-400 text-xs">来源：老师批改/学生标注</p>
+                        <p className="text-slate-700 whitespace-pre-wrap">{teacherMarkedAnswer}</p>
+                        <p className="text-slate-500 text-xs">来源：老师批改/学生标注</p>
                       </div>
                     ) : question.correct_answer ? (
                       <div className="space-y-2">
-                        <p className="text-slate-200 whitespace-pre-wrap">{question.correct_answer}</p>
-                        <p className="text-slate-400 text-xs">来源：系统识别</p>
+                        <p className="text-slate-700 whitespace-pre-wrap">{question.correct_answer}</p>
+                        <p className="text-slate-500 text-xs">来源：系统识别</p>
                       </div>
                     ) : (
-                      <p className="text-slate-400 text-sm">未识别到可用于判定的“老师批改/标注正确答案”</p>
+                      <p className="text-slate-500 text-sm">未识别到可用于判定的“老师批改/标注正确答案”</p>
                     )}
 
                     {modelInferredAnswer && (
                       <div className="mt-3 pt-3 border-t border-emerald-500/20">
-                        <p className="text-slate-300 whitespace-pre-wrap">{modelInferredAnswer}</p>
-                        <p className="text-slate-400 text-xs mt-1">模型参考答案（仅供参考）</p>
+                        <p className="text-slate-600 whitespace-pre-wrap">{modelInferredAnswer}</p>
+                        <p className="text-slate-500 text-xs mt-1">模型参考答案（仅供参考）</p>
                       </div>
                     )}
 
                     {decidedBy && (
-                      <p className="text-slate-400 text-xs mt-3">
+                      <p className="text-slate-500 text-xs mt-3">
                         判定方式：{decidedBy === 'teacher_marked' ? '老师批改/标注' :
                           decidedBy === 'teacher_mark' ? '卷面批改符号（√/×）' :
                           decidedBy === 'model_inferred' ? '模型推断' :
@@ -389,7 +389,7 @@ export default function QuestionDetail() {
                     )}
 
                     {teacherMarkText && (
-                      <p className="text-slate-400 text-xs mt-2">
+                      <p className="text-slate-500 text-xs mt-2">
                         卷面批改：{teacherMarkText}
                       </p>
                     )}
@@ -402,8 +402,8 @@ export default function QuestionDetail() {
           {/* Error analysis */}
           {question.error_analysis && (
             <div className="card p-6">
-              <h2 className="font-semibold text-white text-lg mb-4 flex items-center gap-2">
-                <Target className="w-5 h-5 text-primary-400" />
+              <h2 className="font-semibold text-slate-800 text-lg mb-4 flex items-center gap-2">
+                <Target className="w-5 h-5 text-primary-600" />
                 AI错因分析
               </h2>
               <div className="prose-dark">
@@ -411,18 +411,18 @@ export default function QuestionDetail() {
               </div>
 
               {/* Feedback */}
-              <div className="flex items-center gap-4 mt-6 pt-4 border-t border-slate-800">
-                <span className="text-slate-400 text-sm">这个分析对你有帮助吗？</span>
+              <div className="flex items-center gap-4 mt-6 pt-4 border-t border-slate-200">
+                <span className="text-slate-500 text-sm">这个分析对你有帮助吗？</span>
                 <button
                   onClick={() => handleFeedback('helpful')}
-                  className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 transition-colors"
+                  className="flex items-center gap-2 text-emerald-600 hover:text-emerald-600 transition-colors"
                 >
                   <ThumbsUp className="w-4 h-4" />
                   有帮助
                 </button>
                 <button
                   onClick={() => handleFeedback('not_helpful')}
-                  className="flex items-center gap-2 text-slate-400 hover:text-red-400 transition-colors"
+                  className="flex items-center gap-2 text-slate-500 hover:text-red-600 transition-colors"
                 >
                   <ThumbsDown className="w-4 h-4" />
                   没帮助
@@ -434,49 +434,49 @@ export default function QuestionDetail() {
           {/* Suggested questions */}
           {suggestedQuestions.length > 0 && (
             <div className="card p-6">
-              <h2 className="font-semibold text-white text-lg mb-4 flex items-center gap-2">
-                <Lightbulb className="w-5 h-5 text-accent-400" />
+              <h2 className="font-semibold text-slate-800 text-lg mb-4 flex items-center gap-2">
+                <Lightbulb className="w-5 h-5 text-cyan-600" />
                 举一反三
               </h2>
               <div className="space-y-4">
                 {suggestedQuestions.map((sq, index) => {
                   const sqDifficulty = typeof sq?.difficulty === 'string' ? sq.difficulty : 'medium'
                   return (
-                  <div key={index} className="bg-slate-800/50 rounded-xl p-4">
+                  <div key={index} className="bg-slate-50 rounded-lg p-4">
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-xs font-medium text-primary-400">
+                      <span className="text-xs font-medium text-primary-600">
                         练习题 {index + 1}
                       </span>
                       <span className={clsx(
                         'text-xs px-2 py-0.5 rounded-full',
-                          sqDifficulty === 'easy' && 'bg-emerald-500/20 text-emerald-300',
-                          sqDifficulty === 'medium' && 'bg-amber-500/20 text-amber-300',
-                          sqDifficulty === 'hard' && 'bg-red-500/20 text-red-300',
+                          sqDifficulty === 'easy' && 'bg-emerald-500/20 text-emerald-600',
+                          sqDifficulty === 'medium' && 'bg-amber-500/20 text-amber-600',
+                          sqDifficulty === 'hard' && 'bg-red-500/20 text-red-600',
                       )}>
                           {sqDifficulty === 'easy' ? '简单' :
                            sqDifficulty === 'medium' ? '中等' : '困难'}
                       </span>
                     </div>
-                      <p className="text-white mb-3">{typeof sq?.content === 'string' ? sq.content : String(sq?.content || '')}</p>
+                      <p className="text-slate-800 mb-3">{typeof sq?.content === 'string' ? sq.content : String(sq?.content || '')}</p>
                     <details className="group">
                       <summary
-                        className="text-primary-400 text-sm cursor-pointer hover:text-primary-300"
+                        className="text-primary-600 text-sm cursor-pointer hover:text-primary-600"
                         onClick={() => ensureSuggestedAnswer(sq, index)}
                       >
                         查看答案
                       </summary>
-                      <div className="mt-2 pt-2 border-t border-slate-700">
+                      <div className="mt-2 pt-2 border-t border-slate-200">
                         {sqAnswerLoading[index] ? (
-                          <p className="text-slate-400 text-sm">正在生成答案...</p>
+                          <p className="text-slate-500 text-sm">正在生成答案...</p>
                         ) : (typeof sq.answer === 'string' && sq.answer.trim()) ? (
-                          <p className="text-slate-300 text-sm whitespace-pre-wrap">{sq.answer}</p>
+                          <p className="text-slate-600 text-sm whitespace-pre-wrap">{sq.answer}</p>
                         ) : sqAnswerError[index] ? (
-                          <p className="text-red-300 text-sm">{sqAnswerError[index]}</p>
+                          <p className="text-red-600 text-sm">{sqAnswerError[index]}</p>
                         ) : (
-                          <p className="text-slate-400 text-sm">暂无答案（点击“查看答案”将自动生成）</p>
+                          <p className="text-slate-500 text-sm">暂无答案（点击“查看答案”将自动生成）</p>
                         )}
                         {sq.explanation && (
-                          <p className="text-slate-400 text-sm mt-2 whitespace-pre-wrap">{sq.explanation}</p>
+                          <p className="text-slate-500 text-sm mt-2 whitespace-pre-wrap">{sq.explanation}</p>
                         )}
                       </div>
                     </details>
@@ -492,34 +492,34 @@ export default function QuestionDetail() {
         <div className="space-y-6">
           {/* Meta info */}
           <div className="card p-6">
-            <h3 className="font-semibold text-white mb-4">题目信息</h3>
+            <h3 className="font-semibold text-slate-800 mb-4">题目信息</h3>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-400">创建时间</span>
-                <span className="text-white">
+                <span className="text-slate-500">创建时间</span>
+                <span className="text-slate-800">
                   {safeDateText(question.created_at)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">复习次数</span>
-                <span className="text-white">{question.review_count || 0}</span>
+                <span className="text-slate-500">复习次数</span>
+                <span className="text-slate-800">{question.review_count || 0}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">掌握程度</span>
-                <span className="text-white">
+                <span className="text-slate-500">掌握程度</span>
+                <span className="text-slate-800">
                   {((question.mastery_level || 0) * 100).toFixed(0)}%
                 </span>
               </div>
               {question.source && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">来源</span>
-                  <span className="text-white">{question.source}</span>
+                  <span className="text-slate-500">来源</span>
+                  <span className="text-slate-800">{question.source}</span>
                 </div>
               )}
               {question.chapter && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">章节</span>
-                  <span className="text-white">{question.chapter}</span>
+                  <span className="text-slate-500">章节</span>
+                  <span className="text-slate-800">{question.chapter}</span>
                 </div>
               )}
             </div>
@@ -528,7 +528,7 @@ export default function QuestionDetail() {
           {/* Tags */}
           {question.tags?.length > 0 && (
             <div className="card p-6">
-              <h3 className="font-semibold text-white mb-4">标签</h3>
+              <h3 className="font-semibold text-slate-800 mb-4">标签</h3>
               <div className="flex flex-wrap gap-2">
                 {tags.map((tag) => (
                   <span key={tag} className="badge-accent">

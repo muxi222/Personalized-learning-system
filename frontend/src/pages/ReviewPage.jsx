@@ -39,10 +39,10 @@ export default function ReviewPage() {
       <div className="mb-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="font-display text-3xl font-bold text-white mb-2">
+            <h1 className="font-display text-2xl font-bold text-slate-800 mb-2">
               复习计划
             </h1>
-            <p className="text-slate-400">
+            <p className="text-slate-500">
               基于艾宾浩斯遗忘曲线，推荐最佳复习时间
             </p>
           </div>
@@ -57,7 +57,7 @@ export default function ReviewPage() {
       <div className="card p-4 mb-6">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">学科</span>
+            <span className="text-slate-500 text-sm">学科</span>
             <select
               value={subject}
               onChange={(e) => {
@@ -74,7 +74,7 @@ export default function ReviewPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">题目类型</span>
+            <span className="text-slate-500 text-sm">题目类型</span>
             <select
               value={chapter}
               onChange={(e) => setChapter(e.target.value)}
@@ -100,13 +100,13 @@ export default function ReviewPage() {
         <div className="card p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-slate-400 text-sm">待复习</p>
-              <p className="text-2xl font-bold text-white mt-1">
+              <p className="text-slate-500 text-sm">待复习</p>
+              <p className="text-2xl font-bold text-slate-800 mt-1">
                 {questions.length}
               </p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center">
-              <Clock className="w-6 h-6 text-amber-400" />
+            <div className="w-12 h-12 rounded-lg bg-amber-500/20 flex items-center justify-center">
+              <Clock className="w-6 h-6 text-amber-600" />
             </div>
           </div>
         </div>
@@ -114,11 +114,11 @@ export default function ReviewPage() {
         <div className="card p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-slate-400 text-sm">今日已复习</p>
-              <p className="text-2xl font-bold text-white mt-1">0</p>
+              <p className="text-slate-500 text-sm">今日已复习</p>
+              <p className="text-2xl font-bold text-slate-800 mt-1">0</p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-emerald-500/20 flex items-center justify-center">
-              <BookOpen className="w-6 h-6 text-emerald-400" />
+            <div className="w-12 h-12 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+              <BookOpen className="w-6 h-6 text-emerald-600" />
             </div>
           </div>
         </div>
@@ -126,11 +126,11 @@ export default function ReviewPage() {
         <div className="card p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-slate-400 text-sm">连续复习</p>
-              <p className="text-2xl font-bold text-white mt-1">0 天</p>
+              <p className="text-slate-500 text-sm">连续复习</p>
+              <p className="text-2xl font-bold text-slate-800 mt-1">0 天</p>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-accent-500/20 flex items-center justify-center">
-              <Trophy className="w-6 h-6 text-accent-400" />
+            <div className="w-12 h-12 rounded-lg bg-accent-500/20 flex items-center justify-center">
+              <Trophy className="w-6 h-6 text-cyan-600" />
             </div>
           </div>
         </div>
@@ -141,15 +141,15 @@ export default function ReviewPage() {
         <div className="space-y-4">
           {[...Array(5)].map((_, i) => (
             <div key={i} className="card p-6 animate-pulse">
-              <div className="h-5 bg-slate-700 rounded w-3/4 mb-3" />
-              <div className="h-4 bg-slate-700 rounded w-1/2" />
+              <div className="h-5 bg-slate-50 rounded w-3/4 mb-3" />
+              <div className="h-4 bg-slate-50 rounded w-1/2" />
             </div>
           ))}
         </div>
       ) : questions.length > 0 ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-white text-lg">需要复习的题目</h2>
+            <h2 className="font-semibold text-slate-800 text-lg">需要复习的题目</h2>
             {questions.length > 0 && (
               <Link
                 to={`/questions/${questions[0].id}${questions[0]?.subject ? `?subject=${encodeURIComponent(questions[0].subject)}` : ''}`}
@@ -170,10 +170,10 @@ export default function ReviewPage() {
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-medium text-white mb-2 line-clamp-1">
+                  <h3 className="text-lg font-medium text-slate-800 mb-2 line-clamp-1">
                     {question.title || (question.content ? question.content.slice(0, 80) : '题目内容')}
                   </h3>
-                  <p className="text-slate-400 text-sm line-clamp-2 mb-3">
+                  <p className="text-slate-500 text-sm line-clamp-2 mb-3">
                     {question.content}
                   </p>
                   <div className="flex items-center gap-3 flex-wrap">
@@ -182,9 +182,9 @@ export default function ReviewPage() {
                     </span>
                     <span className={clsx(
                       'badge',
-                      (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) < 0.3 && 'bg-red-500/20 text-red-300 border border-red-500/30',
-                      (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) >= 0.3 && (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) < 0.7 && 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-                      (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) >= 0.7 && 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+                      (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) < 0.3 && 'bg-red-500/20 text-red-600 border border-red-500/30',
+                      (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) >= 0.3 && (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) < 0.7 && 'bg-amber-500/20 text-amber-600 border border-amber-500/30',
+                      (Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) >= 0.7 && 'bg-emerald-500/20 text-emerald-600 border border-emerald-500/30',
                     )}>
                       掌握度 {((Number.isFinite(Number(question.mastery_level)) ? Number(question.mastery_level) : 0) * 100).toFixed(0)}%
                     </span>
@@ -205,9 +205,9 @@ export default function ReviewPage() {
         </div>
       ) : (
         <div className="card p-12 text-center">
-          <Trophy className="w-16 h-16 text-emerald-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-white mb-2">太棒了！</h3>
-          <p className="text-slate-400 mb-4">
+          <Trophy className="w-16 h-16 text-emerald-600 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-slate-800 mb-2">太棒了！</h3>
+          <p className="text-slate-500 mb-4">
             目前没有需要复习的题目，继续保持！
           </p>
           <Link to="/submit" className="btn-primary inline-flex items-center gap-2">

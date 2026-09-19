@@ -36,7 +36,7 @@ export default function ImageQuestionGroup() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-slate-400">加载中...</div>
+        <div className="text-slate-500">加载中...</div>
       </div>
     )
   }
@@ -44,8 +44,8 @@ export default function ImageQuestionGroup() {
   if (error || !data?.data) {
     return (
       <div className="card p-12 text-center">
-        <h3 className="text-lg font-medium text-white mb-2">加载失败</h3>
-        <p className="text-slate-400 mb-4">无法获取该图片对应的题目列表</p>
+        <h3 className="text-lg font-medium text-slate-800 mb-2">加载失败</h3>
+        <p className="text-slate-500 mb-4">无法获取该图片对应的题目列表</p>
         <button onClick={() => navigate(-1)} className="btn-primary">
           返回
         </button>
@@ -92,7 +92,7 @@ export default function ImageQuestionGroup() {
     <div className="animate-fade-in">
       <button
         onClick={() => navigate(-1)}
-        className="flex items-center gap-2 text-slate-400 hover:text-white mb-6 transition-colors"
+        className="flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-6 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" />
         返回错题本
@@ -103,8 +103,8 @@ export default function ImageQuestionGroup() {
           {/* Uploaded image */}
           <div className="card p-6">
             <div className="flex items-center justify-between gap-4 mb-4">
-              <h1 className="font-display text-2xl font-bold text-white flex items-center gap-2">
-                <ImageIcon className="w-5 h-5 text-primary-300" />
+              <h1 className="font-display text-2xl font-bold text-slate-800 flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-primary-600" />
                 本次上传图片
               </h1>
               <div className="flex items-center gap-2">
@@ -119,7 +119,7 @@ export default function ImageQuestionGroup() {
                   放大查看
                 </button>
                 <button
-                  className="bg-red-500/20 hover:bg-red-500/30 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 flex items-center gap-2"
+                  className="bg-red-500/20 hover:bg-red-500/30 text-red-600 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 flex items-center gap-2"
                   disabled={deleteGroupMutation.isPending}
                   onClick={() => {
                     if (!confirm('确定要删除这张图片下的所有错题吗？此操作不可恢复。')) return
@@ -133,7 +133,7 @@ export default function ImageQuestionGroup() {
             </div>
 
             <div
-              className="rounded-xl overflow-hidden bg-slate-800/50 border border-slate-700/50 cursor-pointer hover:border-primary-500/50 transition-all"
+              className="rounded-lg overflow-hidden bg-slate-50 border border-slate-200 cursor-pointer hover:border-primary-500/50 transition-all"
               onClick={() => {
                 setViewerImage({ url: image_url, title: '上传图片' })
                 setViewerOpen(true)
@@ -146,8 +146,8 @@ export default function ImageQuestionGroup() {
           {/* Questions list */}
           <div className="card p-6">
             <div className="flex items-center justify-between gap-4 mb-4">
-              <h2 className="text-lg font-semibold text-white">该图片中的题目</h2>
-              <div className="text-slate-400 text-sm">共 {questions?.length || 0} 题</div>
+              <h2 className="text-lg font-semibold text-slate-800">该图片中的题目</h2>
+              <div className="text-slate-500 text-sm">共 {questions?.length || 0} 题</div>
             </div>
 
             <div className="space-y-3">
@@ -158,34 +158,34 @@ export default function ImageQuestionGroup() {
                 <Link
                   key={q.id}
                   to={`/questions/${q.id}${q.subject ? `?subject=${encodeURIComponent(q.subject)}` : ''}`}
-                  className="block rounded-lg bg-slate-800/40 hover:bg-slate-800/60 border border-slate-700/40 hover:border-primary-500/40 transition-all p-4"
+                  className="block rounded-lg bg-slate-50 hover:bg-slate-50 border border-slate-200 hover:border-primary-500/40 transition-all p-4"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-slate-300 text-xs">
+                        <span className="text-slate-600 text-xs">
                           {q.upload_index ? `第 ${q.upload_index} 题` : `题目 ${q.id}`}
                         </span>
                         <span
                           className={clsx(
                             'text-xs px-2 py-0.5 rounded-full border',
-                            isCorrect === true && 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
-                            isCorrect === false && 'bg-red-500/10 text-red-300 border-red-500/30',
-                            isCorrect == null && 'bg-slate-500/10 text-slate-300 border-slate-500/30'
+                            isCorrect === true && 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30',
+                            isCorrect === false && 'bg-red-500/10 text-red-600 border-red-500/30',
+                            isCorrect == null && 'bg-slate-500/10 text-slate-600 border-slate-200'
                           )}
                         >
                           {isCorrect === true ? '正确' : isCorrect === false ? '错误' : '未知'}
                         </span>
                         {typeof q.score === 'number' && typeof q.max_score === 'number' && (
-                          <span className="text-slate-400 text-xs">
+                          <span className="text-slate-500 text-xs">
                             {q.score}/{q.max_score}
                           </span>
                         )}
                       </div>
-                      <div className="text-white text-sm font-medium line-clamp-1">
+                      <div className="text-slate-800 text-sm font-medium line-clamp-1">
                         {q.title || (q.content ? q.content.slice(0, 60) : '题目内容')}
                       </div>
-                      <div className="text-slate-400 text-xs line-clamp-2 mt-1">{q.content}</div>
+                      <div className="text-slate-500 text-xs line-clamp-2 mt-1">{q.content}</div>
                     </div>
                     <ArrowRight className="w-4 h-4 text-slate-500 flex-shrink-0 mt-1" />
                   </div>
@@ -200,29 +200,29 @@ export default function ImageQuestionGroup() {
         {/* Stats */}
         <div className="space-y-6">
           <div className="card p-6">
-            <h3 className="text-sm font-medium text-slate-400 mb-4">统计</h3>
+            <h3 className="text-sm font-medium text-slate-500 mb-4">统计</h3>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-slate-300">总题数</span>
-                <span className="text-white font-semibold">{computedStats.total}</span>
+                <span className="text-slate-600">总题数</span>
+                <span className="text-slate-800 font-semibold">{computedStats.total}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-emerald-300 flex items-center gap-2">
+                <span className="text-emerald-600 flex items-center gap-2">
                   <CheckCircle className="w-4 h-4" /> 正确
                 </span>
-                <span className="text-emerald-200 font-semibold">{computedStats.correct}</span>
+                <span className="text-emerald-600 font-semibold">{computedStats.correct}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-red-300 flex items-center gap-2">
+                <span className="text-red-600 flex items-center gap-2">
                   <XCircle className="w-4 h-4" /> 错误
                 </span>
-                <span className="text-red-200 font-semibold">{computedStats.wrong}</span>
+                <span className="text-red-600 font-semibold">{computedStats.wrong}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-300 flex items-center gap-2">
+                <span className="text-slate-600 flex items-center gap-2">
                   <HelpCircle className="w-4 h-4" /> 未知
                 </span>
-                <span className="text-slate-200 font-semibold">{computedStats.unknown}</span>
+                <span className="text-slate-700 font-semibold">{computedStats.unknown}</span>
               </div>
             </div>
           </div>
@@ -238,5 +238,4 @@ export default function ImageQuestionGroup() {
     </div>
   )
 }
-
 

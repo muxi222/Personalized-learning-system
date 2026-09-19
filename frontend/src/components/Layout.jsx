@@ -1,155 +1,140 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Outlet, NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/authStore'
-import {
-  Home,
-  PlusCircle,
-  List,
-  RefreshCw,
-  LogOut,
-  BookOpen,
-  User,
-  Camera,
-  Brain,
-  Sparkles,
-  FileCheck
-} from 'lucide-react'
-import clsx from 'clsx'
+import { BookOpen, ChevronDown, ChevronRight, LogOut, Search, User, ArrowUpRight, CalendarDays, Menu, X } from 'lucide-react'
 
 const navItems = [
-  { to: '/', icon: Home, label: '仪表盘' },
-  { to: '/exam-upload', icon: Camera, label: 'AI批改' },
-  { to: '/corrections', icon: FileCheck, label: '批改历史' },
-  { to: '/submit', icon: PlusCircle, label: '录入错题' },
-  { to: '/questions', icon: List, label: '错题本' },
-  { to: '/learning', icon: Brain, label: '学习建议' },
-  { to: '/companion', icon: Sparkles, label: '小书童', highlight: false },
-  { to: '/review', icon: RefreshCw, label: '复习' },
+  { to: '/', label: '学习首页' },
+  { to: '/exam-upload', label: 'AI 批改' },
+  { to: '/corrections', label: '批改历史' },
+  { to: '/submit', label: '录入错题' },
+  { to: '/questions', label: '错题本' },
+  { to: '/review', label: '复习练习' },
+  { to: '/learning', label: '学习建议' },
+  { to: '/companion', label: '小书童' },
 ]
+
+const queryKeysByPath = {
+  '/': ['questions', 'review-due', 'feedback-stats'],
+  '/questions': ['questions', 'question-chapters'],
+  '/review': ['review-due', 'question-chapters'],
+  '/corrections': ['corrections'],
+  '/learning': ['learning-profile', 'recommendations', 'study-plan', 'learning-summary'],
+  '/companion': ['companion-conversations', 'companion-conversation'],
+}
 
 export default function Layout() {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const queryClient = useQueryClient()
+  const [search, setSearch] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const accountRef = useRef(null)
+  const current = navItems.find(item => item.to === '/' ? pathname === '/' : pathname.startsWith(item.to))
+  const pageTitle = current?.label || '任务详情'
+  const isDetail = current && pathname !== current.to
+  const fullWidth = pathname === '/companion' || isDetail || pathname.startsWith('/tasks/')
+  const displayName = user?.full_name || user?.username || '同学'
+
+  useEffect(() => {
+    setMenuOpen(false)
+    if (accountRef.current) accountRef.current.open = false
+    window.scrollTo({ top: 0, behavior: 'instant' })
+  }, [pathname])
+
+  useEffect(() => {
+    const closeAccount = (event) => {
+      if (accountRef.current && !accountRef.current.contains(event.target)) accountRef.current.open = false
+    }
+    const closeMenus = (event) => {
+      if (event.key === 'Escape') {
+        setMenuOpen(false)
+        if (accountRef.current) accountRef.current.open = false
+      }
+    }
+    document.addEventListener('pointerdown', closeAccount)
+    document.addEventListener('keydown', closeMenus)
+    return () => {
+      document.removeEventListener('pointerdown', closeAccount)
+      document.removeEventListener('keydown', closeMenus)
+    }
+  }, [])
 
   const handleNavClick = (to) => {
-    // 点击导航时，主动让相关页面的核心数据失效，确保进入页面会拉取最新数据
-    if (to === '/questions') {
-      queryClient.invalidateQueries({ queryKey: ['questions'] })
-      queryClient.invalidateQueries({ queryKey: ['question-chapters'] })
-      return
-    }
-    if (to === '/review') {
-      queryClient.invalidateQueries({ queryKey: ['review-due'] })
-      queryClient.invalidateQueries({ queryKey: ['question-chapters'] })
-      return
-    }
-    if (to === '/corrections') {
-      queryClient.invalidateQueries({ queryKey: ['corrections'] })
-      return
-    }
-    if (to === '/learning') {
-      queryClient.invalidateQueries({ queryKey: ['learning-profile'] })
-      queryClient.invalidateQueries({ queryKey: ['recommendations'] })
-      queryClient.invalidateQueries({ queryKey: ['study-plan'] })
-      queryClient.invalidateQueries({ queryKey: ['learning-summary'] })
-      return
-    }
-    if (to === '/companion') {
-      queryClient.invalidateQueries({ queryKey: ['companion-conversations'] })
-      queryClient.invalidateQueries({ queryKey: ['companion-conversation'] })
-      return
-    }
-    if (to === '/') {
-      queryClient.invalidateQueries({ queryKey: ['questions'] })
-      queryClient.invalidateQueries({ queryKey: ['review-due'] })
-      queryClient.invalidateQueries({ queryKey: ['feedback-stats'] })
-    }
-  }
-
-  const handleLogout = () => {
-    logout()
-    navigate('/login')
+    for (const key of queryKeysByPath[to] || []) queryClient.invalidateQueries({ queryKey: [key] })
+    setMenuOpen(false)
   }
 
   return (
-    <div className="min-h-screen flex">
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-900/80 backdrop-blur-xl border-r border-slate-800/50 flex flex-col">
-        {/* Logo */}
-        <div className="p-6 border-b border-slate-800/50">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-accent-500 rounded-xl flex items-center justify-center">
-              <BookOpen className="w-5 h-5 text-white" />
+    <div className="site-shell">
+      <a className="skip-link" href="#main-content">跳到主要内容</a>
+      <header className="site-header">
+        <div className="site-width header-main">
+          <Link to="/" className="brand" aria-label="灵动书童首页">
+            <span className="brand-mark"><BookOpen size={27} strokeWidth={1.8} /></span>
+            <span><strong>灵动书童</strong><small>LEARNING ASSISTANT</small></span>
+          </Link>
+          <span className="workspace-label">学习中心</span>
+          <form className="header-search" role="search" onSubmit={(event) => {
+            event.preventDefault()
+            navigate('/questions' + (search.trim() ? '?search=' + encodeURIComponent(search.trim()) : ''))
+          }}>
+            <input aria-label="搜索错题" placeholder="搜索我的错题" value={search} onChange={event => setSearch(event.target.value)} />
+            <button type="submit" aria-label="搜索" title="搜索"><Search size={17} /></button>
+          </form>
+          <details className="account-menu" ref={accountRef}>
+            <summary><span className="avatar avatar-small"><User size={17} /></span><span className="account-name">{displayName}</span><ChevronDown size={14} /></summary>
+            <div className="account-dropdown">
+              <p>{displayName}<small>{user?.grade || '学生账号'}</small></p>
+              <button onClick={() => { logout(); navigate('/login') }}><LogOut size={16} />退出登录</button>
             </div>
-            <div>
-              <h1 className="font-display font-bold text-lg text-white">灵动书童</h1>
-              <p className="text-xs text-slate-500">你的 AI 个性化学习引擎</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Navigation */}
-        <nav className="flex-1 p-4 space-y-1">
-          {navItems.map(({ to, icon: Icon, label, highlight }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              onClick={() => handleNavClick(to)}
-              className={({ isActive }) =>
-                clsx(
-                  'flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200',
-                  isActive
-                    ? 'bg-gradient-to-r from-primary-500/20 to-accent-500/20 text-white border border-primary-500/30'
-                    : highlight
-                    ? 'text-primary-400 hover:text-white bg-primary-500/10 hover:bg-primary-500/20 border border-primary-500/20'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                )
-              }
-            >
-              <Icon className={clsx('w-5 h-5', highlight && 'text-primary-400')} />
-              <span className="font-medium">{label}</span>
-              {highlight && (
-                <span className="ml-auto px-2 py-0.5 bg-primary-500 text-white text-xs rounded-full">
-                  新
-                </span>
-              )}
-            </NavLink>
-          ))}
-        </nav>
-
-        {/* User section */}
-        <div className="p-4 border-t border-slate-800/50">
-          <div className="flex items-center gap-3 px-4 py-3">
-            <div className="w-9 h-9 bg-slate-700 rounded-full flex items-center justify-center">
-              <User className="w-4 h-4 text-slate-400" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white truncate">
-                {user?.full_name || user?.username || '用户'}
-              </p>
-              <p className="text-xs text-slate-500 truncate">
-                {user?.grade || '学生'}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all duration-200"
-          >
-            <LogOut className="w-5 h-5" />
-            <span className="font-medium">退出登录</span>
+          </details>
+          <button className="mobile-nav-toggle" aria-label={menuOpen ? '收起导航' : '展开导航'} aria-expanded={menuOpen} aria-controls="primary-navigation" onClick={() => setMenuOpen(!menuOpen)}>
+            {menuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
         </div>
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        <div className="container mx-auto p-8 max-w-6xl">
-          <Outlet />
+        <div className="header-navigation">
+          <nav id="primary-navigation" aria-label="主导航" className={'site-width primary-navigation' + (menuOpen ? ' is-open' : '')}>
+            {navItems.map(({ to, label }) => (
+              <NavLink key={to} to={to} end={to === '/'} onClick={() => handleNavClick(to)} className={({ isActive }) => 'navigation-link' + (isActive ? ' is-active' : '')}>
+                {label}{to === '/companion' && <span className="nav-ai">AI</span>}
+              </NavLink>
+            ))}
+          </nav>
         </div>
-      </main>
+      </header>
+
+      <div className="site-width workspace-body">
+        <nav aria-label="当前位置" className="breadcrumb">
+          <Link to="/">学习中心</Link><ChevronRight size={13} />
+          {isDetail ? <><Link to={current.to}>{pageTitle}</Link><ChevronRight size={13} /><span aria-current="page">详情</span></> : <span aria-current="page">{pageTitle}</span>}
+        </nav>
+        <div className={'workspace-grid' + (fullWidth ? ' workspace-wide' : '')}>
+          <main id="main-content" className="workspace-content" tabIndex={-1}><Outlet /></main>
+          {!fullWidth && (
+            <aside className="study-sidebar" aria-label="个人学习信息">
+              <section className="profile-panel">
+                <div className="profile-cover" />
+                <span className="avatar avatar-large"><User size={29} strokeWidth={1.6} /></span>
+                <h2>{displayName}</h2>
+                <p className="profile-grade">{user?.grade || '学生'}</p>
+                <dl><div><dt>学习空间</dt><dd>个人学习</dd></div><div><dt>学科范围</dt><dd>全部学科</dd></div></dl>
+                <Link className="profile-action" to="/learning">我的学习建议<ArrowUpRight size={15} /></Link>
+              </section>
+              <section className="sidebar-section">
+                <h2><CalendarDays size={17} />学习安排</h2>
+                <Link to="/review"><span className="sidebar-dot dot-blue" />错题复习<ChevronRight size={14} /></Link>
+                <Link to="/corrections"><span className="sidebar-dot dot-green" />查看批改记录<ChevronRight size={14} /></Link>
+                <Link to="/companion"><span className="sidebar-dot dot-amber" />与小书童对话<ChevronRight size={14} /></Link>
+              </section>
+              <div className="sidebar-wordmark"><BookOpen size={18} /><span>灵动书童<small>LEARNING ASSISTANT</small></span></div>
+            </aside>
+          )}
+        </div>
+      </div>
+      <footer className="site-footer"><div className="site-width"><span>灵动书童 · 个人学习空间</span><Link to="/companion">小书童</Link><Link to="/questions">我的错题本</Link></div></footer>
     </div>
   )
 }

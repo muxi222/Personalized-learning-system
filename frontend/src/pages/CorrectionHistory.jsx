@@ -65,20 +65,20 @@ const correctionsApi = {
 const SUBJECTS = [
   { value: '', label: '全部学科' },
   // RPJ模块
-  { value: 'chinese', label: '语文', color: 'text-red-400', bg: 'bg-red-500/10' },
-  { value: 'english', label: '英语', color: 'text-green-400', bg: 'bg-green-500/10' },
-  { value: 'politics', label: '政治', color: 'text-slate-400', bg: 'bg-slate-500/10' },
+  { value: 'chinese', label: '语文', color: 'text-red-600', bg: 'bg-red-500/10' },
+  { value: 'english', label: '英语', color: 'text-green-600', bg: 'bg-green-500/10' },
+  { value: 'politics', label: '政治', color: 'text-slate-500', bg: 'bg-slate-500/10' },
   // XMX模块
   { value: 'economics', label: '经济学', color: 'text-yellow-400', bg: 'bg-yellow-500/10' },
   // WZY模块
-  { value: 'math', label: '数学', color: 'text-blue-400', bg: 'bg-blue-500/10' },
+  { value: 'math', label: '数学', color: 'text-blue-600', bg: 'bg-blue-500/10' },
   { value: 'physics', label: '物理', color: 'text-orange-400', bg: 'bg-orange-500/10' },
   // WZM模块
-  { value: 'chemistry', label: '化学', color: 'text-purple-400', bg: 'bg-purple-500/10' },
+  { value: 'chemistry', label: '化学', color: 'text-purple-600', bg: 'bg-purple-500/10' },
   // TONY模块
   { value: 'history', label: '历史', color: 'text-amber-700', bg: 'bg-amber-700/10' },
-  { value: 'geography', label: '地理', color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
-  { value: 'other', label: '其他', color: 'text-gray-400', bg: 'bg-gray-500/10' },
+  { value: 'geography', label: '地理', color: 'text-cyan-600', bg: 'bg-cyan-500/10' },
+  { value: 'other', label: '其他', color: 'text-slate-500', bg: 'bg-gray-500/10' },
 ]
 
 const PERIODS = [
@@ -198,14 +198,14 @@ export default function CorrectionHistory() {
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-2">
-          <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-accent-500 rounded-xl flex items-center justify-center">
-            <FileCheck className="w-6 h-6 text-white" />
+          <div className="w-12 h-12 bg-primary-50 from-primary-500 to-accent-500 rounded-lg flex items-center justify-center">
+            <FileCheck className="w-6 h-6 text-slate-800" />
           </div>
           <div>
-            <h1 className="font-display text-3xl font-bold text-white">
+            <h1 className="font-display text-2xl font-bold text-slate-800">
               AI批改历史
             </h1>
-            <p className="text-slate-400">
+            <p className="text-slate-500">
               查看你的试卷批改记录和学习统计
             </p>
           </div>
@@ -216,10 +216,10 @@ export default function CorrectionHistory() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="card p-6">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-slate-400 text-sm">批改次数</span>
-            <FileCheck className="w-5 h-5 text-primary-400" />
+            <span className="text-slate-500 text-sm">批改次数</span>
+            <FileCheck className="w-5 h-5 text-primary-600" />
           </div>
-          <div className="text-3xl font-bold text-white">
+          <div className="text-2xl font-bold text-slate-800">
             {stats?.total_corrections || 0}
           </div>
           <div className="text-xs text-slate-500 mt-1">
@@ -229,10 +229,10 @@ export default function CorrectionHistory() {
 
         <div className="card p-6">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-slate-400 text-sm">题目总数</span>
-            <BarChart3 className="w-5 h-5 text-accent-400" />
+            <span className="text-slate-500 text-sm">题目总数</span>
+            <BarChart3 className="w-5 h-5 text-cyan-600" />
           </div>
-          <div className="text-3xl font-bold text-white">
+          <div className="text-2xl font-bold text-slate-800">
             {stats?.total_questions || 0}
           </div>
           <div className="text-xs text-slate-500 mt-1">
@@ -242,19 +242,19 @@ export default function CorrectionHistory() {
 
         <div className="card p-6">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-slate-400 text-sm">平均正确率</span>
+            <span className="text-slate-500 text-sm">平均正确率</span>
             {stats?.avg_accuracy >= 0.6 ? (
-              <TrendingUp className="w-5 h-5 text-emerald-400" />
+              <TrendingUp className="w-5 h-5 text-emerald-600" />
             ) : (
-              <TrendingDown className="w-5 h-5 text-amber-400" />
+              <TrendingDown className="w-5 h-5 text-amber-600" />
             )}
           </div>
-          <div className="text-3xl font-bold text-white">
+          <div className="text-2xl font-bold text-slate-800">
             {((stats?.avg_accuracy || 0) * 100).toFixed(0)}%
           </div>
           <div className={clsx(
             "text-xs mt-1",
-            stats?.avg_accuracy >= 0.6 ? "text-emerald-400" : "text-amber-400"
+            stats?.avg_accuracy >= 0.6 ? "text-emerald-600" : "text-amber-600"
           )}>
             {stats?.avg_accuracy >= 0.6 ? '继续保持' : '需要加油'}
           </div>
@@ -262,10 +262,10 @@ export default function CorrectionHistory() {
 
         <div className="card p-6">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-slate-400 text-sm">平均得分</span>
-            <Award className="w-5 h-5 text-amber-400" />
+            <span className="text-slate-500 text-sm">平均得分</span>
+            <Award className="w-5 h-5 text-amber-600" />
           </div>
-          <div className="text-3xl font-bold text-white">
+          <div className="text-2xl font-bold text-slate-800">
             {(stats?.avg_score || 0).toFixed(1)}
           </div>
           <div className="text-xs text-slate-500 mt-1">
@@ -279,7 +279,7 @@ export default function CorrectionHistory() {
         <div className="flex flex-wrap items-center gap-4">
           {/* 时间周期 */}
           <div className="flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-slate-400" />
+            <Calendar className="w-5 h-5 text-slate-500" />
             <select
               value={selectedPeriod}
               onChange={(e) => setSelectedPeriod(e.target.value)}
@@ -293,7 +293,7 @@ export default function CorrectionHistory() {
 
           {/* 学科筛选 */}
           <div className="flex items-center gap-2">
-            <Filter className="w-5 h-5 text-slate-400" />
+            <Filter className="w-5 h-5 text-slate-500" />
             <select
               value={selectedSubject}
               onChange={(e) => {
@@ -310,7 +310,7 @@ export default function CorrectionHistory() {
 
           {/* 日期范围（列表筛选） */}
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">日期</span>
+            <span className="text-slate-500 text-sm">日期</span>
             <input
               type="date"
               value={dateRange.start}
@@ -346,7 +346,7 @@ export default function CorrectionHistory() {
               <button
                 onClick={handleBatchDelete}
                 disabled={selectedItems.length === 0 || batchDeleteMutation.isPending}
-                className="bg-red-500/20 hover:bg-red-500/30 text-red-400 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                className="bg-red-500/20 hover:bg-red-500/30 text-red-600 px-3 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
               >
                 <Trash2 className="w-4 h-4 inline mr-1" />
                 {batchDeleteMutation.isPending ? '删除中...' : `删除 (${selectedItems.length})`}
@@ -371,7 +371,7 @@ export default function CorrectionHistory() {
             </button>
           )}
 
-          <div className="text-slate-400 text-sm">
+          <div className="text-slate-500 text-sm">
             共 {total} 条记录
           </div>
         </div>
@@ -380,14 +380,14 @@ export default function CorrectionHistory() {
       {/* 学科统计卡片 */}
       {stats?.subject_stats && Object.keys(stats.subject_stats).length > 0 && (
         <div className="card p-6 mb-6">
-          <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
-            <Target className="w-5 h-5 text-primary-400" />
+          <h3 className="text-slate-800 font-semibold mb-4 flex items-center gap-2">
+            <Target className="w-5 h-5 text-primary-600" />
             各学科表现
             <span className="text-slate-500 text-sm font-normal ml-auto">点击查看该学科的批改记录</span>
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {Object.entries(stats.subject_stats).map(([subj, data]) => {
-              const subjectInfo = SUBJECTS.find(s => s.value === subj) || { label: subj, color: 'text-slate-400', bg: 'bg-slate-500/10' }
+              const subjectInfo = SUBJECTS.find(s => s.value === subj) || { label: subj, color: 'text-slate-500', bg: 'bg-slate-500/10' }
               const isSelected = selectedSubject === subj
               return (
                 <button
@@ -401,33 +401,33 @@ export default function CorrectionHistory() {
                     }, 100)
                   }}
                   className={clsx(
-                    `${subjectInfo.bg} rounded-xl p-4 border transition-all text-left w-full`,
+                    `${subjectInfo.bg} rounded-lg p-4 border transition-all text-left w-full`,
                     isSelected
                       ? 'border-primary-500 ring-2 ring-primary-500/50 scale-105'
-                      : 'border-slate-700/50 hover:border-primary-500/50 hover:scale-102'
+                      : 'border-slate-200 hover:border-primary-500/50 hover:scale-102'
                   )}
                 >
                   <div className={`${subjectInfo.color} font-medium mb-2 flex items-center justify-between`}>
                     <span>{subjectInfo.label}</span>
                     {isSelected && (
-                      <CheckCircle2 className="w-4 h-4 text-primary-400" />
+                      <CheckCircle2 className="w-4 h-4 text-primary-600" />
                     )}
                   </div>
                   <div className="text-sm space-y-1">
-                    <div className="flex justify-between text-slate-300">
+                    <div className="flex justify-between text-slate-600">
                       <span>批改:</span>
                       <span className="font-medium">{data.count}次</span>
                     </div>
-                    <div className="flex justify-between text-slate-300">
+                    <div className="flex justify-between text-slate-600">
                       <span>正确率:</span>
                       <span className={clsx(
                         "font-medium",
-                        data.avg_accuracy >= 0.6 ? "text-emerald-400" : "text-amber-400"
+                        data.avg_accuracy >= 0.6 ? "text-emerald-600" : "text-amber-600"
                       )}>
                         {(data.avg_accuracy * 100).toFixed(0)}%
                       </span>
                     </div>
-                    <div className="flex justify-between text-red-400">
+                    <div className="flex justify-between text-red-600">
                       <span>错题:</span>
                       <span className="font-medium">{data.wrong_count}</span>
                     </div>
@@ -438,12 +438,12 @@ export default function CorrectionHistory() {
           </div>
           {selectedSubject && (
             <div className="mt-4 p-3 bg-primary-500/10 border border-primary-500/30 rounded-lg">
-              <p className="text-primary-400 text-sm flex items-center gap-2">
+              <p className="text-primary-600 text-sm flex items-center gap-2">
                 <Filter className="w-4 h-4" />
                 当前筛选：{SUBJECTS.find(s => s.value === selectedSubject)?.label}
                 <button
                   onClick={() => setSelectedSubject('')}
-                  className="ml-auto text-xs hover:text-primary-300 underline"
+                  className="ml-auto text-xs hover:text-primary-600 underline"
                 >
                   清除筛选
                 </button>
@@ -456,8 +456,8 @@ export default function CorrectionHistory() {
       {/* 列表标题 */}
       {corrections.length > 0 && (
         <div className="mb-4">
-          <h2 className="text-white font-semibold text-xl flex items-center gap-2">
-            <FileCheck className="w-5 h-5 text-primary-400" />
+          <h2 className="text-slate-800 font-semibold text-xl flex items-center gap-2">
+            <FileCheck className="w-5 h-5 text-primary-600" />
             {selectedSubject ?
               `${SUBJECTS.find(s => s.value === selectedSubject)?.label}批改记录` :
               '所有批改记录'
@@ -474,16 +474,16 @@ export default function CorrectionHistory() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[...Array(6)].map((_, i) => (
             <div key={i} className="card p-6 animate-pulse">
-              <div className="h-40 bg-slate-700 rounded-xl mb-4" />
-              <div className="h-5 bg-slate-700 rounded w-3/4 mb-2" />
-              <div className="h-4 bg-slate-700 rounded w-1/2" />
+              <div className="h-40 bg-slate-50 rounded-lg mb-4" />
+              <div className="h-5 bg-slate-50 rounded w-3/4 mb-2" />
+              <div className="h-4 bg-slate-50 rounded w-1/2" />
             </div>
           ))}
         </div>
       ) : corrections.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {corrections.map((correction, index) => {
-            const subjectInfo = SUBJECTS.find(s => s.value === correction.subject) || { label: correction.subject, color: 'text-slate-400', bg: 'bg-slate-500/10' }
+            const subjectInfo = SUBJECTS.find(s => s.value === correction.subject) || { label: correction.subject, color: 'text-slate-500', bg: 'bg-slate-500/10' }
             const scorePercent = (correction.total_score / correction.max_score) * 100
 
             const isSelected = selectedItems.includes(correction.id)
@@ -514,7 +514,7 @@ export default function CorrectionHistory() {
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggleSelection(correction.id)}
-                      className="w-5 h-5 rounded border-2 border-slate-600 bg-slate-800 checked:bg-primary-500 checked:border-primary-500 cursor-pointer"
+                      className="w-5 h-5 rounded border-2 border-slate-200 bg-slate-50 checked:bg-primary-500 checked:border-primary-500 cursor-pointer"
                     />
                   </div>
                 )}
@@ -526,13 +526,13 @@ export default function CorrectionHistory() {
                       {subjectInfo.label}
                     </span>
                     {correction.grade && (
-                      <span className="badge bg-slate-700 text-slate-300 text-xs">
+                      <span className="badge bg-slate-50 text-slate-600 text-xs">
                         {correction.grade}
                       </span>
                     )}
                   </div>
                   {correction.corrected_image_url && (
-                    <span className="flex items-center gap-1 text-emerald-400 text-xs">
+                    <span className="flex items-center gap-1 text-emerald-600 text-xs">
                       <CheckCircle2 className="w-3 h-3" />
                       已批改
                     </span>
@@ -541,10 +541,10 @@ export default function CorrectionHistory() {
 
                 {/* 标题和时间 */}
                 <div className="mb-4">
-                  <h3 className="text-white font-semibold text-lg mb-1 line-clamp-1">
+                  <h3 className="text-slate-800 font-semibold text-lg mb-1 line-clamp-1">
                     {correction.exam_title || '试卷批改'}
                   </h3>
-                  <div className="flex items-center gap-2 text-slate-400 text-sm">
+                  <div className="flex items-center gap-2 text-slate-500 text-sm">
                     <Clock className="w-4 h-4" />
                     {new Date(correction.created_at).toLocaleString('zh-CN', {
                       month: 'numeric',
@@ -558,26 +558,26 @@ export default function CorrectionHistory() {
                 {/* 得分 */}
                 <div className="mb-4">
                   <div className="flex items-baseline gap-2 mb-2">
-                    <span className="text-3xl font-bold text-white">
+                    <span className="text-2xl font-bold text-slate-800">
                       {correction.total_score}
                     </span>
-                    <span className="text-slate-400">/ {correction.max_score}</span>
+                    <span className="text-slate-500">/ {correction.max_score}</span>
                     <span className={clsx(
                       "ml-auto text-lg font-semibold",
-                      scorePercent >= 60 ? "text-emerald-400" : "text-red-400"
+                      scorePercent >= 60 ? "text-emerald-600" : "text-red-600"
                     )}>
                       {scorePercent.toFixed(0)}%
                     </span>
                   </div>
 
                   {/* 进度条 */}
-                  <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                  <div className="h-2 bg-slate-50 rounded-full overflow-hidden">
                     <div
                       className={clsx(
                         "h-full transition-all duration-500",
                         scorePercent >= 60
-                          ? "bg-gradient-to-r from-emerald-500 to-green-500"
-                          : "bg-gradient-to-r from-red-500 to-orange-500"
+                          ? "bg-primary-50 from-emerald-500 to-green-500"
+                          : "bg-primary-50 from-red-500 to-orange-500"
                       )}
                       style={{ width: `${Math.min(100, scorePercent)}%` }}
                     />
@@ -586,30 +586,30 @@ export default function CorrectionHistory() {
 
                 {/* 题目统计 */}
                 <div className="grid grid-cols-3 gap-3 mb-4">
-                  <div className="text-center p-3 bg-slate-800/50 rounded-lg">
-                    <div className="text-slate-400 text-xs mb-1">总题数</div>
-                    <div className="text-white font-bold">{correction.question_count}</div>
+                  <div className="text-center p-3 bg-slate-50 rounded-lg">
+                    <div className="text-slate-500 text-xs mb-1">总题数</div>
+                    <div className="text-slate-800 font-bold">{correction.question_count}</div>
                   </div>
                   <div className="text-center p-3 bg-emerald-500/10 rounded-lg">
-                    <div className="text-emerald-400 text-xs mb-1 flex items-center justify-center gap-1">
+                    <div className="text-emerald-600 text-xs mb-1 flex items-center justify-center gap-1">
                       <CheckCircle2 className="w-3 h-3" />
                       答对
                     </div>
-                    <div className="text-emerald-400 font-bold">{correction.correct_count}</div>
+                    <div className="text-emerald-600 font-bold">{correction.correct_count}</div>
                   </div>
                   <div className="text-center p-3 bg-red-500/10 rounded-lg">
-                    <div className="text-red-400 text-xs mb-1 flex items-center justify-center gap-1">
+                    <div className="text-red-600 text-xs mb-1 flex items-center justify-center gap-1">
                       <XCircle className="w-3 h-3" />
                       答错
                     </div>
-                    <div className="text-red-400 font-bold">{correction.wrong_count}</div>
+                    <div className="text-red-600 font-bold">{correction.wrong_count}</div>
                   </div>
                 </div>
 
                 {/* 薄弱点 */}
                 {correction.weak_points && correction.weak_points.length > 0 && (
                   <div className="mb-4">
-                    <div className="text-slate-400 text-xs mb-2">薄弱知识点:</div>
+                    <div className="text-slate-500 text-xs mb-2">薄弱知识点:</div>
                     <div className="flex flex-wrap gap-2">
                       {correction.weak_points.slice(0, 3).map((point, i) => (
                         <span key={i} className="badge-warning text-xs">
@@ -627,7 +627,7 @@ export default function CorrectionHistory() {
 
                 {/* 操作按钮（仅在非选择模式显示） */}
                 {!isSelectionMode && (
-                  <div className="pt-4 border-t border-slate-800 flex items-center justify-between gap-2">
+                  <div className="pt-4 border-t border-slate-200 flex items-center justify-between gap-2">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -637,13 +637,13 @@ export default function CorrectionHistory() {
                       }}
                       data-action="delete"
                       disabled={deleteMutation.isPending}
-                      className="p-2 text-red-400 hover:bg-red-500/10 rounded-lg transition-all disabled:opacity-50"
+                      className="p-2 text-red-600 hover:bg-red-500/10 rounded-lg transition-all disabled:opacity-50"
                       title="删除"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
 
-                    <div className="flex items-center gap-2 text-primary-400 text-sm">
+                    <div className="flex items-center gap-2 text-primary-600 text-sm">
                       <span>点击查看详情</span>
                       <ArrowRight className="w-4 h-4" />
                     </div>
@@ -656,16 +656,16 @@ export default function CorrectionHistory() {
       ) : (
         <div className="card p-12 text-center">
           <FileCheck className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-white mb-2">
+          <h3 className="text-lg font-medium text-slate-800 mb-2">
             {selectedSubject ?
               `暂无${SUBJECTS.find(s => s.value === selectedSubject)?.label}批改记录` :
               '暂无批改记录'
             }
           </h3>
-          <p className="text-slate-400 mb-4">
+          <p className="text-slate-500 mb-4">
             {selectedSubject ? (
               <span>
-                该学科暂无批改记录，<button onClick={() => setSelectedSubject('')} className="text-primary-400 hover:text-primary-300 underline">查看全部</button>
+                该学科暂无批改记录，<button onClick={() => setSelectedSubject('')} className="text-primary-600 hover:text-primary-600 underline">查看全部</button>
               </span>
             ) : (
               '上传试卷让AI帮你批改吧！'
@@ -705,7 +705,7 @@ export default function CorrectionHistory() {
                     'w-10 h-10 rounded-lg font-medium transition-colors',
                     page === pageNum
                       ? 'bg-primary-500 text-white'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
                   )}
                 >
                   {pageNum}

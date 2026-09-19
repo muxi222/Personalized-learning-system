@@ -29,26 +29,26 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
+    <div className="auth-page min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-primary-500 to-accent-500 rounded-2xl mb-4">
-            <BookOpen className="w-8 h-8 text-white" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-50 from-primary-500 to-accent-500 rounded-lg mb-4">
+            <BookOpen className="w-8 h-8 text-primary-600" />
           </div>
-          <h1 className="font-display text-3xl font-bold text-white mb-2">
+          <h1 className="font-display text-2xl font-bold text-slate-800 mb-2">
             灵动书童
           </h1>
-          <p className="text-slate-400">你的 AI 个性化学习引擎</p>
+          <p className="text-slate-500">你的 AI 个性化学习引擎</p>
         </div>
 
         {/* Login form */}
         <div className="card p-8">
-          <h2 className="text-xl font-semibold text-white mb-6">欢迎回来</h2>
+          <h2 className="text-xl font-semibold text-slate-800 mb-6">欢迎回来</h2>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 用户名
               </label>
               <input
@@ -62,7 +62,7 @@ export default function Login() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 密码
               </label>
               <div className="relative">
@@ -76,8 +76,10 @@ export default function Login() {
                 />
                 <button
                   type="button"
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  title={showPassword ? '隐藏密码' : '显示密码'}
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600"
                 >
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -100,9 +102,9 @@ export default function Login() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-slate-400">
+          <p className="mt-6 text-center text-slate-500">
             还没有账号？{' '}
-            <Link to="/register" className="text-primary-400 hover:text-primary-300 font-medium">
+            <Link to="/register" className="text-primary-600 hover:text-primary-600 font-medium">
               立即注册
             </Link>
           </p>

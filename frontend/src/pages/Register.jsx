@@ -82,27 +82,27 @@ export default function Register() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 py-12">
+    <div className="auth-page min-h-screen flex items-center justify-center p-4 py-12">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-primary-500 to-accent-500 rounded-2xl mb-4">
-            <BookOpen className="w-8 h-8 text-white" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-50 from-primary-500 to-accent-500 rounded-lg mb-4">
+            <BookOpen className="w-8 h-8 text-primary-600" />
           </div>
-          <h1 className="font-display text-3xl font-bold text-white mb-2">
+          <h1 className="font-display text-2xl font-bold text-slate-800 mb-2">
             灵动书童
           </h1>
-          <p className="text-slate-400">开启智能学习之旅</p>
+          <p className="text-slate-500">开启智能学习之旅</p>
         </div>
 
         {/* Register form */}
         <div className="card p-8">
-          <h2 className="text-xl font-semibold text-white mb-6">创建账号</h2>
+          <h2 className="text-xl font-semibold text-slate-800 mb-6">创建账号</h2>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   用户名 *
                 </label>
                 <input
@@ -116,11 +116,11 @@ export default function Register() {
                   minLength={3}
                 />
                 {fieldErrors.username && (
-                  <p className="mt-1 text-sm text-red-400">{fieldErrors.username}</p>
+                  <p className="mt-1 text-sm text-red-600">{fieldErrors.username}</p>
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   姓名
                 </label>
                 <input
@@ -135,7 +135,7 @@ export default function Register() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 邮箱 *
               </label>
               <input
@@ -148,12 +148,12 @@ export default function Register() {
                 required
               />
               {fieldErrors.email && (
-                <p className="mt-1 text-sm text-red-400">{fieldErrors.email}</p>
+                <p className="mt-1 text-sm text-red-600">{fieldErrors.email}</p>
               )}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 年级
               </label>
               <select
@@ -175,7 +175,7 @@ export default function Register() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 密码 *
               </label>
               <div className="relative">
@@ -190,12 +190,14 @@ export default function Register() {
                   minLength={6}
                 />
                 {fieldErrors.password && (
-                  <p className="mt-1 text-sm text-red-400">{fieldErrors.password}</p>
+                  <p className="mt-1 text-sm text-red-600">{fieldErrors.password}</p>
                 )}
                 <button
                   type="button"
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  title={showPassword ? '隐藏密码' : '显示密码'}
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-600"
                 >
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -203,7 +205,7 @@ export default function Register() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 确认密码 *
               </label>
               <input
@@ -233,9 +235,9 @@ export default function Register() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-slate-400">
+          <p className="mt-6 text-center text-slate-500">
             已有账号？{' '}
-            <Link to="/login" className="text-primary-400 hover:text-primary-300 font-medium">
+            <Link to="/login" className="text-primary-600 hover:text-primary-600 font-medium">
               立即登录
             </Link>
           </p>

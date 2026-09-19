@@ -630,10 +630,10 @@ export default function QuestionSubmit() {
     <div className="max-w-3xl mx-auto animate-fade-in">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="font-display text-3xl font-bold text-white mb-2">
+        <h1 className="font-display text-2xl font-bold text-slate-800 mb-2">
           录入错题
         </h1>
-        <p className="text-slate-400">
+        <p className="text-slate-500">
           输入题目内容或上传图片，AI将自动分析错因并生成举一反三题目
         </p>
       </div>
@@ -644,10 +644,10 @@ export default function QuestionSubmit() {
           <button
             type="button"
             onClick={() => setInputMode('image')}
-            className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
+            className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
               inputMode === 'image'
                 ? 'bg-primary-500 text-white'
-                : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50'
+                : 'bg-slate-50 text-slate-500 hover:bg-slate-50'
             }`}
           >
             <div className="flex items-center justify-center gap-2">
@@ -658,10 +658,10 @@ export default function QuestionSubmit() {
           <button
             type="button"
             onClick={() => setInputMode('text')}
-            className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
+            className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
               inputMode === 'text'
                 ? 'bg-primary-500 text-white'
-                : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700/50'
+                : 'bg-slate-50 text-slate-500 hover:bg-slate-50'
             }`}
           >
             <div className="flex items-center justify-center gap-2">
@@ -678,7 +678,7 @@ export default function QuestionSubmit() {
           {/* Subject and Difficulty */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 学科 *
               </label>
               <select
@@ -692,7 +692,7 @@ export default function QuestionSubmit() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 难度
               </label>
               <select
@@ -709,7 +709,7 @@ export default function QuestionSubmit() {
 
           {/* Title */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
+            <label className="block text-sm font-medium text-slate-600 mb-2">
               题目标题
             </label>
             <input
@@ -724,15 +724,15 @@ export default function QuestionSubmit() {
           {/* 图片上传模式 */}
           {inputMode === 'image' && (
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-slate-600 mb-2">
                 上传题目图片 *
               </label>
               {!previewUrl ? (
                 <div
                   onDrop={handleDrop}
                   onDragOver={handleDragOver}
-                  className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
-                    canStartMoreImageTasks ? 'border-slate-600 hover:border-primary-500 cursor-pointer' : 'border-red-500/40 cursor-not-allowed opacity-70'
+                  className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                    canStartMoreImageTasks ? 'border-slate-200 hover:border-primary-500 cursor-pointer' : 'border-red-500/40 cursor-not-allowed opacity-70'
                   }`}
                 >
                   <input
@@ -744,10 +744,10 @@ export default function QuestionSubmit() {
                     disabled={!canStartMoreImageTasks}
                   />
                   <label htmlFor="question-image-upload" className="cursor-pointer">
-                    <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <Upload className="w-8 h-8 text-slate-400" />
+                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Upload className="w-8 h-8 text-slate-500" />
                     </div>
-                    <p className="text-white font-medium mb-2">
+                    <p className="text-slate-800 font-medium mb-2">
                       {canStartMoreImageTasks ? '点击或拖拽上传题目图片' : `已达到同时上传上限（${MAX_ACTIVE_IMAGE_TASKS}张）`}
                     </p>
                     <p className="text-slate-500 text-sm">
@@ -756,7 +756,7 @@ export default function QuestionSubmit() {
                   </label>
 
                   {/* 拍照按钮 */}
-                  <div className="mt-6 pt-6 border-t border-slate-700">
+                  <div className="mt-6 pt-6 border-t border-slate-200">
                     <input
                       type="file"
                       accept="image/*"
@@ -780,15 +780,15 @@ export default function QuestionSubmit() {
                   <img
                     src={previewUrl}
                     alt="题目预览"
-                    className="w-full rounded-xl cursor-pointer transition-all group-hover:brightness-110"
+                    className="w-full rounded-lg cursor-pointer transition-all group-hover:brightness-110"
                     onClick={() => setViewerOpen(true)}
                   />
                   <button
                     type="button"
                     onClick={clearImage}
-                    className="absolute top-2 right-2 p-2 bg-slate-900/80 rounded-full hover:bg-slate-800 transition-colors z-10"
+                    className="absolute top-2 right-2 p-2 bg-white rounded-full hover:bg-slate-50 transition-colors z-10"
                   >
-                    <X className="w-5 h-5 text-white" />
+                    <X className="w-5 h-5 text-slate-800" />
                   </button>
                   <button
                     type="button"
@@ -796,7 +796,7 @@ export default function QuestionSubmit() {
                       e.stopPropagation()
                       setViewerOpen(true)
                     }}
-                    className="absolute top-2 left-2 p-2 bg-slate-900/80 rounded-full hover:bg-slate-800 transition-colors opacity-0 group-hover:opacity-100"
+                    className="absolute top-2 left-2 p-2 bg-white rounded-full hover:bg-slate-50 transition-colors opacity-0 group-hover:opacity-100"
                   >
                     <Maximize2 className="w-5 h-5 text-white" />
                   </button>
@@ -813,7 +813,7 @@ export default function QuestionSubmit() {
             <>
               {/* Content */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   题目内容 *
                 </label>
                 <textarea
@@ -827,7 +827,7 @@ export default function QuestionSubmit() {
 
               {/* Student Answer */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   你的答案
                 </label>
                 <textarea
@@ -840,7 +840,7 @@ export default function QuestionSubmit() {
 
               {/* Correct Answer */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   正确答案
                 </label>
                 <textarea
@@ -853,7 +853,7 @@ export default function QuestionSubmit() {
 
               {/* Tags */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   标签
                 </label>
                 <input
@@ -877,28 +877,28 @@ export default function QuestionSubmit() {
           }`}>
             <div className="flex items-start gap-3">
               {taskStatus === 'completed' ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
               ) : taskStatus === 'failed' ? (
-                <AlertCircle className="w-5 h-5 text-red-400" />
+                <AlertCircle className="w-5 h-5 text-red-600" />
               ) : (
-                <Loader2 className="w-5 h-5 text-primary-400 animate-spin" />
+                <Loader2 className="w-5 h-5 text-primary-600 animate-spin" />
               )}
               <div className="flex-1 min-w-0">
-                <p className="text-white font-medium">
+                <p className="text-slate-800 font-medium">
                   {taskStatus === 'completed' ? '分析完成！即将跳转...' :
                    taskStatus === 'failed' ? '处理失败' :
                    taskStatus === 'processing' ? inputMode === 'image' ? 'AI正在识别和分析...' : 'AI正在分析中...' :
                    '任务已提交，等待处理...'}
                 </p>
                 {(taskStep || typeof taskProgress === 'number') && taskStatus !== 'failed' && (
-                  <p className="text-sm text-slate-300 mt-1">
+                  <p className="text-sm text-slate-600 mt-1">
                     {taskSubject ? `学科：${(SUBJECTS.find(s => s.value === taskSubject)?.label || taskSubject)}，` : ''}
                     {taskStep ? `${taskStep}` : '处理中...'}
                     {typeof taskProgress === 'number' ? `（${Math.round(taskProgress)}%）` : ''}
                   </p>
                 )}
                 {taskStatus === 'failed' && taskError && (
-                  <p className="text-sm text-red-300 mt-1 break-words">
+                  <p className="text-sm text-red-600 mt-1 break-words">
                     {taskError}
                   </p>
                 )}
@@ -907,7 +907,7 @@ export default function QuestionSubmit() {
                 <button
                   type="button"
                   onClick={cancelCurrentTask}
-                  className="p-1.5 rounded-md hover:bg-slate-800/60 text-slate-300 hover:text-white transition-colors"
+                  className="p-1.5 rounded-md hover:bg-slate-50 text-slate-600 hover:text-slate-800 transition-colors"
                   title="取消任务"
                 >
                   <X className="w-4 h-4" />
@@ -921,11 +921,11 @@ export default function QuestionSubmit() {
         {inputMode === 'image' && imageTasks.length > 0 && (
           <div className="card p-4">
             <div className="flex items-center justify-between gap-3 mb-3">
-              <div className="text-white font-medium">
+              <div className="text-slate-800 font-medium">
                 正在录入 / 处理中（{activeImageTaskCount}/{MAX_ACTIVE_IMAGE_TASKS}）
               </div>
               {!canStartMoreImageTasks && (
-                <div className="text-xs text-red-300">
+                <div className="text-xs text-red-600">
                   已达到并发上限，请等待完成后再上传
                 </div>
               )}
@@ -943,11 +943,11 @@ export default function QuestionSubmit() {
                 return (
                   <div className="mb-4 last:mb-0">
                     <div className="flex items-center justify-between gap-3 mb-2">
-                      <div className="text-white font-medium">
+                      <div className="text-slate-800 font-medium">
                         {title}（{tasks.length}）
                       </div>
                       <div className="flex items-center gap-2">
-                        <label className="text-xs text-slate-300 flex items-center gap-2">
+                        <label className="text-xs text-slate-600 flex items-center gap-2">
                           <input
                             type="checkbox"
                             className="accent-primary-500"
@@ -972,8 +972,8 @@ export default function QuestionSubmit() {
                     ) : (
                       <div className="space-y-2">
                         {tasks.map(t => (
-                          <div key={t.taskId} className={`flex items-start gap-3 rounded-lg border bg-slate-900/30 p-3 ${
-                            tone === 'ok' ? 'border-emerald-500/25' : tone === 'bad' ? 'border-red-500/25' : 'border-slate-700/60'
+                          <div key={t.taskId} className={`flex items-start gap-3 rounded-lg border bg-white p-3 ${
+                            tone === 'ok' ? 'border-emerald-500/25' : tone === 'bad' ? 'border-red-500/25' : 'border-slate-200'
                           }`}>
                             <div className="mt-1">
                               <input
@@ -985,23 +985,23 @@ export default function QuestionSubmit() {
                             </div>
                             <div className="mt-0.5">
                               {t.status === 'completed' ? (
-                                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                               ) : t.status === 'failed' ? (
-                                <AlertCircle className="w-5 h-5 text-red-400" />
+                                <AlertCircle className="w-5 h-5 text-red-600" />
                               ) : (
-                                <Loader2 className="w-5 h-5 text-primary-400 animate-spin" />
+                                <Loader2 className="w-5 h-5 text-primary-600 animate-spin" />
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-2">
-                                <div className="text-white font-medium truncate">
+                                <div className="text-slate-800 font-medium truncate">
                                   {t.filename || '图片录入任务'}
                                 </div>
-                                <div className="text-xs text-slate-400 shrink-0">
+                                <div className="text-xs text-slate-500 shrink-0">
                                   {t.subject ? (SUBJECTS.find(s => s.value === t.subject)?.label || t.subject) : ''}
                                 </div>
                               </div>
-                              <div className="text-sm text-slate-300 mt-1">
+                              <div className="text-sm text-slate-600 mt-1">
                                 {t.status === 'completed' ? '已完成' :
                                  t.status === 'failed' ? '失败' :
                                  t.status === 'processing' ? '处理中...' :
@@ -1010,7 +1010,7 @@ export default function QuestionSubmit() {
                                 {typeof t.progress === 'number' ? `（${Math.round(t.progress)}%）` : ''}
                               </div>
                               {t.status === 'failed' && t.error && (
-                                <div className="text-sm text-red-300 mt-1 break-words">
+                                <div className="text-sm text-red-600 mt-1 break-words">
                                   {t.error}
                                 </div>
                               )}
@@ -1033,7 +1033,7 @@ export default function QuestionSubmit() {
                                   任务详情
                                 </button>
                                 {typeof t.createdCount === 'number' && t.status === 'completed' && (
-                                  <span className="text-xs text-slate-400">
+                                  <span className="text-xs text-slate-500">
                                     识别 {t.createdCount} 道
                                   </span>
                                 )}
@@ -1044,7 +1044,7 @@ export default function QuestionSubmit() {
                                 <button
                                   type="button"
                                   onClick={() => cancelImageTask(t.taskId, t.subject || formData.subject)}
-                                  className="p-1.5 rounded-md hover:bg-slate-800/60 text-slate-300 hover:text-white transition-colors"
+                                  className="p-1.5 rounded-md hover:bg-slate-50 text-slate-600 hover:text-slate-800 transition-colors"
                                   title="取消任务"
                                 >
                                   <X className="w-4 h-4" />
@@ -1054,7 +1054,7 @@ export default function QuestionSubmit() {
                                 <button
                                   type="button"
                                   onClick={() => { cleanupTaskLocalCache(t.taskId); removeImageTask(t.taskId) }}
-                                  className="p-1.5 rounded-md hover:bg-slate-800/60 text-slate-300 hover:text-white transition-colors"
+                                  className="p-1.5 rounded-md hover:bg-slate-50 text-slate-600 hover:text-slate-800 transition-colors"
                                   title="移除"
                                 >
                                   <X className="w-4 h-4" />
