@@ -108,3 +108,15 @@ celerybeat-schedule
 celerybeat.pid
 
 pids/
+
+# macOS metadata
+._*
+**/._*
+
+
+._*
+**/._*
+.env
+data/
+logs/
+
